@@ -512,7 +512,7 @@
     },
     {
       "name": "admin",
-      "definition": "A workspace admin or owner in Slack, read from the directory (GB26, P69). Only admins see the Admin tab, and an admin command (setAnnouncementChannel, setGroupMode) from anyone else changes nothing."
+      "definition": "A workspace admin or owner in Slack, read from the directory (GB26, P69). Only admins see the Admin tab, and an admin command (setAnnouncementChannel, setGroupMode) from anyone else changes nothing. The website's maintainer powers (the workspace settings, the Slack emoji mappings, the weekly post's switch and channel) are never an admin's: for them, admin means only the maintainer. Linking a teammate's posthog.com profile stays an admin's (#593)."
     },
     {
       "name": "group mode",
@@ -878,6 +878,10 @@
     {
       "name": "joined in",
       "definition": "A member who gave a hug or a kudos in the period: their Leaderboard row for the period has a firstDay. Teams joining in compares the share of a team's members who joined in this week with last week up to the same weekday."
+    },
+    {
+      "name": "maintainer",
+      "definition": "The one member whose Slack user ID the deployment's KUDOS_MAINTAINER names, the product owner's own account; a deployment that names nobody has none. The website's workspace settings, its Slack emoji mappings and the weekly post's switch and channel are the maintainer's alone and never a workspace admin's, and the maintainer is checked before any flag that gates them is decided. A maintainer is also whoever runs the project's scripts against a deployment (operator)."
     }
   ],
   "retired": [

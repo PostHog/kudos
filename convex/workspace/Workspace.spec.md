@@ -43,7 +43,7 @@ Workspace: the settings with their defaults and the directory of the workspace's
   over: getSettings, Settings' sections and setWorkspaceSettings for the maintainer with `workspace-settings` on and off, a workspace admin who isn't the maintainer, KUDOS_MAINTAINER unset and naming another user, and a Slack click carrying setWorkspaceSettings
   via: only the maintainer changes the workspace settings
   refuted: isTheMaintainer answered true for every member, whatever KUDOS_MAINTAINER named -> 3 of 5 tests failed: the workspace admin saw the workspace part, so did every member with KUDOS_MAINTAINER unset, and a save by a member KUDOS_MAINTAINER doesn't name answered set (2026-10-17)
-  because: the three settings change what every member of the workspace can give and what counts as a kudos, at once and for today too; the product owner chose that only his own account may change them (2026-10-17), so a workspace admin, who already sets the announcement channel, must not, and a deployment that names nobody must leave every member out
+  because: the three settings change what every member of the workspace can give and what counts as a kudos, at once and for today too; the product owner chose that only his own account may change them (2026-10-17), so a workspace admin, who already sets the announcement channel, must not, and a deployment that names nobody must leave every member out; a flag is a rollout switch, so the maintainer is checked before `workspace-settings` is decided, only the maintainer is ever exposed to it, and widening it never hands the power to anyone else
   crossing: browser -> domain
   entrances: mutation setWorkspaceSettings
   kinds: identity, state
