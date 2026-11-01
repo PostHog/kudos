@@ -4,12 +4,13 @@ Shaped on ticket 99 of the core-loop map, down the ladder from context to contra
 
 ## Amended by the core-loop spec
 
-The product owner's calls in the core-loop spec ([spec/core-loop.md](../../spec/core-loop.md)) override this architecture in four places. The spec wins wherever the two differ.
+The product owner's calls in the core-loop spec ([spec/core-loop.md](../../spec/core-loop.md)) override this architecture in five places. The spec wins wherever the two differ.
 
 - **LP3.** An item is a sticker or a hoggie. Earned emojis are never items and never hidden: each unlocks with the turn that brings it.
 - **LP13.** Milestones stay inline in the turn. Every turn records the milestone tiers it reaches in the same mutation and answers them. They do not move to the bus.
 - **LP14.** An emoji unlocks with the turn that brings it, after the item lands.
 - **LP15.** No random emojis. The turn never rolls one; the sandbox's old open keeps its roll until the tray retires.
+- **LP25.** The level-up reveal page from Silthus/kudos#744 is not shown while `hidden-items` is on, and its flag `level-up-reveal` stays sandbox-only, as `random-emojis` does. The level-up plays in the one flowing sequence instead: the XP moment, the level-up takeover and the item board (LP32, LP34).
 
 The text and the `.mmd` sources below carry these amendments. The rendered images, the HTML pages and their JSON specs in [items/](items/) predate them. Where they differ, the text and the `.mmd` sources win.
 
@@ -322,7 +323,7 @@ While `hidden-items` is on for the giver: each named recipient's headline is "An
 
 - **The lexicon.** Settled by LP1: "item" widens to cover the face-down rewards, and "item board" (not "board", the leaderboard's ranking), "face down", "turn", "last visit" and "XP moment" have entries.
 - **Copy for two items per thanks.** The Slack line names the thanks once while the count says how many wait; the website prototype settles the wording.
-- **The level-up reveal page** (`level-up-reveal`): with `hidden-items` on, its three hoggies are items on the item board whose reason is `levelUp`, and the page reads them from the item board.
+- **The level-up reveal page** (`level-up-reveal`): settled by LP25. With `hidden-items` on, the level's three hoggies are items on the item board whose reason is `levelUp`, the page is not shown, and `level-up-reveal` stays sandbox-only.
 - **Which five excerpts.** The contract says the five newest; the XP moment prototype may prefer the five worth the most XP.
 
 ## Follow-ups
