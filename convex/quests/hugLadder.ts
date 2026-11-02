@@ -4,9 +4,7 @@ import { rewardKeyOf } from "./crates";
 import { finishMondayQuest } from "./finish";
 import { questFinishOf } from "./finishes";
 import type { Reward } from "./journey";
-import { journeyGoalOf } from "./journeyCopy";
 import { mondayCatalogueVersion } from "./mondayCatalogue";
-import { withoutFullStop } from "./pool";
 import type { JourneyStep } from "./step";
 
 export const hugLadderSteps = ["hugs-3", "hugs-5", "hugs-10"] as const satisfies readonly JourneyStep[];
@@ -23,16 +21,11 @@ export function hugLadderTargetOf(step: HugLadderStep): number {
   return hugsToFinish[step];
 }
 
-export function hugLadderGoalOf(step: HugLadderStep): string {
-  return withoutFullStop(journeyGoalOf(step));
-}
-
-export function isHugLadderStep(step: JourneyStep): step is HugLadderStep {
-  return (hugLadderSteps as readonly JourneyStep[]).includes(step);
-}
-
 export async function startTheHugLadder(ctx: MutationCtx, member: MemberId, at: number): Promise<void> {
-  if ((await hugLadderStartOf(ctx, member)) === null) await ctx.db.insert("hugLadders", { member, at });
+  if ((await hugLadderStartOf(ctx, member)) !== null) return;
+  const newest = await newestHugOf(ctx, member);
+  if (newest !== null && newest.at >= at) return;
+  await ctx.db.insert("hugLadders", { member, at });
 }
 
 export async function advanceHugLadder(ctx: MutationCtx, workspace: string, member: MemberId): Promise<void> {
@@ -62,6 +55,14 @@ async function hugLadderStartOf(ctx: QueryCtx, member: MemberId): Promise<number
     .withIndex("by_member", (q) => q.eq("member", member))
     .unique();
   return start?.at ?? null;
+}
+
+function newestHugOf(ctx: QueryCtx, member: MemberId) {
+  return ctx.db
+    .query("questRecognitions")
+    .withIndex("by_giver_source_at", (q) => q.eq("giver", member).eq("source", "hug"))
+    .order("desc")
+    .first();
 }
 
 function hugsSince(ctx: QueryCtx, member: MemberId, start: number) {

@@ -97,6 +97,22 @@ describe("HH46: the hug ladder counts the hugs a member gives from its first wee
     expect(await finishedLadderStepsOf(bob), "after 3 hugs under two-quests").toEqual(["hugs-3"]);
   });
 
+  test("a hug from before two-quests, delivered again once it is on, starts no ladder and finishes nothing", async () => {
+    await switchWebsite(t, postHog, true, ...mondayPath);
+    await thanks(bob, carol);
+    for (let hug = 1; hug <= 3; hug += 1) await hugs(bob, alice);
+    await switchWebsite(t, postHog, true, ...twoQuests);
+
+    await deliverAgain(t, "quests/quests:followHugGiven");
+    expect(await finishedLadderStepsOf(bob), "after the old hugs came again").toEqual([]);
+    await hugs(bob, alice);
+    await hugs(bob, alice);
+    expect(await finishedLadderStepsOf(bob), "after 2 new hugs").toEqual([]);
+    await hugs(bob, alice);
+
+    expect(await finishedLadderStepsOf(bob), "after 3 new hugs").toEqual(["hugs-3"]);
+  });
+
   test("HH45: a hug under two-quests starts the member's quests, so a newcomer's first hug counts", async () => {
     await switchWebsite(t, postHog, true, ...twoQuests);
 
@@ -132,6 +148,19 @@ describe("HH45: under two-quests the three drawn quests give way", { timeout: 60
     await sweep();
 
     expect(await weekOf(bob)).toBeNull();
+  });
+
+  test("a week drawn before two-quests turned on is neither shown nor counted once it is on", async () => {
+    await switchWebsite(t, postHog, true, ...mondayPath);
+    await finishOnboarding(bob);
+    await sweep();
+    expect((await weekOf(bob))?.slots.length, "drawn before the flag").toBeGreaterThan(0);
+    await switchWebsite(t, postHog, true, ...twoQuests);
+
+    await thanks(bob, alice, carol);
+
+    expect(await weekOf(bob), "this week's drawn quests").toBeNull();
+    expect(await countedProgressOf(bob), "awards counted toward the old draw").toEqual(0);
   });
 
   test("with two-quests off, the same member's week is drawn the old way", async () => {
@@ -185,6 +214,11 @@ async function finishedLadderStepsOf(person: Person) {
 async function weekOf(person: Person) {
   const member = await memberOf(person);
   return t.run((ctx) => weeklyQuestsOf(ctx, member, Date.now()));
+}
+
+async function countedProgressOf(person: Person) {
+  const member = await memberOf(person);
+  return t.run(async (ctx) => (await ctx.db.query("questProgress").collect()).filter((row) => row.member === member).length);
 }
 
 async function xpOf(person: Person) {

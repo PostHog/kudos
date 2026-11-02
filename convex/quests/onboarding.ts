@@ -7,7 +7,6 @@ import type { MemberId } from "../workspace/directory";
 import { rewardKeyOf } from "./crates";
 import { finishMondayQuest } from "./finish";
 import { questFinishOf, type QuestFinish } from "./finishes";
-import { hugLadderGoalOf, isHugLadderStep } from "./hugLadder";
 import { hasThankedEveryone, type Reward } from "./journey";
 import { journeyGoalOf } from "./journeyCopy";
 import { questsJudgedFor } from "./judged";
@@ -41,9 +40,7 @@ export function onboardingGoalOf(step: OnboardingStep): string {
 }
 
 export function finishedStepGoalOf(step: JourneyStep, paidOnTheMondayPath: boolean): string {
-  if (paidOnTheMondayPath && isOnboardingStep(step)) return onboardingGoalOf(step);
-  if (paidOnTheMondayPath && isHugLadderStep(step)) return hugLadderGoalOf(step);
-  return journeyGoalOf(step);
+  return paidOnTheMondayPath && isOnboardingStep(step) ? onboardingGoalOf(step) : journeyGoalOf(step);
 }
 
 export function onboardingTargetOf(step: OnboardingStep): number {
