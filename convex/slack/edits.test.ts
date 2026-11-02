@@ -60,7 +60,7 @@ describe("R23 R25: editing a message that gave nothing retries it", () => {
     ]);
   });
 
-  test("an Invalid message edited to tag a teammate gives, and the kudos reaction replaces the red X", async () => {
+  test("an Invalid message edited to tag a teammate gives, and shows the kudos reaction", async () => {
     const t = testBackend();
     await post(t, [section(broadcast("here"), emoji("taco"))], { ts: postedTs });
     await settle(t);

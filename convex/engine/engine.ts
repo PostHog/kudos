@@ -272,7 +272,8 @@ async function giveUpWhenChecksRanOut(ctx: MutationCtx, row: KudosMessageRow) {
 }
 
 async function tellGiver(ctx: MutationCtx, row: KudosMessageRow, outcome: Outcome, base: number) {
-  await setIndicator(ctx, refOf(row), indicatorOf(outcome));
+  const indicator = indicatorOf(outcome);
+  await (indicator === null ? clearIndicator(ctx, refOf(row)) : setIndicator(ctx, refOf(row), indicator));
   await replyPrivately(ctx, refOf(row), row.threadRoot, row.author, replyOf(outcome, base));
 }
 
