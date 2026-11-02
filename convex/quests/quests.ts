@@ -42,21 +42,17 @@ async function questsMovedBy(ctx: MutationCtx, event: KudosGivenEvent): Promise<
   if (!(await onTheMondayPath(ctx, event.giver))) return { done: [], moved: [] };
   await startQuestsOf(ctx, event.giver, event.at);
   await recognize(ctx, factOfKudosGiven(event));
-  const sides = await sidesMovedBy(ctx, event);
+  await advanceSidesBy(ctx, event);
   const drawn = await advanceWeeklyQuests(ctx, event);
   const onboarding = await advanceOnboarding(ctx, event);
-  const done = [
-    ...sides.finished.map(({ goal, xp }) => ({ kind: "weekly", goal, xp, hoggie: true }) as const),
-    ...drawn.finished.map(({ goal, reward: { xp } }) => ({ kind: "weekly", goal, xp, hoggie: true }) as const),
-    ...onboarding.map(({ step, reward: { xp } }) => ({ kind: "journey", step, xp, hoggie: true }) as const),
-  ];
-  return { done, moved: [...sides.moved, ...drawn.moved, ...(await onboardingMovedBy(ctx, event))] };
+  const done = [...drawn.finished.map(({ goal, reward: { xp } }) => ({ kind: "weekly", goal, xp, hoggie: true }) as const), ...onboarding.map(({ step, reward: { xp } }) => ({ kind: "journey", step, xp, hoggie: true }) as const)];
+  return { done, moved: [...drawn.moved, ...(await onboardingMovedBy(ctx, event))] };
 }
 
-async function sidesMovedBy(ctx: MutationCtx, event: KudosGivenEvent) {
-  if (!(await twoQuestsOn(ctx, event.giver))) return { finished: [], moved: [] };
+async function advanceSidesBy(ctx: MutationCtx, event: KudosGivenEvent): Promise<void> {
+  if (!(await twoQuestsOn(ctx, event.giver))) return;
   await drawSidesWhenDue(ctx, event.giver, event.at);
-  return advanceSide(ctx, event.giver, factOfKudosGiven(event), event.message);
+  await advanceSide(ctx, event.giver, factOfKudosGiven(event));
 }
 
 async function startQuestsOf(ctx: MutationCtx, member: MemberId, at: number): Promise<void> {

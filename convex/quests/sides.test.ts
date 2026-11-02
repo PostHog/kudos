@@ -73,17 +73,17 @@ describe("HH48: once a side's onboarding is finished, that side's quest is drawn
     expect(await questItemsOf(bob), "the quest hoggies on the board").toContainEqual({ kind: "quest", quest: { kind: "weekly", week: "2026-10-12", slot: 4 } });
   });
 
-  test("the activity names the kudos quest a kudos message finished, with its goal", async () => {
+  test("a kudos quest's finish names no kudos message as its cause, so no reply or activity names it before PR 5's surfaces", async () => {
     await switchWebsite(t, postHog, true, ...twoQuests);
     await finishKudosOnboarding(bob);
     await sweep();
-    const [drawn] = await sideDrawsOf(bob);
 
     const finishing = await doesEveryKudosQuest(bob);
     const member = await memberOf(bob);
     const answered = await Promise.all(finishing.map((ts) => t.run((ctx) => questsFinishedByMessage(ctx, member, { workspace: "T1", conversation: "C1", message: ts }))));
 
-    expect(answered.flat()).toEqual([{ kind: "weekly", goal: mondayQuestPool.quests.find(({ quest }) => quest === drawn!.quest)!.goal, xp: 20, hoggie: true }]);
+    expect(await finishKeysOf(bob)).toEqual([kudosSlotKey("2026-10-12")]);
+    expect(answered.flat()).toEqual([]);
   });
 
   test("a member who finished the hug ladder gets one hug quest at the next trigger, and the hugs it asks for finish it once", async () => {

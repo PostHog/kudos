@@ -2,7 +2,6 @@ import { v, type Infer } from "convex/values";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { publish } from "../bus/publish";
 import { lastThankedSince } from "../engine/awards";
-import type { MessageRef } from "../engine/messageEvent";
 import { chatUserOf, type MemberId } from "../workspace/directory";
 import { rewardKeyOf } from "./crates";
 import { drawFactsOf, factsAtTheStartOf, hugDrawFactsOf, hugFactsAtTheStartOf, timeZoneOf } from "./drawFacts";
@@ -20,11 +19,10 @@ import {
   mondayQuestPool,
   questIdValidator,
   questOf,
-  withoutFullStop,
   type PoolQuest,
   type Recipient,
 } from "./pool";
-import { isRecipient, notThankedForMs, progressUnitOf, questProgress, type CountedAward, type MovedQuest } from "./progress";
+import { isRecipient, notThankedForMs, questProgress, type CountedAward } from "./progress";
 import { drawRank } from "./rank";
 import { recognitionsOf, type RecognitionFact } from "./recognitions";
 import { questStartOf } from "./start";
@@ -58,10 +56,6 @@ const sideOfSource: Record<RecognitionFact["source"], Side> = { hug: "hug", kudo
 
 const pools: Record<Side, typeof hugQuestPool | typeof mondayQuestPool> = { hug: hugQuestPool, kudos: mondayQuestPool };
 
-export type SideFinished = { goal: string; xp: number };
-
-export type SideAdvance = { finished: SideFinished[]; moved: MovedQuest[] };
-
 export async function drawSidesWhenDue(ctx: MutationCtx, member: MemberId, at: number): Promise<boolean> {
   let drawn = false;
   for (const side of sides) drawn = (await drawSideWhenDue(ctx, member, side, at)) || drawn;
@@ -77,26 +71,13 @@ export async function awaitsASideDraw(ctx: QueryCtx, member: MemberId, at: numbe
   return false;
 }
 
-export async function advanceSide(ctx: MutationCtx, member: MemberId, fact: RecognitionFact, cause?: MessageRef): Promise<SideAdvance> {
-  const nothing: SideAdvance = { finished: [], moved: [] };
+export async function advanceSide(ctx: MutationCtx, member: MemberId, fact: RecognitionFact): Promise<void> {
   const draw = await sideDrawOf(ctx, member, weekKeyOfDay(fact.day), sideOfSource[fact.source]);
-  if (draw === null || fact.at < draw.drawnAt || (await isSideFinished(ctx, draw))) return nothing;
+  if (draw === null || fact.at < draw.drawnAt || (await isSideFinished(ctx, draw))) return;
   const pooled = questOf(draw.quest);
-  const progress = await sideProgressReadOf(ctx, draw, pooled);
-  const done = progress(fact.at);
-  const before = progress(fact.at - 1);
-  const target = pooled.progress.target;
-  if (done < target) return done > before && draw.side === "kudos" ? { finished: [], moved: [{ goal: withoutFullStop(pooled.goal), progress: { done, of: target, unit: progressUnitOf(pooled) } }] } : nothing;
+  if ((await sideProgressOf(ctx, draw, pooled)) < pooled.progress.target) return;
   const { workspace } = await chatUserOf(ctx, member);
-  const finished = await finishMondayQuest(ctx, workspace, member, sideQuestOf(draw), { reward: draw.reward, catalogueVersion: draw.catalogueVersion, poolQuest: draw.quest }, fact.at, cause);
-  return finished ? { finished: [{ goal: pooled.goal, xp: draw.reward.xp }], moved: [] } : nothing;
-}
-
-export async function sideGoalOf(ctx: QueryCtx, member: MemberId, { week, slot }: WeeklyQuest): Promise<string | null> {
-  const side = sides.find((candidate) => sideSlots[candidate] === slot);
-  if (side === undefined) return null;
-  const draw = await sideDrawOf(ctx, member, week, side);
-  return draw === null ? null : questOf(draw.quest).goal;
+  await finishMondayQuest(ctx, workspace, member, sideQuestOf(draw), { reward: draw.reward, catalogueVersion: draw.catalogueVersion, poolQuest: draw.quest }, fact.at);
 }
 
 async function drawSideWhenDue(ctx: MutationCtx, member: MemberId, side: Side, at: number): Promise<boolean> {
@@ -147,17 +128,12 @@ function firstOf<Because>(ranked: PoolQuest[], feasibleBecause: (quest: PoolQues
   return null;
 }
 
-async function sideProgressReadOf(ctx: QueryCtx, draw: SideDraw, pooled: PoolQuest): Promise<(until: number) => number> {
+async function sideProgressOf(ctx: QueryCtx, draw: SideDraw, pooled: PoolQuest): Promise<number> {
   const facts = (await recognitionsOf(ctx, draw.member, draw.week)).filter(({ source, at }) => sideOfSource[source] === draw.side && at >= draw.drawnAt).sort((one, other) => one.at - other.at);
   const { counts, target, given } = pooled.progress;
-  if (draw.side === "hug") return (until) => Math.min(counted(facts, until, ({ day }) => day, counts === "days"), target);
+  if (draw.side === "hug") return Math.min(counts === "days" ? new Set(facts.map(({ day }) => day)).size : facts.length, target);
   const lastThanked = given.to === "anyone" ? new Map<MemberId, number>() : await lastThankedSince(ctx, draw.member, draw.drawnAt - notThankedForMs, draw.drawnAt - 1);
-  return (until) => questProgress(pooled, peopleCounted(facts.filter(({ at }) => at <= until), given.to, new Map(lastThanked)));
-}
-
-function counted(facts: RecognitionFact[], until: number, dayOf: (fact: RecognitionFact) => string, distinctDays: boolean): number {
-  const upTo = facts.filter(({ at }) => at <= until);
-  return distinctDays ? new Set(upTo.map(dayOf)).size : upTo.length;
+  return questProgress(pooled, peopleCounted(facts, given.to, lastThanked));
 }
 
 function peopleCounted(facts: RecognitionFact[], to: Recipient, lastThanked: Map<MemberId, number>): CountedAward[] {
