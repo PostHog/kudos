@@ -258,6 +258,7 @@ import type * as quests_mondayCatalogue from "../quests/mondayCatalogue.js";
 import type * as quests_mondayQuestFlag from "../quests/mondayQuestFlag.js";
 import type * as quests_mondaySection from "../quests/mondaySection.js";
 import type * as quests_newWeek from "../quests/newWeek.js";
+import type * as quests_next from "../quests/next.js";
 import type * as quests_onboarding from "../quests/onboarding.js";
 import type * as quests_pool from "../quests/pool.js";
 import type * as quests_progress from "../quests/progress.js";
@@ -673,6 +674,7 @@ declare const fullApi: ApiFromModules<{
   "quests/mondayQuestFlag": typeof quests_mondayQuestFlag;
   "quests/mondaySection": typeof quests_mondaySection;
   "quests/newWeek": typeof quests_newWeek;
+  "quests/next": typeof quests_next;
   "quests/onboarding": typeof quests_onboarding;
   "quests/pool": typeof quests_pool;
   "quests/progress": typeof quests_progress;

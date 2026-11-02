@@ -7,6 +7,7 @@ import { aDeploymentForWorkspace, aMember, switchWebsite } from "../../../testin
 import { internal } from "../../_generated/api";
 import type { Id } from "../../_generated/dataModel";
 import type { MutationCtx } from "../../_generated/server";
+import { hugLadderReward } from "../../quests/hugLadder";
 import { onboardingReward } from "../../quests/onboarding";
 import { mondayCatalogueVersion } from "../../quests/mondayCatalogue";
 import type { MemberId } from "../../workspace/directory";
@@ -87,6 +88,17 @@ const itemSources: Record<string, ItemSource> = {
   },
   "an onboarding quest's hoggie": {
     earns: (member) => t.mutation(internal.album.items.questHoggies.earnQuestHoggie, { event: { type: "questFinished", workspace: "T1", member, quest: { kind: "journey", step: "first-thanks" }, rewardKey: "journey:first-thanks", reward: { xp: onboardingReward.xp, coins: 0 }, catalogueVersion: mondayCatalogueVersion, at: Date.now() } }),
+    capped: [{ key: "quest:", ...cappedAtRare }],
+    today: [{ key: "quest:" }],
+  },
+  "a hug ladder step's hoggie (HH53)": {
+    earns: (member) => t.mutation(internal.album.items.questHoggies.earnQuestHoggie, { event: { type: "questFinished", workspace: "T1", member, quest: { kind: "journey", step: "hugs-3" }, rewardKey: "journey:hugs-3", reward: { xp: hugLadderReward.xp, coins: 0 }, catalogueVersion: mondayCatalogueVersion, at: Date.now() } }),
+    capped: [{ key: "quest:", ...cappedAtRare }],
+    today: [{ key: "quest:" }],
+  },
+  "a drawn hug or kudos quest's hoggie (HH53)": {
+    earns: (member) =>
+      t.mutation(internal.album.items.questHoggies.earnQuestHoggie, { event: { type: "questFinished", workspace: "T1", member, quest: { kind: "weekly", week: "2026-10-26", slot: 3 }, poolQuest: "hug-once", rewardKey: "weekly:2026-10-26:3", reward: { xp: 20, coins: 0 }, catalogueVersion: mondayCatalogueVersion, at: Date.now() } }),
     capped: [{ key: "quest:", ...cappedAtRare }],
     today: [{ key: "quest:" }],
   },
