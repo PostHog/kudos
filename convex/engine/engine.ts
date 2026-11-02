@@ -290,7 +290,7 @@ function replyOf(outcome: Outcome, base: number): Reply {
 function indicatorOf(outcome: Outcome): Indicator {
   if (outcome.kind === "given") return { emoji: outcome.kudosEmoji };
   if (outcome.kind === "over-allowance") return { emoji: "hourglass_flowing_sand" };
-  return { emoji: "x" };
+  return null;
 }
 
 async function decide(ctx: MutationCtx, row: KudosMessageRow, giver: Member, kudos: KudosMessage, baseAllowance: number): Promise<Outcome> {

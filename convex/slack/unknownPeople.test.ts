@@ -195,7 +195,7 @@ describe("R28: team_join and user_change keep the directory fresh", () => {
     await settle(t);
 
     expect(await kudosReceived(t, "U_BOB")).toBe(1);
-    expect(slack.reactionsOn("C1", nextTs)).toEqual(["x"]);
+    expect(slack.reactionsOn("C1", nextTs)).toEqual([]);
   });
 
   test("a giver's new time zone decides their allowance day", async () => {
@@ -262,7 +262,7 @@ describe("R28: team_join and user_change keep the directory fresh", () => {
     await settle(t);
 
     expect(await kudosReceived(t, "U_DAVE")).toBe(0);
-    expect(slack.reactionsOn("C1", postedTs)).toEqual(["x"]);
+    expect(slack.reactionsOn("C1", postedTs)).toEqual([]);
   });
 });
 

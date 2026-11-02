@@ -152,14 +152,15 @@ describe("saying no", () => {
     ]);
   });
 
-  test("R9 R10 R36 R37: a message where nobody can receive gets the red X and the distinct reasons", async () => {
+  test("R9 R10 R36 R37: a message where nobody can receive gets no reaction, only the distinct reasons", async () => {
     const t = testBackend();
     slack.withMember("U_HELPER", { is_bot: true });
 
     await post(t, [section(mention("U_ALICE"), mention("U_HELPER"), broadcast("here"), userGroup("S1"), mention("U_ALICE"), emoji("taco"))]);
     await settle(t);
 
-    expect(slack.reactionsOn("C1", postedTs)).toEqual(["x"]);
+    expect(slack.reactionsOn("C1", postedTs)).toEqual([]);
+    expect(slack.callsTo("reactions.add")).toEqual([]);
     expect(slack.ephemeralsTo("U_ALICE").map((reply) => reply.text)).toEqual([
       "Nobody in this message can receive kudos: you can't give kudos to yourself, bots don't receive kudos and `@here`, `@channel` and user groups don't receive kudos, so tag people individually. Tag a teammate and edit the message to try again.",
     ]);
