@@ -113,19 +113,19 @@ describe("HH46: the hug ladder counts the hugs a member gives from its first wee
     expect(await finishedLadderStepsOf(bob), "after 3 new hugs").toEqual(["hugs-3"]);
   });
 
-  test("a member's first hugs under two-quests all count, whatever order Quests receives them in", async () => {
+  test("a hug Quests receives after a later hug started the ladder counts for nothing, so the ladder never reaches back before its start", async () => {
     await switchWebsite(t, postHog, true, ...twoQuests);
     await thanks(bob, carol);
     const [giver, author] = [await memberOf(bob), await memberOf(carol)];
     const hugAt = (minutes: number) => ({ type: "hugGiven" as const, workspace: "T1", giver, author, message: { workspace: "T1", conversation: "C1", message: tsOf(Date.now() + minutes * minuteMs) }, onKudos: false, day: "2026-10-13", at: Date.now() + minutes * minuteMs });
-    const [first, second, third] = [hugAt(1), hugAt(2), hugAt(3)];
 
-    for (const event of [second, first]) await t.mutation(internal.quests.quests.followHugGiven, { event });
-    expect(await finishedLadderStepsOf(bob), "after 2 hugs").toEqual([]);
-    await t.mutation(internal.quests.quests.followHugGiven, { event: third });
+    const [second, first, third, fourth] = [hugAt(2), hugAt(1), hugAt(3), hugAt(4)];
+    for (const event of [second, first, third]) await t.mutation(internal.quests.quests.followHugGiven, { event });
+    expect(await finishedLadderStepsOf(bob), "after the second, the first and the third hug").toEqual([]);
+    await t.mutation(internal.quests.quests.followHugGiven, { event: fourth });
     await settle(t);
 
-    expect(await finishedLadderStepsOf(bob), "after 3 hugs").toEqual(["hugs-3"]);
+    expect(await finishedLadderStepsOf(bob), "after the fourth hug, the third since the start").toEqual(["hugs-3"]);
   });
 
   test("HH45: a hug under two-quests starts the member's quests, so a newcomer's first hug counts", async () => {
