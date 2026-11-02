@@ -22,8 +22,7 @@ export type RecognitionFact = Infer<typeof recognitionFactValidator>;
 
 export const questRecognitionValidator = v.object({ ...recognitionFactValidator.fields, key: v.string() });
 
-export function factOfKudosGiven({ workspace, giver, awards, message, day, at }: KudosGivenEvent): RecognitionFact | null {
-  if (awards.length === 0) return null;
+export function factOfKudosGiven({ workspace, giver, awards, message, day, at }: KudosGivenEvent): RecognitionFact {
   return { source: "kudos", workspace, giver, people: [...new Set(awards.map(({ recipient }) => recipient))], kudos: awards.length, message, day, at };
 }
 
@@ -31,8 +30,9 @@ export function factOfHugGiven({ workspace, giver, author, message, day, at }: H
   return { source: "hug", workspace, giver, people: author === undefined ? [] : [author], kudos: 0, message, day, at };
 }
 
-export async function recognize(ctx: MutationCtx, fact: RecognitionFact | null): Promise<void> {
-  if (fact === null || (await questStartOf(ctx, fact.giver)) === null) return;
+export async function recognize(ctx: MutationCtx, fact: RecognitionFact): Promise<void> {
+  const start = await questStartOf(ctx, fact.giver);
+  if (start === null || fact.at < start) return;
   const key = keyOf(fact);
   if ((await recognitionKeyed(ctx, fact.giver, key)) === null) await ctx.db.insert("questRecognitions", { ...fact, key });
 }

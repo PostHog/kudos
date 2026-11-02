@@ -85,13 +85,32 @@ describe("HH52: Quests counts recognition facts, one for each kudos and each hug
     expect(await recognitionsBy(bob)).toEqual([]);
   });
 
-  test("a hug by a member whose quests haven't started records nothing, and the kudos that starts them is the first recognition", async () => {
+  test("a hug on the Monday path starts the giver's quests and is their first recognition, as a kudos is", async () => {
     await switchWebsite(t, postHog, true, ...todaysFlags);
     await hugs(bob, alice);
     await switchWebsite(t, postHog, true, ...mondayPath);
 
     await hugs(bob, alice);
     await thanks(bob, alice);
+
+    expect((await recognitionsBy(bob)).map(({ source }) => source)).toEqual(["hug", "kudos"]);
+  });
+
+  test("a newcomer's first hug counts, whichever of the welcome and Quests runs first", async () => {
+    await switchWebsite(t, postHog, true, ...mondayPath);
+
+    await hugs(carol, alice);
+
+    expect((await recognitionsBy(carol)).map(({ source }) => source)).toEqual(["hug"]);
+  });
+
+  test("a hug given before the giver's quests started, delivered again after, records nothing", async () => {
+    await switchWebsite(t, postHog, true, ...todaysFlags);
+    await hugs(bob, alice);
+    await switchWebsite(t, postHog, true, ...mondayPath);
+    await thanks(bob, alice);
+
+    await deliverAgain(t, "quests/quests:followHugGiven");
 
     expect((await recognitionsBy(bob)).map(({ source }) => source)).toEqual(["kudos"]);
   });

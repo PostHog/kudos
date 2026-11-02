@@ -8,6 +8,7 @@ import { advanceOnboarding, onboardingMovedBy } from "./onboarding";
 import { factOfHugGiven, factOfKudosGiven, recognize } from "./recognitions";
 import { questStartOf, startQuests } from "./start";
 import { advanceWeeklyQuests } from "./weekly";
+import type { MemberId } from "../workspace/directory";
 
 export const followKudosGiven = internalMutation({
   args: { event: kudosGivenEventValidator },
@@ -21,7 +22,9 @@ export const followKudosGiven = internalMutation({
 export const followHugGiven = internalMutation({
   args: { event: hugGivenEventValidator },
   handler: async (ctx, { event }) => {
-    if (await onTheMondayPath(ctx, event.giver)) await recognize(ctx, factOfHugGiven(event));
+    if (!(await onTheMondayPath(ctx, event.giver))) return;
+    await startQuestsOf(ctx, event.giver, event.at);
+    await recognize(ctx, factOfHugGiven(event));
   },
 });
 
@@ -29,10 +32,14 @@ type QuestsMoved = { done: QuestDone[]; moved: MovedQuest[] };
 
 async function questsMovedBy(ctx: MutationCtx, event: KudosGivenEvent): Promise<QuestsMoved> {
   if (!(await onTheMondayPath(ctx, event.giver))) return { done: [], moved: [] };
-  if ((await questStartOf(ctx, event.giver)) === null && (await mondayPathShownTo(ctx, event.giver))) await startQuests(ctx, event.giver, event.at);
+  await startQuestsOf(ctx, event.giver, event.at);
   await recognize(ctx, factOfKudosGiven(event));
   const drawn = await advanceWeeklyQuests(ctx, event);
   const onboarding = await advanceOnboarding(ctx, event);
   const done = [...drawn.finished.map(({ goal, reward: { xp } }) => ({ kind: "weekly", goal, xp, hoggie: true }) as const), ...onboarding.map(({ step, reward: { xp } }) => ({ kind: "journey", step, xp, hoggie: true }) as const)];
   return { done, moved: [...drawn.moved, ...(await onboardingMovedBy(ctx, event))] };
+}
+
+async function startQuestsOf(ctx: MutationCtx, member: MemberId, at: number): Promise<void> {
+  if ((await questStartOf(ctx, member)) === null && (await mondayPathShownTo(ctx, member))) await startQuests(ctx, member, at);
 }
