@@ -12,7 +12,7 @@ import { settingsOf } from "../workspace/settings";
 import { questFinishOf } from "./finishes";
 import { rewardKeyOf } from "./crates";
 import { finishMondayQuest } from "./finish";
-import { onTheMondayPath } from "./flag";
+import { onTheMondayPath, twoQuestsOn } from "./flag";
 import { rewardValidator } from "./journey";
 import { isPaidOnTheMondayPath } from "./mondayCatalogue";
 import { onboardingFinishedAt } from "./onboarding";
@@ -273,7 +273,7 @@ async function drawWhenDue(ctx: MutationCtx, member: MemberId, at: number): Prom
 }
 
 async function drawsOpenAt(ctx: QueryCtx, member: MemberId): Promise<number | null> {
-  return (await onTheMondayPath(ctx, member)) ? mondayDrawsOpenAt(ctx, member) : null;
+  return (await onTheMondayPath(ctx, member)) && !(await twoQuestsOn(ctx, member)) ? mondayDrawsOpenAt(ctx, member) : null;
 }
 
 async function mondayDrawsOpenAt(ctx: QueryCtx, member: MemberId): Promise<number | null> {

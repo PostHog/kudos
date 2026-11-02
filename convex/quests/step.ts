@@ -1,6 +1,6 @@
 import { v, type Infer } from "convex/values";
 
-export const journeyStepValidator = v.union(v.literal("first-thanks"), v.literal("first-quest"), v.literal("someone-new"), v.literal("two-days"), v.literal("your-emoji"));
+export const journeyStepValidator = v.union(v.literal("first-thanks"), v.literal("first-quest"), v.literal("someone-new"), v.literal("two-days"), v.literal("your-emoji"), v.literal("hugs-3"), v.literal("hugs-5"), v.literal("hugs-10"));
 
 export type JourneyStep = Infer<typeof journeyStepValidator>;
 

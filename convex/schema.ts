@@ -610,7 +610,8 @@ export default defineSchema({
   boughtCrates: defineTable(boughtCrateValidator).index("by_member_crate", ["member", "crate"]).index("by_member_n", ["member", "n"]).index("by_member_opened", ["member", "openedAt", "n"]),
 
   questFinishes: defineTable(questFinishValidator).index("by_member_key", ["member", "key"]),
-  questRecognitions: defineTable(questRecognitionValidator).index("by_giver_key", ["giver", "key"]).index("by_giver_day", ["giver", "day"]),
+  questRecognitions: defineTable(questRecognitionValidator).index("by_giver_key", ["giver", "key"]).index("by_giver_day", ["giver", "day"]).index("by_giver_source_at", ["giver", "source", "at"]),
+  hugLadders: defineTable({ member: v.id("members"), at: v.number() }).index("by_member", ["member"]),
 
   effectsBackfill: defineTable({
     before: v.number(),
