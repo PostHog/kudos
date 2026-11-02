@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { FakePostHog, routedFetch } from "../../testing/fakePostHog";
 import { FakeSlack } from "../../testing/fakeSlack";
-import { deliverAgain, post, react, settle, type Backend } from "../../testing/slackBackend";
+import { makeFunctionReference } from "convex/server";
+import { deliverAgain, memberChanged, post, react, settle, type Backend } from "../../testing/slackBackend";
 import { emoji, mention, section, text } from "../../testing/slackMessages";
 import { aDeploymentForWorkspace, switchWebsite } from "../../testing/website";
 import { testBackend } from "../../testing/slackBackend";
@@ -96,12 +97,19 @@ describe("HH52: Quests counts recognition facts, one for each kudos and each hug
     expect((await recognitionsBy(bob)).map(({ source }) => source)).toEqual(["hug", "kudos"]);
   });
 
-  test("a newcomer's first hug counts, whichever of the welcome and Quests runs first", async () => {
+  test.each([
+    ["the welcome", ["welcome/welcome:welcomeOnHug", "quests/quests:followHugGiven"]],
+    ["Quests", ["quests/quests:followHugGiven", "welcome/welcome:welcomeOnHug"]],
+  ])("a newcomer's first hug counts once when %s runs first", async (_, order) => {
     await switchWebsite(t, postHog, true, ...mondayPath);
+    for (const person of [alice, carol]) await memberChanged(t, "team_join", { id: person.user, profile: { display_name: person.name } });
+    await settle(t);
+    const event = { type: "hugGiven" as const, workspace: "T1", giver: await memberOf(carol), author: await memberOf(alice), message: messageOf(tsOf(Date.now())), onKudos: false, first: true, day: "2026-10-13", at: Date.now() };
 
-    await hugs(carol, alice);
+    for (const subscriber of order) await t.mutation(makeFunctionReference<"mutation">(subscriber), { event } as never);
+    await settle(t);
 
-    expect((await recognitionsBy(carol)).map(({ source }) => source)).toEqual(["hug"]);
+    expect(await recognitionsBy(carol)).toEqual([{ source: "hug", workspace: "T1", giver: event.giver, people: [event.author], kudos: 0, message: event.message, day: event.day, at: event.at }]);
   });
 
   test("a hug given before the giver's quests started, delivered again after, records nothing", async () => {
