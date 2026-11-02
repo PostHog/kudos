@@ -882,6 +882,10 @@
     {
       "name": "maintainer",
       "definition": "The one member whose Slack user ID the deployment's KUDOS_MAINTAINER names, the product owner's own account; a deployment that names nobody has none. The website's workspace settings, its Slack emoji mappings and the weekly post's switch and channel are the maintainer's alone and never a workspace admin's, and the maintainer is checked before any flag that gates them is decided. A maintainer is also whoever runs the project's scripts against a deployment (operator)."
+    },
+    {
+      "name": "recognition fact",
+      "definition": "Quests' one shape for a thanks a member gave, a kudos or a hug: its source, workspace, giver, the people it names, its award count, its message, the giver's day and its time. A kudos names its recipients and counts its awards; a hug counts no award and names its author, or nobody when it is on a kudos message, whose people the kudos already named (HH52). Not an award: Quests keeps one per kudos message's people or hugged message, once however often the bus delivers it."
     }
   ],
   "retired": [
