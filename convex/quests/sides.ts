@@ -78,6 +78,11 @@ export async function advanceSide(ctx: MutationCtx, fact: RecognitionFact): Prom
   await finishMondayQuest(ctx, workspace, fact.giver, sideQuestOf(draw), { reward: draw.reward, catalogueVersion: draw.catalogueVersion, poolQuest: draw.quest }, reachedAt);
 }
 
+export async function unfinishedSideQuestOf(ctx: QueryCtx, member: MemberId, side: Side, at: number): Promise<WeeklyQuest | null> {
+  const draw = await sideDrawOf(ctx, member, weekKeyOf(at, await timeZoneOf(ctx, member)), side);
+  return draw === null || (await isSideFinished(ctx, draw)) ? null : sideQuestOf(draw);
+}
+
 async function drawSideWhenDue(ctx: MutationCtx, member: MemberId, side: Side, at: number): Promise<boolean> {
   const opensAt = await sideOpensAt(ctx, member, side);
   if (opensAt === null || at < opensAt) return false;
