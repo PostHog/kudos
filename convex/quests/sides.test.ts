@@ -222,19 +222,20 @@ describe("HH49, HH50: each quest of the two pools counts what it names, from the
     expect(await finishKeysOf(bob)).toEqual([hugWeek]);
   });
 
-  test("a quest finishes at the fact that reached its target, whichever order the facts are delivered in", async () => {
+  test("a quest finishes at the fact that first reached its target in time order, whichever order the facts are delivered in", async () => {
     await switchWebsite(t, postHog, true, ...twoQuests);
     await thanks(bob, carol);
     await drawnFor(bob, "hug", "hug-two-days");
     const tuesdaysHug = Date.now() + minuteMs;
     nextDay();
     await hugs(bob, alice);
+    await hugs(bob, carol);
     const [wednesdays] = await questsHugGivenEvents();
     await t.mutation(internal.quests.quests.followHugGiven, { event: { ...wednesdays!, day: "2026-10-13", at: tuesdaysHug, message: { ...wednesdays!.message, message: tsOf(tuesdaysHug) } } });
     await settle(t);
 
     expect(await finishKeysOf(bob)).toEqual([hugWeek]);
-    expect(await finishedAt(bob, hugWeek), "when Wednesday's hug reached two days").toBe(wednesdays!.at);
+    expect(await finishedAt(bob, hugWeek), "when Wednesday's first hug reached two days, not its later one").toBe(wednesdays!.at);
   });
 
   test("a kudos given before the draw counts nothing toward it", async () => {

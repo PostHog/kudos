@@ -72,12 +72,10 @@ export async function awaitsASideDraw(ctx: QueryCtx, member: MemberId, at: numbe
 export async function advanceSide(ctx: MutationCtx, fact: RecognitionFact): Promise<void> {
   const draw = await sideDrawOf(ctx, fact.giver, weekKeyOfDay(fact.day), fact.source);
   if (draw === null || fact.at < draw.drawnAt || (await isSideFinished(ctx, draw))) return;
-  const pooled = questOf(draw.quest);
-  const { progress, lastAt } = await sideProgressOf(ctx, draw, pooled);
-  if (progress < pooled.progress.target) return;
+  const reachedAt = await targetReachedAt(ctx, draw);
+  if (reachedAt === null) return;
   const { workspace } = await chatUserOf(ctx, fact.giver);
-  // Facts can be delivered out of order, so the quest finishes at the latest of the facts that reached its target.
-  await finishMondayQuest(ctx, workspace, fact.giver, sideQuestOf(draw), { reward: draw.reward, catalogueVersion: draw.catalogueVersion, poolQuest: draw.quest }, lastAt);
+  await finishMondayQuest(ctx, workspace, fact.giver, sideQuestOf(draw), { reward: draw.reward, catalogueVersion: draw.catalogueVersion, poolQuest: draw.quest }, reachedAt);
 }
 
 async function drawSideWhenDue(ctx: MutationCtx, member: MemberId, side: Side, at: number): Promise<boolean> {
@@ -128,13 +126,21 @@ function firstOf<Because>(ranked: PoolQuest[], feasibleBecause: (quest: PoolQues
   return null;
 }
 
-async function sideProgressOf(ctx: QueryCtx, draw: SideDraw, pooled: PoolQuest): Promise<{ progress: number; lastAt: number }> {
+// Facts can be delivered out of order, so the quest's progress is replayed in time order, and it finishes at the fact
+// that first reached its target.
+async function targetReachedAt(ctx: QueryCtx, draw: SideDraw): Promise<number | null> {
+  const pooled = questOf(draw.quest);
   const facts = (await recognitionsOf(ctx, draw.member, draw.week)).filter(({ source, at }) => source === draw.side && at >= draw.drawnAt).sort((one, other) => one.at - other.at);
-  const lastAt = facts.at(-1)?.at ?? draw.drawnAt;
-  const { counts, target, given } = pooled.progress;
-  if (draw.side === "hug") return { progress: Math.min(counts === "days" ? new Set(facts.map(({ day }) => day)).size : facts.length, target), lastAt };
+  const progressOf = await sideProgress(ctx, draw, pooled);
+  for (let reached = 1; reached <= facts.length; reached += 1) if (progressOf(facts.slice(0, reached)) >= pooled.progress.target) return facts[reached - 1]!.at;
+  return null;
+}
+
+async function sideProgress(ctx: QueryCtx, draw: SideDraw, pooled: PoolQuest): Promise<(facts: RecognitionFact[]) => number> {
+  const { counts, given } = pooled.progress;
+  if (draw.side === "hug") return (facts) => (counts === "days" ? new Set(facts.map(({ day }) => day)).size : facts.length);
   const lastThanked = given.to === "anyone" ? new Map<MemberId, number>() : await lastThankedSince(ctx, draw.member, draw.drawnAt - notThankedForMs, draw.drawnAt - 1);
-  return { progress: questProgress(pooled, peopleCounted(facts, given.to, lastThanked)), lastAt };
+  return (facts) => questProgress(pooled, peopleCounted(facts, given.to, new Map(lastThanked)));
 }
 
 function peopleCounted(facts: RecognitionFact[], to: Recipient, lastThanked: Map<MemberId, number>): CountedAward[] {
