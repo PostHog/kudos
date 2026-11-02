@@ -3,25 +3,25 @@ import type { Doc } from "../_generated/dataModel";
 import { internalMutation, type MutationCtx, type QueryCtx } from "../_generated/server";
 import type { KudosGivenEvent } from "../bus/events";
 import { publish } from "../bus/publish";
-import { allowanceDay, allowanceLeft } from "../engine/allowance";
-import { awardIdValidator, firstDecidedOf, lastThankedBefore, lastThankedSince, type AwardId } from "../engine/awards";
+import { awardIdValidator, firstDecidedOf, lastThankedBefore, type AwardId } from "../engine/awards";
 import { republish } from "../feedback/homes";
 import { gateDecisionOf } from "../progression/gate";
-import { chatUserOf, teammatesOf, type MemberId } from "../workspace/directory";
-import { settingsOf } from "../workspace/settings";
+import { chatUserOf, type MemberId } from "../workspace/directory";
 import { questFinishOf } from "./finishes";
 import { rewardKeyOf } from "./crates";
+import { drawFactsOf, factsAtTheStartOf, timeZoneOf } from "./drawFacts";
 import { finishMondayQuest } from "./finish";
 import { onTheMondayPath, twoQuestsOn } from "./flag";
 import { rewardValidator } from "./journey";
 import { isPaidOnTheMondayPath } from "./mondayCatalogue";
 import { onboardingFinishedAt } from "./onboarding";
-import { feasibility, feasibleBecauseValidator, mondayQuestPool, questIdValidator, questOf, withoutFullStop, type DrawFacts, type FeasibleBecause, type PoolQuest, type Recipient } from "./pool";
-import { counts, isRecipient, notThankedForMs, progressUnitOf, questProgress, type Moved, type MovedQuest, type ProgressRead, type QuestAward } from "./progress";
+import { feasibility, feasibleBecauseValidator, mondayQuestPool, questIdValidator, questOf, withoutFullStop, type DrawFacts, type FeasibleBecause, type PoolQuest } from "./pool";
+import { counts, progressUnitOf, questProgress, type Moved, type MovedQuest, type ProgressRead, type QuestAward } from "./progress";
 import { drawRank } from "./rank";
+import { drawSidesWhenDue } from "./sides";
 import { questStartOf } from "./start";
 import type { WeeklyQuest } from "./step";
-import { daysLeftInWeek, weekKeyOf, weekKeyOfDay, weekStartOf, type WeekKey } from "./week";
+import { weekKeyOf, weekKeyOfDay, weekStartOf, type WeekKey } from "./week";
 
 const questsPerWeek = 3;
 
@@ -92,7 +92,9 @@ export const drawNewWeek = internalMutation({
   args: { member: v.id("members") },
   handler: async (ctx, { member }): Promise<void> => {
     if (!(await onTheMondayPath(ctx, member))) return;
-    if ((await drawWhenDue(ctx, member, Date.now())) === "drawn") await republish(ctx, member);
+    const at = Date.now();
+    const drawn = (await drawWhenDue(ctx, member, at)) === "drawn";
+    if ((await drawSidesWhenDue(ctx, member, at)) || drawn) await republish(ctx, member);
   },
 });
 
@@ -231,39 +233,6 @@ function weeklyQuest(week: WeekKey, { slot }: Slot): WeeklyQuest {
   return { kind: "weekly", week, slot };
 }
 
-async function drawFactsOf(ctx: QueryCtx, member: MemberId, at: number): Promise<DrawFacts> {
-  return factsWithTheDaySpent(ctx, member, at, await lastThankedAsOf(ctx, member, at, at));
-}
-
-async function factsWithTheDaySpent(ctx: QueryCtx, member: MemberId, at: number, lastThanked: LastThanked): Promise<DrawFacts> {
-  const facts = await factsWithTheDayUnspent(ctx, member, at, lastThanked);
-  const kudosLeftToday = await allowanceLeft(ctx, member, allowanceDay(at, await timeZoneOf(ctx, member)), facts.dailyAllowance);
-  return { ...facts, kudosLeftToday };
-}
-
-async function factsAtTheStartOf(ctx: QueryCtx, member: MemberId, weekStart: number): Promise<DrawFacts> {
-  return factsWithTheDayUnspent(ctx, member, weekStart, await lastThankedAsOf(ctx, member, weekStart, weekStart - 1));
-}
-
-type LastThanked = Map<MemberId, number>;
-
-function lastThankedAsOf(ctx: QueryCtx, member: MemberId, at: number, atOrBefore: number): Promise<LastThanked> {
-  return lastThankedSince(ctx, member, at - notThankedForMs, atOrBefore);
-}
-
-async function factsWithTheDayUnspent(ctx: QueryCtx, member: MemberId, at: number, lastThanked: LastThanked): Promise<DrawFacts> {
-  const { workspace } = await chatUserOf(ctx, member);
-  const { baseAllowance } = await settingsOf(ctx, workspace);
-  const teammates = await teammatesOf(ctx, workspace, member);
-  const left = (to: Recipient) => teammates.filter((teammate) => isRecipient(to, lastThanked.get(teammate) ?? null, at)).length;
-  return {
-    daysLeft: daysLeftInWeek(at, await timeZoneOf(ctx, member)),
-    kudosLeftToday: baseAllowance,
-    dailyAllowance: baseAllowance,
-    peopleLeft: { anyone: left("anyone"), "someone-new": left("someone-new"), "someone-not-thanked-in-30-days": left("someone-not-thanked-in-30-days") },
-  };
-}
-
 async function drawWhenDue(ctx: MutationCtx, member: MemberId, at: number): Promise<"drawn" | "nothing to draw"> {
   const opensAt = await drawsOpenAt(ctx, member);
   if (opensAt === null) return "nothing to draw";
@@ -314,10 +283,6 @@ function slotOf(slot: number, { quest: { quest, reward }, feasibleBecause }: Fea
 
 function rankOf(member: MemberId, week: WeekKey, { quest }: PoolQuest) {
   return drawRank(`${member}:${week}:${quest}`);
-}
-
-async function timeZoneOf(ctx: QueryCtx, member: MemberId) {
-  return (await ctx.db.get(member))?.timeZone;
 }
 
 function drawOf(ctx: QueryCtx, member: MemberId, week: WeekKey) {

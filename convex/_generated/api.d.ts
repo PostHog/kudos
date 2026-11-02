@@ -244,6 +244,7 @@ import type * as progression_skillTreeFlag from "../progression/skillTreeFlag.js
 import type * as progression_tree from "../progression/tree.js";
 import type * as progression_xpLevels from "../progression/xpLevels.js";
 import type * as quests_crates from "../quests/crates.js";
+import type * as quests_drawFacts from "../quests/drawFacts.js";
 import type * as quests_finish from "../quests/finish.js";
 import type * as quests_finishSeed from "../quests/finishSeed.js";
 import type * as quests_finishedBy from "../quests/finishedBy.js";
@@ -264,6 +265,7 @@ import type * as quests_quests from "../quests/quests.js";
 import type * as quests_questsFlag from "../quests/questsFlag.js";
 import type * as quests_rank from "../quests/rank.js";
 import type * as quests_recognitions from "../quests/recognitions.js";
+import type * as quests_sides from "../quests/sides.js";
 import type * as quests_start from "../quests/start.js";
 import type * as quests_step from "../quests/step.js";
 import type * as quests_twoQuestsFlag from "../quests/twoQuestsFlag.js";
@@ -657,6 +659,7 @@ declare const fullApi: ApiFromModules<{
   "progression/tree": typeof progression_tree;
   "progression/xpLevels": typeof progression_xpLevels;
   "quests/crates": typeof quests_crates;
+  "quests/drawFacts": typeof quests_drawFacts;
   "quests/finish": typeof quests_finish;
   "quests/finishSeed": typeof quests_finishSeed;
   "quests/finishedBy": typeof quests_finishedBy;
@@ -677,6 +680,7 @@ declare const fullApi: ApiFromModules<{
   "quests/questsFlag": typeof quests_questsFlag;
   "quests/rank": typeof quests_rank;
   "quests/recognitions": typeof quests_recognitions;
+  "quests/sides": typeof quests_sides;
   "quests/start": typeof quests_start;
   "quests/step": typeof quests_step;
   "quests/twoQuestsFlag": typeof quests_twoQuestsFlag;

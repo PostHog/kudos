@@ -62,6 +62,7 @@ import {
 import { questFinishValidator } from "./quests/finishes";
 import { questsJudgedValidator } from "./quests/judged";
 import { questRecognitionValidator } from "./quests/recognitions";
+import { questSideDrawValidator } from "./quests/sides";
 import { questDrawValidator, questProgressValidator } from "./quests/weekly";
 import { collectedItemValidator, customKudosEmojiValidator, itemPurchaseValidator } from "./store/rows";
 import { featureValidator } from "./unlocks/feature";
@@ -612,6 +613,7 @@ export default defineSchema({
   questFinishes: defineTable(questFinishValidator).index("by_member_key", ["member", "key"]),
   questRecognitions: defineTable(questRecognitionValidator).index("by_giver_key", ["giver", "key"]).index("by_giver_day", ["giver", "day"]).index("by_giver_source_at", ["giver", "source", "at"]),
   hugLadders: defineTable({ member: v.id("members"), at: v.number() }).index("by_member", ["member"]),
+  questSideDraws: defineTable(questSideDrawValidator).index("by_member_week_side", ["member", "week", "side"]),
 
   effectsBackfill: defineTable({
     before: v.number(),

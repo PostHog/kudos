@@ -14,6 +14,9 @@ export const questIdValidator = v.union(
   v.literal("kudos-once"),
   v.literal("kudos-two-days"),
   v.literal("three-in-a-day"),
+  v.literal("hug-once"),
+  v.literal("hug-two-days"),
+  v.literal("hug-ten"),
 );
 
 export type QuestId = Infer<typeof questIdValidator>;
@@ -31,9 +34,15 @@ export type PoolQuest = {
 
 export type DrawFacts = { daysLeft: number; kudosLeftToday: number; dailyAllowance: number; peopleLeft: Record<Recipient, number> };
 
+export type HugDrawFacts = { daysLeft: number; hugsLeftToday: number; hugBudget: number };
+
 export const feasibleBecauseValidator = v.object({ peopleLeft: v.number(), recognitionsLeft: v.number(), daysLeft: v.optional(v.number()) });
 
 export type FeasibleBecause = Infer<typeof feasibleBecauseValidator>;
+
+export const hugFeasibleBecauseValidator = v.object({ hugsLeft: v.number(), daysLeft: v.optional(v.number()) });
+
+export type HugFeasibleBecause = Infer<typeof hugFeasibleBecauseValidator>;
 
 type QuestPool = { version: string; quests: readonly PoolQuest[] };
 
@@ -59,10 +68,19 @@ const earlierPoolQuests: readonly PoolQuest[] = [
 export const mondayQuestPool = {
   version: mondayCatalogueVersion,
   quests: [
-    givingKudos("kudos-once", "Give a kudos to someone.", "recognitions", 1),
-    givingKudos("kudos-two-days", "Thank someone on two different days.", "days", 2),
-    givingKudos("three-in-a-day", "Thank 3 people in one day.", "people-in-a-day", 3),
+    participating("kudos-once", "Give a kudos to someone.", "recognitions", 1),
+    participating("kudos-two-days", "Thank someone on two different days.", "days", 2),
+    participating("three-in-a-day", "Thank 3 people in one day.", "people-in-a-day", 3),
     ...reachingOut,
+  ].map((quest) => ({ ...quest, reward: mondayReward })),
+} as const satisfies QuestPool;
+
+export const hugQuestPool = {
+  version: mondayCatalogueVersion,
+  quests: [
+    participating("hug-once", "Hug a teammate's message.", "recognitions", 1),
+    participating("hug-two-days", "Hug messages on 2 different days.", "days", 2),
+    participating("hug-ten", "React to 10 messages this week.", "recognitions", 10),
   ].map((quest) => ({ ...quest, reward: mondayReward })),
 } as const satisfies QuestPool;
 
@@ -71,7 +89,7 @@ export function withoutFullStop(goal: string): string {
 }
 
 export function questOf(quest: QuestId): PoolQuest {
-  return [...earlierPoolQuests, ...mondayQuestPool.quests].find((entry) => entry.quest === quest)!;
+  return [...earlierPoolQuests, ...mondayQuestPool.quests, ...hugQuestPool.quests].find((entry) => entry.quest === quest)!;
 }
 
 export function feasibility({ progress }: PoolQuest, facts: DrawFacts): FeasibleBecause | null {
@@ -84,6 +102,14 @@ export function feasibility({ progress }: PoolQuest, facts: DrawFacts): Feasible
   return daysLeft < progress.target ? null : { peopleLeft: people, recognitionsLeft, daysLeft };
 }
 
+export function hugFeasibility({ progress: { counts, target } }: PoolQuest, { daysLeft, hugsLeftToday, hugBudget }: HugDrawFacts): HugFeasibleBecause | null {
+  const hugsLeft = hugsLeftToday + hugBudget * (daysLeft - 1);
+  if (hugsLeft < target) return null;
+  if (counts !== "days") return { hugsLeft };
+  const daysWithAHugLeft = (hugsLeftToday > 0 ? 1 : 0) + (hugBudget > 0 ? daysLeft - 1 : 0);
+  return daysWithAHugLeft < target ? null : { hugsLeft, daysLeft: daysWithAHugLeft };
+}
+
 function aDayHolds(target: number, people: number, { dailyAllowance, kudosLeftToday, daysLeft }: DrawFacts): boolean {
   return dailyAllowance >= target && (Math.min(kudosLeftToday, people) >= target || daysLeft > 1);
 }
@@ -92,7 +118,7 @@ function sayingWhy(quest: QuestId, goal: string, counts: "recognitions" | "days"
   return { quest, kind: "thoughtfulness", goal, progress: { counts, target, given: { saysWhy: true, to: "anyone" } }, needs: [], reward: personalReward };
 }
 
-function givingKudos(quest: QuestId, goal: string, counts: "recognitions" | "days" | "people-in-a-day", target: number): PoolQuest {
+function participating(quest: QuestId, goal: string, counts: "recognitions" | "days" | "people-in-a-day", target: number): PoolQuest {
   return { quest, kind: "participation", goal, progress: { counts, target, given: { saysWhy: false, to: "anyone" } }, needs: [], reward: personalReward };
 }
 

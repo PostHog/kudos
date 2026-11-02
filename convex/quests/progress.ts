@@ -6,7 +6,7 @@ import type { PoolQuest, Recipient } from "./pool";
 
 export type QuestAward = { award: AwardId; recipient: MemberId; day: DayKey; at: number; saysWhy: boolean; lastThankedBefore: number | null };
 
-export type CountedAward = Pick<QuestAward, "award" | "recipient" | "day">;
+export type CountedAward = Pick<QuestAward, "recipient" | "day">;
 
 export const questProgressValidator = v.object({ done: v.number(), of: v.number(), unit: v.union(v.literal("kudos"), v.literal("days"), v.literal("people")) });
 
