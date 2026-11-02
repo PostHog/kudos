@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { feasibility, mondayQuestPool, questIdValidator, questOf, type DrawFacts, type PoolQuest } from "./pool";
+import { feasibility, hugFeasibility, hugQuestPool, mondayQuestPool, questIdValidator, questOf, type DrawFacts, type HugDrawFacts, type PoolQuest } from "./pool";
 
 const lastDayWithOneTeammateAlreadyThanked: DrawFacts = { daysLeft: 1, kudosLeftToday: 3, dailyAllowance: 3, peopleLeft: { anyone: 1, "someone-new": 0, "someone-not-thanked-in-30-days": 0 } };
 
@@ -30,6 +30,48 @@ describe("P83: every quest in the pool keeps the guardrails", () => {
 
       expect(fallbacks.map(({ quest }) => quest)).toEqual(["kudos-once"]);
     });
+  });
+});
+
+describe("HH49: the hug pool", () => {
+  test("holds hug-once, hug-two-days and hug-ten with their goals, each paying 20 XP", () => {
+    expect(hugQuestPool.quests.map(({ quest, goal, progress: { counts, target }, reward }) => [quest, goal, counts, target, reward.xp])).toEqual([
+      ["hug-once", "Hug a teammate's message.", "recognitions", 1, 20],
+      ["hug-two-days", "Hug messages on 2 different days.", "days", 2, 20],
+      ["hug-ten", "React to 10 messages this week.", "recognitions", 10, 20],
+    ]);
+  });
+
+  const midweek: HugDrawFacts = { daysLeft: 3, hugsLeftToday: 4, hugBudget: 10 };
+
+  test("a quest is feasible when the hugs left today plus the budget of the week's remaining days reach its target", () => {
+    expect(hugFeasibility(questOf("hug-ten"), midweek)).toEqual({ hugsLeft: 24 });
+    expect(hugFeasibility(questOf("hug-ten"), { daysLeft: 1, hugsLeftToday: 9, hugBudget: 10 })).toBeNull();
+    expect(hugFeasibility(questOf("hug-ten"), { daysLeft: 2, hugsLeftToday: 0, hugBudget: 10 })).toEqual({ hugsLeft: 10 });
+    expect(hugFeasibility(questOf("hug-once"), { daysLeft: 1, hugsLeftToday: 0, hugBudget: 10 })).toBeNull();
+  });
+
+  test("hug-two-days also needs two days with a hug left, today counting only while a hug is left", () => {
+    expect(hugFeasibility(questOf("hug-two-days"), midweek)).toEqual({ hugsLeft: 24, daysLeft: 3 });
+    expect(hugFeasibility(questOf("hug-two-days"), { daysLeft: 2, hugsLeftToday: 0, hugBudget: 10 })).toBeNull();
+    expect(hugFeasibility(questOf("hug-two-days"), { daysLeft: 1, hugsLeftToday: 10, hugBudget: 10 })).toBeNull();
+  });
+});
+
+describe("HH51: the hug pool keeps the guardrails", () => {
+  test.each(hugQuestPool.quests.map((quest) => [quest.quest, quest] as const))("%s counts at most 10 hugs or 2 days of what the member gives, names no one and needs nothing unshipped", (_, { kind, goal, progress, needs }) => {
+    expect(kind).toBe("participation");
+    expect(progress.counts === "days" ? progress.target <= 2 : progress.counts === "recognitions" && progress.target <= 10).toBe(true);
+    expect(progress.given).toEqual({ saysWhy: false, to: "anyone" });
+    expect(goal).toMatch(/^(Hug|React to) \S*\s*(a teammate's message|messages)\b/);
+    expect(goal).not.toMatch(/receiv|thanks you|thanked by|thoughtful|again/i);
+    expect(needs).toEqual([]);
+  });
+
+  test("hug-once stays feasible on the last day of the week with one hug left", () => {
+    const lastDayOneHugLeft: HugDrawFacts = { daysLeft: 1, hugsLeftToday: 1, hugBudget: 10 };
+
+    expect(hugQuestPool.quests.filter((quest) => hugFeasibility(quest, lastDayOneHugLeft) !== null).map(({ quest }) => quest)).toEqual(["hug-once"]);
   });
 });
 

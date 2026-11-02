@@ -6,6 +6,7 @@ import { isWelcomed } from "../welcome/welcome";
 import type { MemberId } from "../workspace/directory";
 import { mondayPathShownTo, onTheMondayPath } from "./flag";
 import { questStartOf, startQuests } from "./start";
+import { awaitsASideDraw } from "./sides";
 import { awaitsThisWeeksDraw } from "./weekly";
 
 const membersPerSweep = 100;
@@ -25,7 +26,7 @@ export const sweep = internalMutation({
 });
 
 async function isDueANewWeek(ctx: MutationCtx, member: Doc<"members">, at: number) {
-  return (await awaitsThisWeeksDraw(ctx, member, at)) && (await onTheMondayPath(ctx, member._id));
+  return ((await awaitsThisWeeksDraw(ctx, member, at)) || (await awaitsASideDraw(ctx, member._id, at))) && (await onTheMondayPath(ctx, member._id));
 }
 
 async function startQuestsOfTheWelcomed(ctx: MutationCtx, member: MemberId, at: number) {
