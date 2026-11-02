@@ -61,6 +61,7 @@ import {
 } from "./album/records";
 import { questFinishValidator } from "./quests/finishes";
 import { questsJudgedValidator } from "./quests/judged";
+import { questRecognitionValidator } from "./quests/recognitions";
 import { questDrawValidator, questProgressValidator } from "./quests/weekly";
 import { collectedItemValidator, customKudosEmojiValidator, itemPurchaseValidator } from "./store/rows";
 import { featureValidator } from "./unlocks/feature";
@@ -609,6 +610,7 @@ export default defineSchema({
   boughtCrates: defineTable(boughtCrateValidator).index("by_member_crate", ["member", "crate"]).index("by_member_n", ["member", "n"]).index("by_member_opened", ["member", "openedAt", "n"]),
 
   questFinishes: defineTable(questFinishValidator).index("by_member_key", ["member", "key"]),
+  questRecognitions: defineTable(questRecognitionValidator).index("by_giver_key", ["giver", "key"]).index("by_giver_day", ["giver", "day"]),
 
   effectsBackfill: defineTable({
     before: v.number(),

@@ -262,6 +262,7 @@ import type * as quests_progress from "../quests/progress.js";
 import type * as quests_quests from "../quests/quests.js";
 import type * as quests_questsFlag from "../quests/questsFlag.js";
 import type * as quests_rank from "../quests/rank.js";
+import type * as quests_recognitions from "../quests/recognitions.js";
 import type * as quests_start from "../quests/start.js";
 import type * as quests_step from "../quests/step.js";
 import type * as quests_week from "../quests/week.js";
@@ -672,6 +673,7 @@ declare const fullApi: ApiFromModules<{
   "quests/quests": typeof quests_quests;
   "quests/questsFlag": typeof quests_questsFlag;
   "quests/rank": typeof quests_rank;
+  "quests/recognitions": typeof quests_recognitions;
   "quests/start": typeof quests_start;
   "quests/step": typeof quests_step;
   "quests/week": typeof quests_week;

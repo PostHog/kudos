@@ -59,6 +59,7 @@ export const subscribers: Registry = {
     internal.feedback.welcomeNudge.nudgeTheHugged,
     internal.album.tallies.tallyHugGiven,
     internal.leaderboard.hugs.countHugGiven,
+    internal.quests.quests.followHugGiven,
     internal.analytics.subscribers.recordHugGiven,
   ],
   hugReceived: [internal.progression.hugRewards.payHugReceived, internal.leaderboard.hugs.countHugReceived],
