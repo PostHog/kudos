@@ -234,7 +234,7 @@
     },
     {
       "name": "indicator",
-      "definition": "The one reaction the app shows on a kudos message for its outcome: for Given, the kudos emoji closest after the first recipient's mention, or the closest one before it when none follows; an hourglass for Over allowance, a red X for Invalid, and none otherwise. It is desired state, so every delivery leaves the message showing the latest one."
+      "definition": "The one reaction the app shows on a kudos message for its outcome: for Given, the kudos emoji closest after the first recipient's mention, or the closest one before it when none follows; an hourglass for Over allowance, and none otherwise, so an Invalid message gets only its private reply. It is desired state, so every delivery leaves the message showing the latest one."
     },
     {
       "name": "domain event",

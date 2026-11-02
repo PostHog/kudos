@@ -272,7 +272,8 @@ async function giveUpWhenChecksRanOut(ctx: MutationCtx, row: KudosMessageRow) {
 }
 
 async function tellGiver(ctx: MutationCtx, row: KudosMessageRow, outcome: Outcome, base: number) {
-  await setIndicator(ctx, refOf(row), indicatorOf(outcome));
+  const indicator = indicatorOf(outcome);
+  await (indicator === null ? clearIndicator(ctx, refOf(row)) : setIndicator(ctx, refOf(row), indicator));
   await replyPrivately(ctx, refOf(row), row.threadRoot, row.author, replyOf(outcome, base));
 }
 
@@ -290,7 +291,7 @@ function replyOf(outcome: Outcome, base: number): Reply {
 function indicatorOf(outcome: Outcome): Indicator {
   if (outcome.kind === "given") return { emoji: outcome.kudosEmoji };
   if (outcome.kind === "over-allowance") return { emoji: "hourglass_flowing_sand" };
-  return { emoji: "x" };
+  return null;
 }
 
 async function decide(ctx: MutationCtx, row: KudosMessageRow, giver: Member, kudos: KudosMessage, baseAllowance: number): Promise<Outcome> {

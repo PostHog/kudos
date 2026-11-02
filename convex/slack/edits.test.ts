@@ -45,7 +45,7 @@ describe("R23 R25: editing a message that gave nothing retries it", () => {
     expect(slack.ephemeralsTo("U_ALICE").map((reply) => reply.text)).toEqual([overAllowanceReply, "<@U_BOB> got 2 kudos from you. You have 1 kudos left today."]);
   });
 
-  test("a retry that fails again shows its new outcome: the red X replaces the hourglass, with the Invalid reply", async () => {
+  test("a retry that fails again shows its new outcome: the hourglass goes, with the Invalid reply", async () => {
     const t = testBackend();
     await post(t, overAllowance, { ts: postedTs });
     await settle(t);
@@ -53,14 +53,14 @@ describe("R23 R25: editing a message that gave nothing retries it", () => {
     await edit(t, [section(mention("U_ALICE"), emoji("taco"))], { ts: postedTs });
     await settle(t);
 
-    expect(slack.reactionsOn("C1", postedTs)).toEqual(["x"]);
+    expect(slack.reactionsOn("C1", postedTs)).toEqual([]);
     expect(slack.ephemeralsTo("U_ALICE").map((reply) => reply.text)).toEqual([
       overAllowanceReply,
       "Nobody in this message can receive kudos: you can't give kudos to yourself. Tag a teammate and edit the message to try again.",
     ]);
   });
 
-  test("an Invalid message edited to tag a teammate gives, and the kudos reaction replaces the red X", async () => {
+  test("an Invalid message edited to tag a teammate gives, and shows the kudos reaction", async () => {
     const t = testBackend();
     await post(t, [section(broadcast("here"), emoji("taco"))], { ts: postedTs });
     await settle(t);

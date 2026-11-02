@@ -195,7 +195,8 @@ describe("R28: team_join and user_change keep the directory fresh", () => {
     await settle(t);
 
     expect(await kudosReceived(t, "U_BOB")).toBe(1);
-    expect(slack.reactionsOn("C1", nextTs)).toEqual(["x"]);
+    expect(slack.reactionsOn("C1", nextTs)).toEqual([]);
+    expect(slack.ephemeralsTo("U_ALICE").at(-1)?.text).toBe("Nobody in this message can receive kudos: <@U_BOB> isn't an active member of this workspace. Tag a teammate and edit the message to try again.");
   });
 
   test("a giver's new time zone decides their allowance day", async () => {
@@ -262,7 +263,8 @@ describe("R28: team_join and user_change keep the directory fresh", () => {
     await settle(t);
 
     expect(await kudosReceived(t, "U_DAVE")).toBe(0);
-    expect(slack.reactionsOn("C1", postedTs)).toEqual(["x"]);
+    expect(slack.reactionsOn("C1", postedTs)).toEqual([]);
+    expect(slack.ephemeralsTo("U_ALICE").map((reply) => reply.text)).toEqual(["Nobody in this message can receive kudos: <@U_DAVE> isn't an active member of this workspace. Tag a teammate and edit the message to try again."]);
   });
 });
 
