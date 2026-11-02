@@ -5,6 +5,7 @@ import { deliverAgain, post, react, settle, testBackend, type Backend } from "..
 import { emoji, mention, section, text } from "../../testing/slackMessages";
 import { aDeploymentForWorkspace, aSignedInSession, switchWebsite } from "../../testing/website";
 import { api, internal } from "../_generated/api";
+import type { HugGivenEvent } from "../bus/events";
 import { standingOf } from "../progression/progression";
 import { rewardOf } from "../progression/rewards";
 import type { AlbumAnswer, AlbumRead } from "../website/album";
@@ -147,6 +148,28 @@ describe("HH48: once a side's onboarding is finished, that side's quest is drawn
     expect(await xpOf(bob)).toBe(xp);
   });
 
+  test("the hug that finished the ladder, delivered again, draws nothing", async () => {
+    await switchWebsite(t, postHog, true, ...twoQuests);
+    for (let hug = 1; hug <= 10; hug += 1) await hugs(bob, alice);
+
+    await deliverAgain(t, "quests/quests:followHugGiven");
+
+    expect(await sideDrawsOf(bob)).toEqual([]);
+  });
+
+  test("a kudosGiven from an earlier week, delivered again once two-quests is on, draws and finishes nothing for that week", async () => {
+    await switchWebsite(t, postHog, true, ...mondayPath);
+    await finishKudosOnboarding(bob);
+    await thanks(bob, dave, erin, frank);
+    vi.setSystemTime(nextMonday);
+    await switchWebsite(t, postHog, true, ...twoQuests);
+
+    await deliverAgain(t, "quests/quests:followKudosGiven");
+
+    expect((await sideDrawsOf(bob)).filter(({ week }) => week === "2026-10-12")).toEqual([]);
+    expect(await finishKeysOf(bob), "the three-quest week's finishes, from before the flag").not.toContain(kudosSlotKey("2026-10-12"));
+  });
+
   test("HH57: with two-quests off, no side is drawn, the three-quest week is drawn as before, and hugs finish nothing", async () => {
     await switchWebsite(t, postHog, true, ...mondayPath);
     await finishKudosOnboarding(bob);
@@ -197,6 +220,21 @@ describe("HH49, HH50: each quest of the two pools counts what it names, from the
     await finishes();
 
     expect(await finishKeysOf(bob)).toEqual([hugWeek]);
+  });
+
+  test("a quest finishes at the fact that reached its target, whichever order the facts are delivered in", async () => {
+    await switchWebsite(t, postHog, true, ...twoQuests);
+    await thanks(bob, carol);
+    await drawnFor(bob, "hug", "hug-two-days");
+    const tuesdaysHug = Date.now() + minuteMs;
+    nextDay();
+    await hugs(bob, alice);
+    const [wednesdays] = await questsHugGivenEvents();
+    await t.mutation(internal.quests.quests.followHugGiven, { event: { ...wednesdays!, day: "2026-10-13", at: tuesdaysHug, message: { ...wednesdays!.message, message: tsOf(tuesdaysHug) } } });
+    await settle(t);
+
+    expect(await finishKeysOf(bob)).toEqual([hugWeek]);
+    expect(await finishedAt(bob, hugWeek), "when Wednesday's hug reached two days").toBe(wednesdays!.at);
   });
 
   test("a kudos given before the draw counts nothing toward it", async () => {
@@ -282,6 +320,15 @@ async function finishKeysOf(person: Person, prefix = "weekly:") {
   const member = await memberOf(person);
   const rows = await t.run((ctx) => ctx.db.query("questFinishes").withIndex("by_member_key", (q) => q.eq("member", member)).collect());
   return rows.map(({ key }) => key).filter((key) => key.startsWith(prefix)).sort();
+}
+
+async function questsHugGivenEvents() {
+  return t.run(async (ctx) => (await ctx.db.system.query("_scheduled_functions").collect()).filter(({ name }) => name === "quests/quests:followHugGiven").map(({ args }) => (args[0] as { event: HugGivenEvent }).event));
+}
+
+async function finishedAt(person: Person, key: string) {
+  const member = await memberOf(person);
+  return t.run(async (ctx) => (await ctx.db.query("questFinishes").withIndex("by_member_key", (q) => q.eq("member", member).eq("key", key)).unique())?.at);
 }
 
 async function xpOf(person: Person) {

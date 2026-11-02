@@ -68,16 +68,20 @@ const earlierPoolQuests: readonly PoolQuest[] = [
 export const mondayQuestPool = {
   version: mondayCatalogueVersion,
   quests: [
-    givingKudos("kudos-once", "Give a kudos to someone.", "recognitions", 1),
-    givingKudos("kudos-two-days", "Thank someone on two different days.", "days", 2),
-    givingKudos("three-in-a-day", "Thank 3 people in one day.", "people-in-a-day", 3),
+    participating("kudos-once", "Give a kudos to someone.", "recognitions", 1),
+    participating("kudos-two-days", "Thank someone on two different days.", "days", 2),
+    participating("three-in-a-day", "Thank 3 people in one day.", "people-in-a-day", 3),
     ...reachingOut,
   ].map((quest) => ({ ...quest, reward: mondayReward })),
 } as const satisfies QuestPool;
 
 export const hugQuestPool = {
   version: mondayCatalogueVersion,
-  quests: [hugging("hug-once", "Hug a teammate's message.", "recognitions", 1), hugging("hug-two-days", "Hug messages on 2 different days.", "days", 2), hugging("hug-ten", "React to 10 messages this week.", "recognitions", 10)],
+  quests: [
+    participating("hug-once", "Hug a teammate's message.", "recognitions", 1),
+    participating("hug-two-days", "Hug messages on 2 different days.", "days", 2),
+    participating("hug-ten", "React to 10 messages this week.", "recognitions", 10),
+  ].map((quest) => ({ ...quest, reward: mondayReward })),
 } as const satisfies QuestPool;
 
 export function withoutFullStop(goal: string): string {
@@ -114,12 +118,8 @@ function sayingWhy(quest: QuestId, goal: string, counts: "recognitions" | "days"
   return { quest, kind: "thoughtfulness", goal, progress: { counts, target, given: { saysWhy: true, to: "anyone" } }, needs: [], reward: personalReward };
 }
 
-function givingKudos(quest: QuestId, goal: string, counts: "recognitions" | "days" | "people-in-a-day", target: number): PoolQuest {
+function participating(quest: QuestId, goal: string, counts: "recognitions" | "days" | "people-in-a-day", target: number): PoolQuest {
   return { quest, kind: "participation", goal, progress: { counts, target, given: { saysWhy: false, to: "anyone" } }, needs: [], reward: personalReward };
-}
-
-function hugging(quest: QuestId, goal: string, counts: "recognitions" | "days", target: number): PoolQuest {
-  return { quest, kind: "participation", goal, progress: { counts, target, given: { saysWhy: false, to: "anyone" } }, needs: [], reward: mondayReward };
 }
 
 function thanking(quest: QuestId, goal: string, to: Exclude<Recipient, "anyone">, target: number): PoolQuest {
