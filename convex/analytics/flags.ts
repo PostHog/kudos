@@ -1,9 +1,10 @@
 import { PostHog } from "@posthog/convex";
 import { v } from "convex/values";
-import { components } from "../_generated/api";
-import { internalQuery, type MutationCtx, type QueryCtx } from "../_generated/server";
+import { components, internal } from "../_generated/api";
+import { internalMutation, internalQuery, type MutationCtx, type QueryCtx } from "../_generated/server";
 import { chatUserOf, emailOf, type MemberId } from "../workspace/directory";
 import { captureSettings, environmentSetting } from "./capture";
+import { failuresLogged } from "./failures";
 import { existingWorkspaceKey, record, workspaceKeyOf } from "./outbox";
 import { analyticsIdOf, existingAnalyticsId, recordAnalyticsId } from "./person";
 
@@ -93,11 +94,29 @@ function readingDefinitionsOnce(ctx: QueryCtx): DefinitionsReader {
 }
 
 export async function exposed<V extends FlagValue>(ctx: MutationCtx, read: Flag<V>, member: MemberId, value: NoInfer<V>): Promise<void> {
-  if (captureSettings() === null || !flagsKeySet()) return;
-  const exposure = { member, flag: read.key, value };
+  await exposureRecorded(ctx, { member, flag: read.key, value });
+}
+
+export async function exposedApart<V extends FlagValue>(ctx: MutationCtx, read: Flag<V>, member: MemberId, value: NoInfer<V>): Promise<void> {
+  if (!exposuresRecorded()) return;
+  await ctx.scheduler.runAfter(0, internal.analytics.flags.recordExposure, { member, flag: read.key, value });
+}
+
+const exposureValidator = { member: v.id("members"), flag: v.string(), value: v.union(v.string(), v.boolean()) };
+
+type Exposure = { member: MemberId; flag: string; value: FlagValue };
+
+export const recordExposure = internalMutation({
+  args: exposureValidator,
+  handler: (ctx, exposure): Promise<void> => failuresLogged("analytics.exposure_not_recorded", () => exposureRecorded(ctx, exposure), { flag: exposure.flag }),
+});
+
+async function exposureRecorded(ctx: MutationCtx, exposure: Exposure): Promise<void> {
+  if (!exposuresRecorded()) return;
+  const { member, flag, value } = exposure;
   const earlier = await ctx.db
     .query("flagExposures")
-    .withIndex("by_member_flag_value", (q) => q.eq("member", member).eq("flag", read.key).eq("value", value))
+    .withIndex("by_member_flag_value", (q) => q.eq("member", member).eq("flag", flag).eq("value", value))
     .unique();
   if (earlier !== null) return;
   await ctx.db.insert("flagExposures", exposure);
@@ -107,7 +126,7 @@ export async function exposed<V extends FlagValue>(ctx: MutationCtx, read: Flag<
       event: "$feature_flag_called",
       subject: { member },
       at: Date.now(),
-      properties: { feature_flag: read.key, feature_flag_response: value, locally_evaluated: true },
+      properties: { feature_flag: flag, feature_flag_response: value, locally_evaluated: true },
     },
   ]);
 }
@@ -117,6 +136,10 @@ export const seamCheck = internalQuery({
   returns: v.boolean(),
   handler: (ctx, { member }) => memberDecision(ctx, flagSeamCheck, member),
 });
+
+function exposuresRecorded() {
+  return captureSettings() !== null && flagsKeySet();
+}
 
 function flagsKeySet() {
   return (process.env.POSTHOG_PERSONAL_API_KEY ?? "").trim() !== "";
