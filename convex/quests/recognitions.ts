@@ -30,11 +30,13 @@ export function factOfHugGiven({ workspace, giver, author, message, day, at }: H
   return { source: "hug", workspace, giver, people: author === undefined ? [] : [author], kudos: 0, message, day, at };
 }
 
-export async function recognize(ctx: MutationCtx, fact: RecognitionFact): Promise<void> {
+export async function recognize(ctx: MutationCtx, fact: RecognitionFact): Promise<boolean> {
   const start = await questStartOf(ctx, fact.giver);
-  if (start === null || fact.at < start) return;
+  if (start === null || fact.at < start) return false;
   const key = keyOf(fact);
-  if ((await recognitionKeyed(ctx, fact.giver, key)) === null) await ctx.db.insert("questRecognitions", { ...fact, key });
+  if ((await recognitionKeyed(ctx, fact.giver, key)) !== null) return false;
+  await ctx.db.insert("questRecognitions", { ...fact, key });
+  return true;
 }
 
 export async function recognitionsOf(ctx: QueryCtx, giver: MemberId, week: WeekKey): Promise<RecognitionFact[]> {

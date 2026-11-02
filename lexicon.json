@@ -886,6 +886,18 @@
     {
       "name": "recognition fact",
       "definition": "Quests' one shape for a thanks a member gave, a kudos or a hug: its source, workspace, giver, the people it names, its award count, its message, the giver's day and its time. A kudos names its recipients and counts its awards; a hug counts no award and names its author, or nobody when it is on a kudos message, whose people the kudos already named (HH52). Not an award: Quests keeps one per kudos message's people or hugged message, once however often the bus delivers it."
+    },
+    {
+      "name": "hug quest",
+      "definition": "the quest of a member's week, under two-quests, that counts hugs the member gives: the next unfinished step of the hug ladder for a newcomer, else a drawn hug quest (HH45, HH46)"
+    },
+    {
+      "name": "kudos quest",
+      "definition": "the quest of a member's week, under two-quests, that counts kudos the member gives: the next unfinished onboarding quest for a newcomer, else a drawn kudos quest (HH45, HH47)"
+    },
+    {
+      "name": "hug ladder",
+      "definition": "the three onboarding hug quests hugs-3, hugs-5 and hugs-10 (Give 3, 5 and 10 hugs), active together from a member's first hug under two-quests and counting only the hugs given from then on (HH46)"
     }
   ],
   "retired": [

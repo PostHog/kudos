@@ -1,7 +1,8 @@
 import { internalMutation, type MutationCtx } from "../_generated/server";
 import { hugGivenEventValidator, kudosGivenEventValidator, type KudosGivenEvent } from "../bus/events";
 import { releaseSuccessReply, type QuestDone } from "../feedback/replies";
-import { mondayPathShownTo, onTheMondayPath } from "./flag";
+import { mondayPathShownTo, onTheMondayPath, twoQuestsShownTo } from "./flag";
+import { advanceHugLadder, startTheHugLadder } from "./hugLadder";
 import { judgeQuestsOf } from "./judged";
 import type { MovedQuest } from "./progress";
 import { advanceOnboarding, onboardingMovedBy } from "./onboarding";
@@ -24,7 +25,11 @@ export const followHugGiven = internalMutation({
   handler: async (ctx, { event }) => {
     if (!(await onTheMondayPath(ctx, event.giver))) return;
     await startQuestsOf(ctx, event.giver, event.at);
-    await recognize(ctx, factOfHugGiven(event));
+    const twoQuests = await twoQuestsShownTo(ctx, event.giver);
+    const recorded = await recognize(ctx, factOfHugGiven(event));
+    if (!twoQuests) return;
+    if (recorded) await startTheHugLadder(ctx, event.giver, event.at);
+    await advanceHugLadder(ctx, event.workspace, event.giver);
   },
 });
 

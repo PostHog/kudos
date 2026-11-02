@@ -12,7 +12,7 @@ import { settingsOf } from "../workspace/settings";
 import { questFinishOf } from "./finishes";
 import { rewardKeyOf } from "./crates";
 import { finishMondayQuest } from "./finish";
-import { onTheMondayPath } from "./flag";
+import { onTheMondayPath, twoQuestsOn } from "./flag";
 import { rewardValidator } from "./journey";
 import { isPaidOnTheMondayPath } from "./mondayCatalogue";
 import { onboardingFinishedAt } from "./onboarding";
@@ -68,7 +68,7 @@ export async function advanceWeeklyQuests(ctx: MutationCtx, event: KudosGivenEve
   let shownChanged = (await drawWhenDue(ctx, event.giver, event.at)) === "drawn";
   const finished: FinishedWeeklyQuest[] = [];
   const moved: MovedQuest[] = [];
-  const draw = await drawOf(ctx, event.giver, weekKeyOfDay(event.day));
+  const draw = (await twoQuestsOn(ctx, event.giver)) ? null : await drawOf(ctx, event.giver, weekKeyOfDay(event.day));
   if (draw !== null && isMondayDraw(draw)) {
     const open = event.at < draw.drawnAt ? [] : await unfinishedSlotsOf(ctx, draw);
     const awards = open.length === 0 ? [] : await questAwardsOf(ctx, event);
@@ -137,6 +137,7 @@ export async function drawnWeekOf(ctx: QueryCtx, member: MemberId, at: number): 
 }
 
 async function thisWeeksDrawOf(ctx: QueryCtx, member: MemberId, at: number) {
+  if (await twoQuestsOn(ctx, member)) return null;
   const draw = await drawOf(ctx, member, weekKeyOf(at, await timeZoneOf(ctx, member)));
   return draw !== null && isMondayDraw(draw) ? draw : null;
 }
@@ -273,7 +274,7 @@ async function drawWhenDue(ctx: MutationCtx, member: MemberId, at: number): Prom
 }
 
 async function drawsOpenAt(ctx: QueryCtx, member: MemberId): Promise<number | null> {
-  return (await onTheMondayPath(ctx, member)) ? mondayDrawsOpenAt(ctx, member) : null;
+  return (await onTheMondayPath(ctx, member)) && !(await twoQuestsOn(ctx, member)) ? mondayDrawsOpenAt(ctx, member) : null;
 }
 
 async function mondayDrawsOpenAt(ctx: QueryCtx, member: MemberId): Promise<number | null> {
