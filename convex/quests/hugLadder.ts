@@ -21,11 +21,13 @@ export function hugLadderTargetOf(step: HugLadderStep): number {
   return hugsToFinish[step];
 }
 
-export async function startTheHugLadder(ctx: MutationCtx, member: MemberId, at: number): Promise<void> {
-  if ((await hugLadderStartOf(ctx, member)) !== null) return;
-  const newest = await newestHugOf(ctx, member);
-  if (newest !== null && newest.at >= at) return;
-  await ctx.db.insert("hugLadders", { member, at });
+export async function placeOnTheHugLadder(ctx: MutationCtx, member: MemberId, at: number): Promise<void> {
+  const ladder = await hugLadderOf(ctx, member);
+  if (ladder !== null && ladder.at <= at) return;
+  const later = await hugAfter(ctx, member, at);
+  if (later !== null && (ladder === null || later.at < ladder.at)) return;
+  if (ladder === null) await ctx.db.insert("hugLadders", { member, at });
+  else await ctx.db.patch(ladder._id, { at });
 }
 
 export async function advanceHugLadder(ctx: MutationCtx, workspace: string, member: MemberId): Promise<void> {
@@ -50,18 +52,20 @@ export async function nextHugLadderStepOf(ctx: QueryCtx, member: MemberId): Prom
 }
 
 async function hugLadderStartOf(ctx: QueryCtx, member: MemberId): Promise<number | null> {
-  const start = await ctx.db
+  return (await hugLadderOf(ctx, member))?.at ?? null;
+}
+
+function hugLadderOf(ctx: QueryCtx, member: MemberId) {
+  return ctx.db
     .query("hugLadders")
     .withIndex("by_member", (q) => q.eq("member", member))
     .unique();
-  return start?.at ?? null;
 }
 
-function newestHugOf(ctx: QueryCtx, member: MemberId) {
+function hugAfter(ctx: QueryCtx, member: MemberId, at: number) {
   return ctx.db
     .query("questRecognitions")
-    .withIndex("by_giver_source_at", (q) => q.eq("giver", member).eq("source", "hug"))
-    .order("desc")
+    .withIndex("by_giver_source_at", (q) => q.eq("giver", member).eq("source", "hug").gt("at", at))
     .first();
 }
 
