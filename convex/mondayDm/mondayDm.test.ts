@@ -290,6 +290,39 @@ describe("HH58 HH59 HH60: while hype-nudge is on, the Monday DM names one teamma
 
     expect(dmsTo(alice).map(seen).map((dm) => dm.filter((line) => line.startsWith("section: Give Carol")))).toEqual([[`section: Give Carol a kudos to collect :${carolsHype}:.`]]);
     expect((await mondayDmsSentTo(alice)).map(({ properties }) => properties.sections)).toEqual(["quests,nudge"]);
+    expect(hypeNudgeExposures(), "both tries evaluated hype-nudge, one exposure").toEqual([true]);
+  });
+
+  test("starting the DM writes nothing to the analytics outbox or its drain; the exposure is recorded on its own, once", async () => {
+    await switchWebsite(t, postHog, true, ...mondayPath, "hype-nudge");
+    await thanks(alice, saysWhy, bob);
+    await thanks(bob, saysWhy, carol);
+    await hypeReaction(alice, carol, carolsHype);
+    await sweepsAt(Date.now() + hourMs);
+    await settleUpTo(t, mondayNine - 1);
+    const start = await cancelledFor(alice);
+    const before = await analyticsWrites();
+
+    const message = await t.mutation(internal.mondayDm.mondayDm.startMondayDm, start);
+
+    expect(message?.nudge).toBe(`Give Carol a kudos to collect :${carolsHype}:.`);
+    expect(await analyticsWrites(), "the start's transaction left the outbox and the drain as they were").toEqual(before);
+    await settleUpTo(t, mondayNine + minuteMs);
+    expect(hypeNudgeExposures()).toEqual([true]);
+  });
+
+  test("a Monday DM still goes out, on its first try, with its nudge while recording the hype-nudge exposure throws", async () => {
+    await switchWebsite(t, postHog, true, ...mondayPath, "hype-nudge");
+    await thanks(alice, saysWhy, bob);
+    await thanks(bob, saysWhy, carol);
+    await hypeReaction(alice, carol, carolsHype);
+    await brokenExposureRecordsOf(alice, "hype-nudge", true);
+
+    await mondayArrives(mondayNine + 5 * minuteMs);
+
+    expect(dmsTo(alice).map(seen).map((dm) => dm.filter((line) => line.startsWith("section: Give Carol")))).toEqual([[`section: Give Carol a kudos to collect :${carolsHype}:.`]]);
+    expect(dmTimesTo(alice)).toEqual([mondayNine]);
+    expect((await mondayDmsSentTo(alice)).map(({ properties }) => properties.sections)).toEqual(["quests,nudge"]);
   });
 });
 
@@ -730,6 +763,26 @@ async function cancelled(functionName: string) {
   await t.run((ctx) => ctx.scheduler.cancel(job._id));
   vi.setSystemTime(Math.max(Date.now(), job.scheduledTime));
   return job.args[0];
+}
+
+async function cancelledFor(person: Person) {
+  const dms = (await mondayDmRowsOf(person)).map(({ _id }) => _id);
+  const job = await t.run(async (ctx) => (await ctx.db.system.query("_scheduled_functions").collect()).find(({ name, state, args }) => name === sendMondayDm && state.kind === "pending" && dms.includes(args[0].dm)));
+  if (job === undefined) throw new Error(`no pending ${sendMondayDm} for ${person.name}`);
+  await t.run((ctx) => ctx.scheduler.cancel(job._id));
+  vi.setSystemTime(Math.max(Date.now(), job.scheduledTime));
+  return job.args[0];
+}
+
+function analyticsWrites() {
+  return t.run(async (ctx) => ({ outbox: await ctx.db.query("analyticsOutbox").collect(), drain: await ctx.db.query("analyticsDrain").collect() }));
+}
+
+async function brokenExposureRecordsOf(person: Person, flag: string, value: boolean) {
+  const member = await memberOf(person);
+  await t.run(async (ctx) => {
+    for (let copy = 0; copy < 2; copy += 1) await ctx.db.insert("flagExposures", { member, flag, value });
+  });
 }
 
 function postsTo(person: Person) {

@@ -1,7 +1,7 @@
 import type { Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { nudgesFor } from "../album/hypeReactions";
-import { exposed, memberDecision, type Flag } from "../analytics/flags";
+import { exposedApart, memberDecision, type Flag } from "../analytics/flags";
 import { hypeNudgeLineOf } from "../feedback/hypeNudge";
 import type { MemberId } from "../workspace/directory";
 
@@ -15,7 +15,7 @@ export async function hypeNudgeFor(ctx: MutationCtx, member: MemberId): Promise<
 
 async function isNudgedWithExposure(ctx: MutationCtx, member: MemberId): Promise<boolean> {
   const nudged = await memberDecision(ctx, hypeNudgeFlag, member);
-  await exposed(ctx, hypeNudgeFlag, member, nudged);
+  await exposedApart(ctx, hypeNudgeFlag, member, nudged);
   return nudged;
 }
 
