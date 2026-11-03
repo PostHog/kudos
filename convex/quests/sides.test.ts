@@ -5,7 +5,7 @@ import { deliverAgain, post, react, settle, testBackend, type Backend } from "..
 import { emoji, mention, section, text } from "../../testing/slackMessages";
 import { aDeploymentForWorkspace, aSignedInSession, switchWebsite } from "../../testing/website";
 import { api, internal } from "../_generated/api";
-import type { HugGivenEvent, KudosGivenEvent } from "../bus/events";
+import type { HugGivenEvent } from "../bus/events";
 import { standingOf } from "../progression/progression";
 import { rewardOf } from "../progression/rewards";
 import type { AlbumAnswer, AlbumRead } from "../website/album";
@@ -195,25 +195,6 @@ describe("HH56: a kudos quest's finish shows where it can, a hug quest's sends n
     expect(await xpOf(bob)).toBe(xp);
   });
 
-  test("a kudos delivered late that finishes the kudos quest is its cause, so the reply Quests releases for it names the quest", async () => {
-    await switchWebsite(t, postHog, true, ...twoQuests);
-    await finishKudosOnboarding(bob);
-    await drawnFor(bob, "kudos", "kudos-two-days");
-    const wednesdaysKudos = Date.now() + minuteMs;
-    vi.setSystemTime(Date.now() + dayMs);
-    const thursdays = await thanks(bob, alice);
-    expect(await finishKeysOf(bob), "one day of kudos since the draw").toEqual([]);
-    const [thursdaysEvent] = (await questsKudosGivenEvents()).filter(({ message }) => message.message === thursdays);
-    const late = tsOf(wednesdaysKudos);
-
-    await t.mutation(internal.quests.quests.followKudosGiven, { event: { ...thursdaysEvent!, day: "2026-10-14", at: wednesdaysKudos, message: { ...thursdaysEvent!.message, message: late } } });
-    await settle(t);
-
-    expect(await finishKeysOf(bob)).toEqual([kudosSlotKey("2026-10-12")]);
-    expect(await finishedByMessage(bob, late), "the late kudos, whose delivery finished it").toEqual([{ kind: "weekly", goal: "Thank someone on two different days.", xp: 20, hoggie: true }]);
-    expect(await finishedByMessage(bob, thursdays), "Thursday's kudos, whose reply was already released").toEqual([]);
-  });
-
   test("the hug that finishes the week's hug quest sends nothing in Slack", async () => {
     await switchWebsite(t, postHog, true, ...twoQuests);
     await thanks(bob, carol);
@@ -381,10 +362,6 @@ async function finishKeysOf(person: Person, prefix = "weekly:") {
 
 async function questsHugGivenEvents() {
   return t.run(async (ctx) => (await ctx.db.system.query("_scheduled_functions").collect()).filter(({ name }) => name === "quests/quests:followHugGiven").map(({ args }) => (args[0] as { event: HugGivenEvent }).event));
-}
-
-async function questsKudosGivenEvents() {
-  return t.run(async (ctx) => (await ctx.db.system.query("_scheduled_functions").collect()).filter(({ name }) => name === "quests/quests:followKudosGiven").map(({ args }) => (args[0] as { event: KudosGivenEvent }).event));
 }
 
 async function finishedAt(person: Person, key: string) {

@@ -721,6 +721,28 @@ describe("MQ3: the weekly sweep starts quests for a member welcomed before the M
   });
 });
 
+describe("HH56: the kudos quest's Quest done line reaches the reply of the kudos whose delivery finished it", { timeout: 60_000 }, () => {
+  test("kudos on 2 different days finish a drawn two-day kudos quest, and the reply still to be sent names it, even when Slack sends the later day's first", async () => {
+    await switchWebsite(t, postHog, true, ...mondayPath, "hugs", "two-quests");
+    await finishOnboarding();
+    const member = await memberOf(alice);
+    vi.setSystemTime(Date.now() + minuteMs);
+    await t.run((ctx) => ctx.db.insert("questSideDraws", { member, week: "2026-10-12", side: "kudos", quest: "kudos-two-days", reward: drawnReward, catalogueVersion: "monday-1", feasibleBecause: { hugsLeft: 10 }, drawnAt: Date.now() }));
+    vi.setSystemTime(Date.now() + 2 * minuteMs);
+    const dayOne = tsOf(Date.now());
+    vi.setSystemTime(Date.now() + dayMs);
+
+    await thanksPostedAt(tsOf(Date.now()), alice, "thanks", bob);
+    expect(finishLinesTo(alice), "the later day's kudos alone is one day").toEqual([]);
+    await thanksPostedAt(dayOne, alice, "thanks", carol);
+
+    const done = "Quest done: Thank someone on two different days · +20 XP and an unidentified Hoggie for your collection";
+    expect(finishLinesTo(alice), "one line, in one reply").toEqual([done]);
+    expect(replyTo(alice), "the reply still to be sent").toContain(done);
+    expect(await causesOf(alice, "weekly:2026-10-12:4"), "the kudos the quest is paid for").toEqual([dayOne]);
+  });
+});
+
 async function finishOnboarding() {
   await thanks(alice, saysWhy, bob);
   await thanks(alice, "thanks", carol);
