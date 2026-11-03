@@ -83,6 +83,12 @@ export async function unfinishedSideQuestOf(ctx: QueryCtx, member: MemberId, sid
   return draw === null || (await isSideFinished(ctx, draw)) ? null : sideQuestOf(draw);
 }
 
+export async function sideGoalOf(ctx: QueryCtx, member: MemberId, { week, slot }: WeeklyQuest): Promise<string | null> {
+  const side = sides.find((candidate) => sideSlots[candidate] === slot);
+  const draw = side === undefined ? null : await sideDrawOf(ctx, member, week, side);
+  return draw === null ? null : questOf(draw.quest).goal;
+}
+
 async function drawSideWhenDue(ctx: MutationCtx, member: MemberId, side: Side, at: number): Promise<boolean> {
   const opensAt = await sideOpensAt(ctx, member, side);
   if (opensAt === null || at < opensAt) return false;

@@ -87,6 +87,17 @@ describe("HH48: once a side's onboarding is finished, that side's quest is drawn
     expect(answered.flat()).toEqual([]);
   });
 
+  test("the activity reads the goal of a stored kudos quest finish that names its kudos, as the release showing the two quests stores it", async () => {
+    await switchWebsite(t, postHog, true, ...twoQuests);
+    await finishKudosOnboarding(bob);
+    await drawnFor(bob, "kudos", "kudos-once");
+    const member = await memberOf(bob);
+    const cause = { workspace: "T1", conversation: "C1", message: "1792000000.000900" };
+    await t.run((ctx) => ctx.db.insert("rewardRecords", { member, key: kudosSlotKey("2026-10-12"), xp: 20, coins: 0, item: null, catalogueVersion: "monday-1", at: Date.now(), cause }));
+
+    expect(await t.run((ctx) => questsFinishedByMessage(ctx, member, cause))).toEqual([{ kind: "weekly", goal: "Give a kudos to someone.", xp: 20, hoggie: true }]);
+  });
+
   test("a member who finished the hug ladder gets one hug quest at the next trigger, and the hugs it asks for finish it once", async () => {
     await switchWebsite(t, postHog, true, ...twoQuests);
     for (let hug = 1; hug <= 10; hug += 1) await hugs(bob, alice);
