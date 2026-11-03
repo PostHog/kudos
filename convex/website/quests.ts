@@ -5,14 +5,18 @@ import { memberMutation } from "./memberMutation";
 import { memberQuery } from "./memberQuery";
 import { mondayQuestsOf, type MondayQuests } from "./mondayQuests";
 
-export type { DrawnQuest, GettingStartedStep, MondayQuests, QuestItemState } from "./mondayQuests";
+export type { DrawnQuest, GettingStartedStep, MondayQuests, QuestItemState, SideQuest } from "./mondayQuests";
 
 export type QuestsAnswer = MondayQuests | { kind: "not-found" };
 
 export type QuestsViewAnswer = { kind: "viewed" } | { kind: "refused" };
 
+const notFound = { kind: "not-found" } as const;
+
 export const getQuests = memberQuery(async (ctx, me): Promise<QuestsAnswer> => {
-  return (await onTheMondayPath(ctx, me.member)) ? mondayQuestsOf(ctx, me) : { kind: "not-found" };
+  if (!(await onTheMondayPath(ctx, me.member))) return notFound;
+  const monday = await mondayQuestsOf(ctx, me);
+  return monday.quests.kind === "two-quests" && monday.quests.quests.length === 0 ? notFound : monday;
 });
 
 export const viewQuests = memberMutation({

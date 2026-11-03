@@ -36,6 +36,7 @@ const kudosSlotKey = (week: string) => `weekly:${week}:4`;
 type Person = { user: string; name: string };
 
 let postHog: FakePostHog;
+let slack: FakeSlack;
 let t: Backend;
 let messages = 0;
 
@@ -43,7 +44,7 @@ beforeEach(async () => {
   vi.useFakeTimers({ now: tuesday });
   aDeploymentForWorkspace();
   postHog = new FakePostHog();
-  const slack = new FakeSlack();
+  slack = new FakeSlack();
   for (const person of Object.values(people)) slack.withMember(person.user, { real_name: person.name });
   vi.stubGlobal("fetch", routedFetch(postHog, slack.fetch));
   t = testBackend();
@@ -72,19 +73,6 @@ describe("HH48: once a side's onboarding is finished, that side's quest is drawn
     expect(await finishKeysOf(bob), "the side quests finished").toEqual([kudosSlotKey("2026-10-12")]);
     expect(await paidFor(bob, kudosSlotKey("2026-10-12")), "Progression's reward for the quest").toMatchObject({ xp: 20, coins: 0 });
     expect(await questItemsOf(bob), "the quest hoggies on the board").toContainEqual({ kind: "quest", quest: { kind: "weekly", week: "2026-10-12", slot: 4 } });
-  });
-
-  test("a kudos quest's finish names no kudos message as its cause, so no reply or activity names it before PR 5's surfaces", async () => {
-    await switchWebsite(t, postHog, true, ...twoQuests);
-    await finishKudosOnboarding(bob);
-    await sweep();
-
-    const finishing = await doesEveryKudosQuest(bob);
-    const member = await memberOf(bob);
-    const answered = await Promise.all(finishing.map((ts) => t.run((ctx) => questsFinishedByMessage(ctx, member, { workspace: "T1", conversation: "C1", message: ts }))));
-
-    expect(await finishKeysOf(bob)).toEqual([kudosSlotKey("2026-10-12")]);
-    expect(answered.flat()).toEqual([]);
   });
 
   test("the activity reads the goal of a stored kudos quest finish that names its kudos, as the release showing the two quests stores it", async () => {
@@ -190,6 +178,55 @@ describe("HH48: once a side's onboarding is finished, that side's quest is drawn
 
     expect(await sideDrawsOf(bob)).toEqual([]);
     expect(await t.run(async (ctx) => (await ctx.db.query("questDraws").collect()).length), "the three-quest draw").toBe(1);
+  });
+});
+
+describe("HH56: a kudos quest's finish shows where it can, a hug quest's sends nothing in Slack", { timeout: 60_000 }, () => {
+  test("the kudos that finished the week's kudos quest gets its Quest done line in the after-kudos reply, and the activity names it by that kudos", async () => {
+    await switchWebsite(t, postHog, true, ...twoQuests);
+    await finishKudosOnboarding(bob);
+    await drawnFor(bob, "kudos", "kudos-once");
+
+    const finishing = await thanks(bob, alice);
+
+    expect(finishLinesTo(bob), "the after-kudos reply").toEqual(["Quest done: Give a kudos to someone · +20 XP and an unidentified Hoggie for your collection"]);
+    expect(await finishedByMessage(bob, finishing), "the activity's reading of that kudos").toEqual([{ kind: "weekly", goal: "Give a kudos to someone.", xp: 20, hoggie: true }]);
+  });
+
+  test("HH18: the kudos that finished the kudos quest, delivered again, adds no second Quest done line and pays once", async () => {
+    await switchWebsite(t, postHog, true, ...twoQuests);
+    await finishKudosOnboarding(bob);
+    await drawnFor(bob, "kudos", "kudos-once");
+    await thanks(bob, alice);
+    const xp = await xpOf(bob);
+
+    await deliverAgain(t, "quests/quests:followKudosGiven");
+
+    expect(finishLinesTo(bob)).toHaveLength(1);
+    expect(await xpOf(bob)).toBe(xp);
+  });
+
+  test("the hug that finishes the week's hug quest sends nothing in Slack", async () => {
+    await switchWebsite(t, postHog, true, ...twoQuests);
+    await thanks(bob, carol);
+    await drawnFor(bob, "hug", "hug-once");
+    const before = slackCallsAbout(bob);
+
+    await hugs(bob, alice);
+
+    expect(await finishKeysOf(bob), "the hug quest finished").toEqual([hugSlotKey("2026-10-12")]);
+    expect(slackCallsAbout(bob).slice(before.length)).toEqual([]);
+  });
+
+  test("HH57: with two-quests off, a kudos adds no side quest's line to its reply", async () => {
+    await switchWebsite(t, postHog, true, ...mondayPath);
+    await finishKudosOnboarding(bob);
+    await sweep();
+
+    await doesEveryKudosQuest(bob);
+
+    expect(finishLinesTo(bob), "one line for each of the three-quest week's finishes").toHaveLength((await finishKeysOf(bob)).length);
+    expect(await sideDrawsOf(bob)).toEqual([]);
   });
 });
 
@@ -359,6 +396,22 @@ async function questItemsOf(person: Person) {
   if (album.kind !== "album") throw new Error(`expected an album, got ${JSON.stringify(album)}`);
   const { board } = album as AlbumAnswer;
   return (board?.items ?? []).map(({ reason }) => reason).filter((reason) => reason.kind === "quest");
+}
+
+function finishLinesTo(person: Person): string[] {
+  return slack
+    .ephemeralsTo(person.user)
+    .flatMap(({ text }) => String(text).split("\n"))
+    .filter((line) => line.startsWith("Quest done:") && !line.includes("+50 XP"));
+}
+
+function slackCallsAbout(person: Person) {
+  return ["chat.postMessage", "chat.postEphemeral", "chat.update"].flatMap((method) => slack.callsTo(method).filter(({ channel, user }) => channel === person.user || user === person.user));
+}
+
+async function finishedByMessage(person: Person, ts: string) {
+  const member = await memberOf(person);
+  return t.run((ctx) => questsFinishedByMessage(ctx, member, { workspace: "T1", conversation: "C1", message: ts }));
 }
 
 async function memberOf(person: Person): Promise<MemberId> {

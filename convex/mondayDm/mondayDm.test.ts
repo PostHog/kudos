@@ -10,6 +10,7 @@ import { emoji, mention, section, text } from "../../testing/slackMessages";
 import { aDeploymentForWorkspace, switchWebsite } from "../../testing/website";
 import { internal } from "../_generated/api";
 import crons from "../crons";
+import { questOf } from "../quests/pool";
 
 const tuesday = Date.parse("2026-10-13T10:00:00Z");
 const mondayNine = Date.parse("2026-10-19T09:00:00Z");
@@ -195,6 +196,58 @@ describe("MQ23 MQ24 MQ25 MQ28: at Monday 9:00 local a Monday-path member gets on
     await mondayArrives();
 
     expect(dmTimesTo(alice)).toEqual([Date.parse("2026-10-19T03:30:00Z")]);
+  });
+});
+
+describe("HH54 HH55 HH57: under two-quests the Monday DM's quests section is one checklist of the hug quest, then the kudos quest", { timeout: 60_000 }, () => {
+  const twoQuests = [...mondayPath, "two-quests"];
+  const hugHowTo = "React to any message with :taco:.";
+  const ladderReward = "🎁 +20 XP and an unidentified Hoggie for your collection";
+  const onboardingReward = "🎁 +50 XP and an unidentified Hoggie for your collection";
+
+  test("a newcomer one hug up the ladder gets its next step, marked next, then the next onboarding quest, each with its how-to and reward", async () => {
+    await switchWebsite(t, postHog, true, ...twoQuests);
+    await thanks(alice, saysWhy, bob);
+    await hug(alice, bob);
+
+    await mondayArrives();
+
+    const [dm, ...more] = dmsTo(alice).map(seen);
+    expect(more).toEqual([]);
+    const quests = questsSectionIn(dm);
+    expect(quests[0]).toMatch(/^section: Happy Monday :sun_with_face: Here are two quests for your week\.\n\n\w+ unidentified Hoggies? for your collection (is|are) waiting for you\.$/);
+    expect(quests.slice(1, 3)).toEqual([`👉 *Give 3 hugs* _1 of 3 hugs_\n${hugHowTo}  ${ladderReward}`, `⚪ Thank someone new\nSomeone from another team counts too.  ${onboardingReward}`]);
+    expect(quests[3]).toMatch(/^actions: /);
+  });
+
+  test("a member past both onboardings gets the week's drawn hug quest, marked next, then the drawn kudos quest, both drawn at the DM's start", async () => {
+    await switchWebsite(t, postHog, true, ...twoQuests);
+    await finishOnboarding(alice);
+    for (let hugged = 1; hugged <= 10; hugged += 1) await hug(alice, bob, `${Math.floor(Date.now() / 1000) - 600}.${String(hugged).padStart(6, "0")}`);
+
+    await mondayArrives();
+
+    const [hugQuest, kudosQuest] = await sideGoalsOf(alice, "2026-10-19");
+    const quests = questsSectionIn(dmsTo(alice).map(seen)[0]);
+    expect(quests[0]).toMatch(/^section: Happy Monday :sun_with_face: Here are two quests for your week\./);
+    expect(quests[1]).toMatch(new RegExp(`^👉 \\*${hugQuest}\\*( _0 of \\d+ (hugs|days)_)?\\n${escapedForRegExp(hugHowTo)}  ${escapedForRegExp(ladderReward)}$`));
+    expect(quests[2]).toMatch(new RegExp(`^⚪ ${kudosQuest}( _0 of \\d+ (kudos|days|people)_)?\\n${escapedForRegExp(ladderReward)}$`));
+    expect(quests[3]).toMatch(/^actions: /);
+  });
+
+  test("HH57: with two-quests off, the same newcomer's DM is the onboarding journey as before, with no how-to lines", async () => {
+    await switchWebsite(t, postHog, true, ...mondayPath);
+    await thanks(alice, saysWhy, bob);
+    await hug(alice, bob);
+
+    await mondayArrives();
+
+    expect(questsSectionIn(dmsTo(alice).map(seen)[0]).slice(0, 4)).toEqual([
+      expect.stringMatching(/^section: \*Your onboarding journey\* · 1 of 3 done\nTwo quests left\. Each one pays \+50 XP and an unidentified Hoggie for your collection\./),
+      "✅ ~Give a kudos to someone~",
+      "👉 *Thank someone new*",
+      "⚪ Thank someone on two different days _1 of 2 days_",
+    ]);
   });
 });
 
@@ -817,6 +870,7 @@ const marks: Record<string, string> = { white_check_mark: "✅", point_right: "�
 
 function richTextOf({ type, name, text, style }: RichText) {
   if (type === "emoji") return marks[name!] ?? `:${name}:`;
+  if (style === undefined) return text!;
   const styled = style?.strike ? `~${text!.trim()}~` : style?.bold ? `*${text!.trim()}*` : style?.italic ? `_${text!.trim()}_` : text!.trim();
   return ` ${styled}`;
 }
@@ -875,6 +929,26 @@ function hypeNudgeExposures() {
 
 function productEvents(event: string) {
   return postHog.productEvents().filter((captured) => captured.event === event);
+}
+
+function questsSectionIn(dm: string[] | undefined): string[] {
+  const lines = dm ?? [];
+  return lines.slice(lines.findIndex((line) => /^section: (Happy Monday|\*Your onboarding journey\*)/.test(line)));
+}
+
+async function sideGoalsOf(person: Person, week: string) {
+  const member = await memberOf(person);
+  const draws = await t.run(async (ctx) => (await ctx.db.query("questSideDraws").collect()).filter((row) => row.member === member && row.week === week));
+  const goalOf = (side: string) => {
+    const quest = draws.find((draw) => draw.side === side)?.quest;
+    if (quest === undefined) throw new Error(`no ${side} quest drawn for ${week}`);
+    return escapedForRegExp(questOf(quest).goal.replace(/\.$/, ""));
+  };
+  return [goalOf("hug"), goalOf("kudos")];
+}
+
+function escapedForRegExp(text: string) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 async function memberOf(person: Person) {

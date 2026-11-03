@@ -7,7 +7,7 @@ import { judgeQuestsOf } from "./judged";
 import type { MovedQuest } from "./progress";
 import { advanceOnboarding, onboardingMovedBy } from "./onboarding";
 import { factOfHugGiven, factOfKudosGiven, recognize } from "./recognitions";
-import { advanceSide, drawSidesWhenDue } from "./sides";
+import { advanceSide, drawSidesWhenDue, kudosQuestFinishedBy } from "./sides";
 import { questStartOf, startQuests } from "./start";
 import { advanceWeeklyQuests } from "./weekly";
 import type { MemberId } from "../workspace/directory";
@@ -47,7 +47,8 @@ async function questsMovedBy(ctx: MutationCtx, event: KudosGivenEvent): Promise<
   if (await recognize(ctx, factOfKudosGiven(event))) await advanceSidesBy(ctx, event);
   const drawn = await advanceWeeklyQuests(ctx, event);
   const onboarding = await advanceOnboarding(ctx, event);
-  const done = [...drawn.finished.map(({ goal, reward: { xp } }) => ({ kind: "weekly", goal, xp, hoggie: true }) as const), ...onboarding.map(({ step, reward: { xp } }) => ({ kind: "journey", step, xp, hoggie: true }) as const)];
+  const kudosQuest = await kudosQuestFinishedBy(ctx, event.giver, event.day, event.message);
+  const done = [...kudosQuest.map(({ goal, xp }) => ({ kind: "weekly", goal, xp, hoggie: true }) as const), ...drawn.finished.map(({ goal, reward: { xp } }) => ({ kind: "weekly", goal, xp, hoggie: true }) as const), ...onboarding.map(({ step, reward: { xp } }) => ({ kind: "journey", step, xp, hoggie: true }) as const)];
   return { done, moved: [...drawn.moved, ...(await onboardingMovedBy(ctx, event))] };
 }
 

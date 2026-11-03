@@ -7,7 +7,10 @@ import { hugOf } from "../hugs/records";
 import type { WaitingCount } from "../album/items/ledger";
 import { shownWaitingHoggiesAtTheWelcomeOf } from "../album/items/welcome";
 import { dmLinksFor, type DmLinks } from "../feedback/dmLinks";
-import type { OnboardingQuest, OnboardingStep } from "../quests/onboarding";
+import { twoQuestsOn } from "../quests/flag";
+import { nextQuestOf } from "../quests/next";
+import { isOnboardingStep, type OnboardingQuest, type OnboardingStep } from "../quests/onboarding";
+import { hugLadderRowOf, type TwoQuestsRow } from "../quests/twoQuests";
 import { chatUserOf, profileNameOf, type MemberId } from "../workspace/directory";
 import { settingsOf } from "../workspace/settings";
 
@@ -37,6 +40,8 @@ export type MondayWelcome = {
   opening: MondayWelcomeOpening;
   journey: OnboardingQuest[];
   next: OnboardingStep | null;
+  marked: OnboardingStep | null;
+  hugLadder: TwoQuestsRow | null;
   waiting: WaitingCount;
   links: DmLinks | null;
 };
@@ -49,14 +54,22 @@ export const mondayWelcomeOf = internalQuery({
 async function mondayWelcomeFor(ctx: QueryCtx, workspace: string, member: MemberId, cause: MondayWelcomeCause, journey: OnboardingQuest[], owesTheWelcomeItem: boolean): Promise<MondayWelcome> {
   const next = journey.find(({ finished }) => !finished)?.step ?? null;
   const links = await dmLinksFor(ctx, workspace, member, "welcome");
+  const twoQuests = await twoQuestsOn(ctx, member);
   return {
     kudosEmoji: (await settingsOf(ctx, workspace)).kudosEmoji,
     opening: await openingOf(ctx, member, cause),
     journey,
     next,
+    marked: twoQuests ? await markedOnboardingStepOf(ctx, member) : next,
+    hugLadder: twoQuests ? await hugLadderRowOf(ctx, member) : null,
     waiting: await shownWaitingHoggiesAtTheWelcomeOf(ctx, member, links, owesTheWelcomeItem),
     links,
   };
+}
+
+async function markedOnboardingStepOf(ctx: QueryCtx, member: MemberId): Promise<OnboardingStep | null> {
+  const next = await nextQuestOf(ctx, member, Date.now());
+  return next?.quest.kind === "journey" && next.side === "kudos" && isOnboardingStep(next.quest.step) ? next.quest.step : null;
 }
 
 export const howToOf = internalQuery({

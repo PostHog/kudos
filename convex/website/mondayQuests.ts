@@ -2,10 +2,13 @@ import type { QueryCtx } from "../_generated/server";
 import { hasHuggedBefore } from "../hugs/records";
 import { earnedItemOf, newestTurnOf } from "../album/items/ledger";
 import { rewardKeyOf } from "../quests/crates";
+import { twoQuestsOn } from "../quests/flag";
 import { questItemKeyOf } from "../album/items/questHoggies";
 import { nextOnboardingQuestOf, onboardingFinishedBy, onboardingGoalOf, onboardingQuestFactsOf, onboardingReward, onboardingTargetOf, type OnboardingQuestFacts, type OnboardingStep } from "../quests/onboarding";
 import { withoutFullStop, type QuestId } from "../quests/pool";
+import type { Side } from "../quests/sides";
 import type { Quest } from "../quests/step";
+import { twoQuestsOf, type HowTo, type TwoQuestsRow } from "../quests/twoQuests";
 import { daysLeftInWeek } from "../quests/week";
 import { drawnWeekOf, type DrawnWeek } from "../quests/weekly";
 import type { MemberId } from "../workspace/directory";
@@ -22,12 +25,16 @@ export type GettingStartedStep = { step: GettingStartedStepId; goal: string; hin
 
 export type DrawnQuest = { quest: QuestId; goal: string; progress: StepProgress; done: boolean; reward: { xp: number }; item: QuestItemState };
 
-export type MondayQuestList = { kind: "journey"; steps: GettingStartedStep[] } | { kind: "drawn"; quests: DrawnQuest[] };
+export type SideQuest = { side: Side; goal: string; hint: string | null; progress: StepProgress; done: boolean; reward: { xp: number }; item: QuestItemState; next: boolean; drawn: boolean };
+
+export type MondayQuestList = { kind: "journey"; steps: GettingStartedStep[] } | { kind: "drawn"; quests: DrawnQuest[] } | { kind: "two-quests"; quests: SideQuest[]; steps: SideQuest[] };
 
 export type MondayQuests = { kind: "monday"; firstName: string | null; next: OnboardingStep | null; daysLeft: number; quests: MondayQuestList };
 
+const hugHint = "React with your kudos emoji on any message in Slack.";
+
 const guidance: Record<"hug" | "turn", { goal: string; hint: string | null }> = {
-  hug: { goal: "Give your first hug", hint: "React with your kudos emoji on any message in Slack." },
+  hug: { goal: "Give your first hug", hint: hugHint },
   turn: { goal: "Identify the hoggie it left on your board", hint: null },
 };
 
@@ -51,6 +58,10 @@ export async function mondayQuestsOf(ctx: QueryCtx, me: VerifiedMember): Promise
 }
 
 async function questListOf(ctx: QueryCtx, member: MemberId, at: number): Promise<MondayQuestList> {
+  if (await twoQuestsOn(ctx, member)) {
+    const quests = await Promise.all((await twoQuestsOf(ctx, member, at)).map((row) => sideQuestOf(ctx, member, row)));
+    return { kind: "two-quests", quests, steps: quests };
+  }
   const week = (await onboardingFinishedBy(ctx, member)) ? await drawnWeekOf(ctx, member, at) : null;
   if (week === null) return { kind: "journey", steps: await gettingStartedOf(ctx, member, at) };
   return { kind: "drawn", quests: await Promise.all(week.slots.map((slot) => drawnQuestOf(ctx, member, slot))) };
@@ -88,6 +99,15 @@ async function questStepOf(ctx: QueryCtx, member: MemberId, { step, finish, prog
 async function drawnQuestOf(ctx: QueryCtx, member: MemberId, { quest, goal, progress, target, finishedAt, reward, crate }: DrawnWeek["slots"][number]): Promise<DrawnQuest> {
   const done = finishedAt !== null;
   return { quest, goal: withoutFullStop(goal), progress: { done: progress, target }, done, reward: { xp: reward.xp }, item: done ? await itemStateOf(ctx, member, crate) : null };
+}
+
+async function sideQuestOf(ctx: QueryCtx, member: MemberId, { side, quest, goal, finished, progress, xp, howTo, next }: TwoQuestsRow): Promise<SideQuest> {
+  const item = finished ? await itemStateOf(ctx, member, quest) : null;
+  return { side, goal, hint: howTo === null ? null : hintOf(howTo), progress: { done: progress.done, target: progress.of }, done: finished, reward: { xp }, item, next, drawn: quest.kind === "weekly" };
+}
+
+function hintOf(howTo: HowTo): string {
+  return howTo === "hug" ? hugHint : questHints[howTo];
 }
 
 async function itemStateOf(ctx: QueryCtx, member: MemberId, quest: Quest): Promise<QuestItemState> {

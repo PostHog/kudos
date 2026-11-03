@@ -206,6 +206,41 @@ describe("MQ14 MQ21 MQ46 HH12: a first kudos on the Monday path welcomes the giv
   });
 });
 
+describe("HH54 HH55 HH57: under two-quests the welcome keeps its card and adds the hug ladder's next step as its first row", { timeout: 60_000 }, () => {
+  const twoQuests = [...mondayPath, "two-quests"];
+  const ladderRow = (hugs: number) => `:point_right: *Give 3 hugs* _${hugs} of 3 hugs_\nReact to any message with :taco:.  🎁 +20 XP and an unidentified Hoggie for your collection`;
+
+  test("Bob's first hug welcome lists the ladder's first step, one hug in and marked next, above the onboarding quests", async () => {
+    t = await workspace(twoQuests);
+
+    await hug(bob, alice);
+
+    const [welcome] = welcomesTo(bob);
+    expect(readWelcome(welcome).slice(2, 5)).toEqual([
+      "section: *Your onboarding journey* · 0 of 3 done",
+      `rich_text: ${ladderRow(1)} | :white_circle: Give a kudos to someone | :white_circle: Thank someone new | :white_circle: Thank someone on two different days _0 of 2 days_`,
+      "section: *Up next: give a kudos to someone.*\nMention them in a message and add :taco:. [button: Show me how → first-thanks]",
+    ]);
+  });
+
+  test("Alice's first kudos welcome lists the ladder's first step at no hugs, marked next, and her finished first quest", async () => {
+    t = await workspace(twoQuests);
+
+    await thanks(alice, saysWhy, bob);
+
+    const [welcome] = welcomesTo(alice);
+    expect(readWelcome(welcome)[3]).toBe(`rich_text: ${ladderRow(0)} | :white_check_mark: ~Give a kudos to someone~ | :white_circle: Thank someone new | :white_circle: Thank someone on two different days _1 of 2 days_`);
+  });
+
+  test("HH57: with two-quests off, the hug welcome's checklist is the three onboarding quests as before", async () => {
+    t = await workspace(mondayPath);
+
+    await hug(bob, alice);
+
+    expect(readWelcome(welcomesTo(bob)[0])[3]).toBe("rich_text: :point_right: *Give a kudos to someone* | :white_circle: Thank someone new | :white_circle: Thank someone on two different days _0 of 2 days_");
+  });
+});
+
 describe("MQ22: Show me how answers in the welcome's thread", { timeout: 60_000 }, () => {
   test("Bob pressing Show me how on his hug welcome gets the first quest's how-to and an example kudos as a reply under the welcome", async () => {
     t = await workspace(mondayPath);
@@ -611,6 +646,7 @@ function checklistOf(block: WelcomeBlock) {
 
 function readRichElement({ type, name, text, style }: RichElement) {
   if (type === "emoji") return `:${name}:`;
+  if (style === undefined) return text!;
   const words = text!.trim();
   if (style?.strike) return ` ~${words}~`;
   if (style?.bold) return ` *${words}*`;
