@@ -16,7 +16,13 @@ const hugsSectionValidator = v.object({
   emojiLine: v.union(v.object({ text: v.string(), pictures: v.array(v.object({ url: v.string(), name: v.string() })) }), v.null()),
 });
 
-const checklistItemValidator = v.object({ goal: v.string(), mark: v.union(v.literal("done"), v.literal("next"), v.literal("open")), progress: v.union(v.string(), v.null()) });
+const checklistItemValidator = v.object({
+  goal: v.string(),
+  mark: v.union(v.literal("done"), v.literal("next"), v.literal("open")),
+  progress: v.union(v.string(), v.null()),
+  howTo: v.optional(v.string()),
+  reward: v.optional(v.string()),
+});
 
 const mondayQuestsValidator = v.object({
   heading: v.string(),
