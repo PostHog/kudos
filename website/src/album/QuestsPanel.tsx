@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import { IconCheck, IconChevronRight } from "@posthog/icons";
-import type { DrawnQuest, GettingStartedStep, MondayQuests } from "../../../convex/website/quests";
+import type { DrawnQuest, GettingStartedStep, MondayQuests, SideQuest } from "../../../convex/website/quests";
 import type { QuestsSurface } from "../shell";
 import type { QuestsShown } from "./answer";
 import { CardBack } from "./PackCards";
@@ -78,27 +78,30 @@ function useLandedAt({ asked, landed }: QuestsLanding, openHere: () => void) {
   return howTo;
 }
 
+const eyebrows: Record<MondayQuests["quests"]["kind"], string> = { journey: "Getting started", drawn: "This week", "two-quests": "This week's quests" };
+
 function Greeting({ quests }: { quests: MondayQuests }) {
   const { done, total } = doneOf(quests);
-  const drawn = quests.quests.kind === "drawn";
+  const journey = quests.quests.kind === "journey";
   const name = quests.firstName === null ? "" : `, ${quests.firstName}`;
   return (
     <div className="al-quests-greeting">
       <p className="al-eyebrow">
-        {drawn ? "This week" : "Getting started"} · {done} of {total}
+        {eyebrows[quests.quests.kind]} · {done} of {total}
       </p>
-      <h2 className="al-quests-title">{drawn ? `Your quests this week${name}` : `Welcome in${name}`}</h2>
+      <h2 className="al-quests-title">{journey ? `Welcome in${name}` : `Your quests this week${name}`}</h2>
       <p className="al-quests-note">A few small ways to make someone's day. Every quest leaves an unidentified hoggie on your board.</p>
     </div>
   );
 }
 
 function Footer({ quests }: { quests: MondayQuests }) {
-  return <footer className="al-quests-foot">{quests.quests.kind === "drawn" ? `${daysLeftWords(quests.daysLeft)} · new quests Monday at 9:00` : "Once these are done, three new quests arrive every Monday."}</footer>;
+  return <footer className="al-quests-foot">{quests.quests.kind === "journey" ? "Once these are done, three new quests arrive every Monday." : `${daysLeftWords(quests.daysLeft)} · new quests Monday at 9:00`}</footer>;
 }
 
 function QuestList({ quests: { quests, next }, openBoard, howTo = null }: { quests: MondayQuests; openBoard: () => void; howTo?: string | null }) {
   if (quests.kind === "drawn") return <Checklist rows={quests.quests.map(drawnRowOf)} openBoard={openBoard} />;
+  if (quests.kind === "two-quests") return <Checklist rows={quests.quests.map(sideRowOf)} openBoard={openBoard} />;
   return <Journey rows={quests.steps.map((step) => journeyRowOf(step, { howToOpen: step.step === howTo, next: step.step === next }))} openBoard={openBoard} />;
 }
 
@@ -133,7 +136,9 @@ function Checklist({ rows, openBoard }: { rows: Row[]; openBoard: () => void }) 
             {row.done && <IconCheck />}
           </span>
           <div className="al-quests-words">
+            {row.next && <span className="al-quests-next">Next</span>}
             <span className="al-quests-goal">{row.goal}</span>
+            {!row.done && row.hint !== null && <span className="al-quests-hint">{row.hint}</span>}
             <Progress row={row} />
             {row.boardLink && <BoardLink openBoard={openBoard} />}
           </div>
@@ -201,6 +206,10 @@ function drawnRowOf({ goal, progress, done, reward, item }: DrawnQuest): Row {
   return { goal, hint: null, howToOpen: false, next: false, progress, done, reward, boardLink: item === "waiting" };
 }
 
+function sideRowOf({ goal, hint, progress, done, reward, item, next }: SideQuest): Row {
+  return { goal, hint, howToOpen: false, next, progress, done, reward, boardLink: item === "waiting" };
+}
+
 function rowLabelOf({ goal, done, next, reward }: Row) {
   const state = done ? "done" : next ? "next" : "not yet";
   if (reward === null) return `${goal}: ${state}`;
@@ -208,7 +217,7 @@ function rowLabelOf({ goal, done, next, reward }: Row) {
 }
 
 export function doneOf({ quests }: MondayQuests) {
-  const rows = quests.kind === "drawn" ? quests.quests : quests.steps;
+  const rows = quests.kind === "journey" ? quests.steps : quests.quests;
   return { done: rows.filter(({ done }) => done).length, total: rows.length };
 }
 

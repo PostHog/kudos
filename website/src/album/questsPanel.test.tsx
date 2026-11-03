@@ -213,6 +213,47 @@ describe("MQ37 MQ39: after onboarding the panel lists this week's drawn quests",
   });
 });
 
+describe("HH54 HH55: under two-quests the panel lists the hug quest, then the kudos quest, as one checklist", { timeout: 30_000 }, () => {
+  it("shows the eyebrow counting two, each row with its goal, its how-to and its reward, and marks the quest the backend names next", async () => {
+    visit(aTeamPage, { quests: fixedQuests(questsFixtures.twoQuestsNewcomer) });
+
+    const panel = await openPanel();
+    expect(panel.getByText("This week's quests · 0 of 2")).toBeInTheDocument();
+    expect(panel.getAllByRole("listitem").map((row) => row.getAttribute("aria-label"))).toEqual([
+      "Give 3 hugs: next, +20 XP and an unidentified hoggie",
+      "Thank someone new: not yet, +50 XP and an unidentified hoggie",
+    ]);
+    const hug = within(panel.getByRole("listitem", { name: /^Give 3 hugs/ }));
+    expect(hug.getByText("Next")).toBeInTheDocument();
+    expect(hug.getByText("React with your kudos emoji on any message in Slack.")).toBeInTheDocument();
+    expect(hug.getByRole("img", { name: "1 of 3" })).toBeInTheDocument();
+    expect(within(panel.getByRole("listitem", { name: /^Thank someone new/ })).getByText("Someone from another team counts, and so does a new joiner.")).toBeInTheDocument();
+    expect(panel.getAllByText("Next")).toHaveLength(1);
+    expect(panel.queryByText(/Getting started/)).not.toBeInTheDocument();
+  });
+
+  it("crosses off a finished drawn quest with its board link and hides its how-to, and counts it in the eyebrow and the tab", async () => {
+    visit(aTeamPage, { quests: fixedQuests(questsFixtures.twoQuestsDrawn) });
+
+    const panel = await openPanel();
+    expect(panel.getByText("This week's quests · 1 of 2")).toBeInTheDocument();
+    expect(panel.getAllByRole("listitem").map((row) => row.getAttribute("aria-label"))).toEqual([
+      "Hug messages on 2 different days: done, won 20 XP and a hoggie",
+      "Thank 3 people in one day: next, +20 XP and an unidentified hoggie",
+    ]);
+    expect(panel.queryByText("React with your kudos emoji on any message in Slack.")).not.toBeInTheDocument();
+    expect(panel.getByRole("button", { name: "Identify it on your board →" })).toBeInTheDocument();
+  });
+
+  it("shows one row and counts one when a side has no quest this week", async () => {
+    visit(aTeamPage, { quests: fixedQuests(questsFixtures.twoQuestsOneSide) });
+
+    const panel = await openPanel();
+    expect(panel.getByText("This week's quests · 0 of 1")).toBeInTheDocument();
+    expect(panel.getAllByRole("listitem")).toHaveLength(1);
+  });
+});
+
 describe("MQ40: the member's own page D leaves the quests to the panel", { timeout: 30_000 }, () => {
   it("shows no quests section, and the panel opens beside the page and records its view", async () => {
     const { actions } = visit("/book#me", { album: withPageD });

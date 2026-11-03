@@ -3,10 +3,11 @@ import { FakePostHog, routedFetch } from "../../testing/fakePostHog";
 import { FakeSlack } from "../../testing/fakeSlack";
 import { post, react, settle, testBackend, type Backend } from "../../testing/slackBackend";
 import { emoji, mention, section, text } from "../../testing/slackMessages";
-import { aDeploymentForWorkspace, switchWebsite } from "../../testing/website";
-import { internal } from "../_generated/api";
+import { aDeploymentForWorkspace, aSignedInSession, switchWebsite } from "../../testing/website";
+import { api, internal } from "../_generated/api";
 import type { MemberId } from "../workspace/directory";
 import { nextQuestOf } from "./next";
+import { hugQuestPool, mondayQuestPool } from "./pool";
 
 const tuesday = new Date("2026-10-13T10:00:00Z");
 const minuteMs = 60_000;
@@ -102,6 +103,65 @@ describe("HH55: Quests answers one next quest, the hug quest while it is unfinis
     expect(await nextOf(bob), "onboarding finished").toBeNull();
   });
 });
+
+describe("HH54 HH55: the website's quests read answers the week's two quests, the hug quest first, the next one marked", { timeout: 60_000 }, () => {
+  const hugHint = "React with your kudos emoji on any message in Slack.";
+
+  test("a newcomer one hug up the ladder reads the ladder's next step, marked next, then the next onboarding quest with its own hint and 50 XP", async () => {
+    await switchWebsite(t, postHog, true, ...twoQuests);
+    await thanks(bob, alice);
+    await hugs(bob, alice);
+
+    expect((await questsReadOf(bob)).quests).toEqual({
+      kind: "two-quests",
+      quests: [
+        { side: "hug", goal: "Give 3 hugs", hint: hugHint, progress: { done: 1, target: 3 }, done: false, reward: { xp: 20 }, item: null, next: true },
+        { side: "kudos", goal: "Thank someone new", hint: "Someone from another team counts, and so does a new joiner.", progress: { done: 0, target: 1 }, done: false, reward: { xp: 50 }, item: null, next: false },
+      ],
+    });
+  });
+
+  test("past both onboardings it reads the week's drawn quests; a finished hug quest is done with its hoggie waiting, and the kudos quest is next", async () => {
+    await switchWebsite(t, postHog, true, ...twoQuests);
+    await finishKudosOnboarding(bob);
+    for (let hug = 1; hug <= 10; hug += 1) await hugs(bob, alice);
+    await sweep();
+    await doesEveryHugQuest(bob);
+
+    const { quests } = await questsReadOf(bob);
+    if (quests.kind !== "two-quests") throw new Error(`expected the two quests, got ${quests.kind}`);
+    const [hugQuest, kudosQuest] = quests.quests;
+    expect(hugQuestPool.quests.map(({ goal }) => goal.replace(/\.$/, ""))).toContain(hugQuest!.goal);
+    expect(hugQuest).toMatchObject({ side: "hug", hint: hugHint, done: true, reward: { xp: 20 }, item: "waiting", next: false });
+    expect(hugQuest!.progress.done).toBe(hugQuest!.progress.target);
+    expect(mondayQuestPool.quests.map(({ goal }) => goal.replace(/\.$/, ""))).toContain(kudosQuest!.goal);
+    expect(kudosQuest).toMatchObject({ side: "kudos", hint: null, done: false, reward: { xp: 20 }, item: null, next: true });
+  });
+
+  test("a side with no quest this week, its onboarding just finished and nothing drawn yet, reads no row", async () => {
+    await switchWebsite(t, postHog, true, ...twoQuests);
+    await finishKudosOnboarding(bob);
+
+    const { quests } = await questsReadOf(bob);
+    expect(quests.kind === "two-quests" ? quests.quests.map(({ side, goal }) => `${side}: ${goal}`) : quests.kind).toEqual(["hug: Give 3 hugs"]);
+  });
+
+  test("HH57: with two-quests off, the read is the Getting started journey as before", async () => {
+    await switchWebsite(t, postHog, true, ...mondayPath);
+    await thanks(bob, alice);
+    await hugs(bob, alice);
+
+    const { quests } = await questsReadOf(bob);
+    expect(quests.kind).toBe("journey");
+  });
+});
+
+async function questsReadOf(person: Person) {
+  const { asSignedIn } = await aSignedInSession(t, { user: person.user, name: person.name });
+  const answer = await asSignedIn.query(api.website.quests.getQuests, {});
+  if (answer.kind !== "monday") throw new Error(`expected the Monday quests, got ${JSON.stringify(answer)}`);
+  return answer;
+}
 
 async function nextOf(person: Person) {
   const member = await memberOf(person);

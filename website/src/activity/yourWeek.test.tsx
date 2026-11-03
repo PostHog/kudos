@@ -137,6 +137,27 @@ describe("HH62 HH65: the week's quests sit under the step, one checkbox row each
     ]);
   });
 
+  it("HH54: under two-quests lists the hug quest with how to hug, then the kudos quest with its own how-to, each with its reward", async () => {
+    visitWithQuests(fixedActivityWeek(activityWeekFixtures.quiet), fixedQuests(questsFixtures.twoQuestsNewcomer));
+
+    const box = await questsBox();
+    expect(box.getByRole("heading", { level: 2, name: "This week's quests · 0 of 2" })).toBeInTheDocument();
+    expect(checksIn(box)).toEqual([
+      "Not done: Give 3 hugs React with your kudos emoji on any message in Slack. +20 XP and a hoggie",
+      "Not done: Thank someone new Someone from another team counts, and so does a new joiner. +50 XP and a hoggie",
+    ]);
+  });
+
+  it("HH54: under two-quests a drawn kudos quest, which has no how-to of its own, shows how to give a kudos", async () => {
+    visitWithQuests(fixedActivityWeek(activityWeekFixtures.quiet), fixedQuests(questsFixtures.twoQuestsDrawn));
+
+    const box = await questsBox();
+    expect(checksIn(box)).toEqual([
+      "Done: Hug messages on 2 different days React with your kudos emoji on any message in Slack. +20 XP and a hoggie",
+      "Not done: Thank 3 people in one day Write :hedgehug: @name and what they did, in any channel HedgeHug is in. +20 XP and a hoggie",
+    ]);
+  });
+
   it("hides the shell's quests panel while the page shows them", async () => {
     visitWithQuests(fixedActivityWeek(activityWeekFixtures.quiet), fixedQuests(questsFixtures.week));
     await questsBox();

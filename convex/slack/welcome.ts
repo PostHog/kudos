@@ -2,8 +2,8 @@ import { v } from "convex/values";
 import { internal } from "../_generated/api";
 import { observedAction } from "../analytics/boundary";
 import { welcomePickValidator, type WelcomeGroups, type WelcomeMessage } from "../feedback/welcome";
-import { hoggieRewardOf, waitingHoggiesLineOf } from "../feedback/waitingHoggies";
-import { onboardingChecklistOf, onboardingHeadingOf } from "../mondayDm/questsCopy";
+import { waitingHoggiesLineOf } from "../feedback/waitingHoggies";
+import { checklistItemOf, howToHug, onboardingHeadingOf, onboardingHowTos, questRewardLineOf, twoQuestsItemOf } from "../mondayDm/questsCopy";
 import { onboardingGoalOf, onboardingReward, type OnboardingStep } from "../quests/onboarding";
 import { mondayWelcomeCauseValidator, onboardingJourneyValidator, onboardingStepValidator, type HuggedPeople, type MondayWelcome, type MondayWelcomeOpening } from "../welcome/mondayWelcome";
 import { welcomedAsValidator } from "../welcome/welcomedAs";
@@ -68,13 +68,7 @@ export const deliverMondayWelcome = observedAction({
 
 const recipientsNamedAtMost = 3;
 
-const howTos: Record<OnboardingStep, (kudosEmoji: string) => string> = {
-  "first-thanks": (kudosEmoji) => `Mention them in a message and add :${kudosEmoji}:.`,
-  "someone-new": () => "Someone from another team counts too.",
-  "two-days": () => "One kudos today and another on any later day.",
-};
-
-const rewardLine = `🎁 ${hoggieRewardOf(onboardingReward.xp)}`;
+const rewardLine = questRewardLineOf(onboardingReward.xp);
 
 export const howToAskedValidator = v.object({ conversation: v.string(), welcome: v.string(), step: onboardingStepValidator });
 
@@ -95,7 +89,7 @@ export const replyWithHowTo = observedAction({
 });
 
 function howToReplyOf(step: OnboardingStep, kudosEmoji: string) {
-  return `*How to ${onboardingGoalOf(step).toLowerCase()}*\n${howTos[step](kudosEmoji)}\n\nA kudos looks like this, in any channel I'm in:\n> ${exampleKudos} :${kudosEmoji}:`;
+  return `*How to ${onboardingGoalOf(step).toLowerCase()}*\n${onboardingHowTos[step](kudosEmoji)}\n\nA kudos looks like this, in any channel I'm in:\n> ${exampleKudos} :${kudosEmoji}:`;
 }
 
 function mondayWelcomeMessageOf(welcome: MondayWelcome, user: string) {
@@ -136,10 +130,6 @@ function howToGiveAKudos(kudosEmoji: string, whom: "them" | "someone") {
   return `mention ${whom} in a message with :${kudosEmoji}:`;
 }
 
-function howToHug(kudosEmoji: string) {
-  return `react to any message with :${kudosEmoji}:`;
-}
-
 function huggedPeopleOf(hugged: HuggedPeople) {
   if (hugged.kind === "peopleThanked") return "the people thanked";
   return hugged.name === undefined ? "the author" : escaped(hugged.name);
@@ -152,13 +142,14 @@ function recipientsOf(recipients: string[]) {
   return ` with ${named.map((name, index) => (index === 0 ? name : `${index === named.length - 1 ? " and " : ", "}${name}`)).join("")}`;
 }
 
-function cardOf({ journey, next, kudosEmoji }: MondayWelcome) {
+function cardOf({ journey, next, marked, hugLadder, kudosEmoji }: MondayWelcome) {
   const done = journey.filter(({ finished }) => finished).length;
   const title = { type: "section", text: mrkdwn(onboardingHeadingOf(done, journey.length)) };
-  const checklist = checklistBlockOf(onboardingChecklistOf(journey));
+  const ladderStep = hugLadder === null ? [] : [twoQuestsItemOf(hugLadder, kudosEmoji)];
+  const checklist = checklistBlockOf([...ladderStep, ...journey.map((quest) => checklistItemOf(quest, quest.step === marked))]);
   if (next === null) return [title, checklist];
   const showMeHow = { type: "button", text: plainText("Show me how"), action_id: showMeHowAction, value: next };
-  const upNext = { type: "section", text: mrkdwn(`*Up next: ${onboardingGoalOf(next).toLowerCase()}.*\n${howTos[next](kudosEmoji)}`), accessory: showMeHow };
+  const upNext = { type: "section", text: mrkdwn(`*Up next: ${onboardingGoalOf(next).toLowerCase()}.*\n${onboardingHowTos[next](kudosEmoji)}`), accessory: showMeHow };
   return [title, checklist, upNext, { type: "context", elements: [mrkdwn(rewardLine)] }];
 }
 

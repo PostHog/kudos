@@ -5,7 +5,7 @@ import { memberMutation } from "./memberMutation";
 import { memberQuery } from "./memberQuery";
 import { mondayQuestsOf, type MondayQuests } from "./mondayQuests";
 
-export type { DrawnQuest, GettingStartedStep, MondayQuests, QuestItemState } from "./mondayQuests";
+export type { DrawnQuest, GettingStartedStep, MondayQuests, QuestItemState, SideQuest } from "./mondayQuests";
 
 export type QuestsAnswer = MondayQuests | { kind: "not-found" };
 

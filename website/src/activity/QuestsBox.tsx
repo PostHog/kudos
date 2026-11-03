@@ -48,5 +48,6 @@ function HowToGiveAKudos({ kudos }: { kudos: LoopLesson }) {
 
 function checksOf({ quests }: MondayQuests, howToGiveAKudos: ReactNode): Check[] {
   if (quests.kind === "drawn") return quests.quests.map(({ goal, done, reward }) => ({ goal, how: howToGiveAKudos, done, reward }));
+  if (quests.kind === "two-quests") return quests.quests.map(({ side, goal, hint, done, reward }) => ({ goal, how: hint ?? (side === "kudos" ? howToGiveAKudos : null), done, reward }));
   return quests.steps.map(({ goal, hint, done, reward }) => ({ goal, how: hint, done, reward }));
 }
