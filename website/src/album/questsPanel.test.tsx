@@ -230,6 +230,7 @@ describe("HH54 HH55: under two-quests the panel lists the hug quest, then the ku
     expect(within(panel.getByRole("listitem", { name: /^Thank someone new/ })).getByText("Someone from another team counts, and so does a new joiner.")).toBeInTheDocument();
     expect(panel.getAllByText("Next")).toHaveLength(1);
     expect(panel.queryByText(/Getting started/)).not.toBeInTheDocument();
+    expect(panel.queryByText(/new quests/), "the ladder step and the onboarding quest last until finished").not.toBeInTheDocument();
   });
 
   it("crosses off a finished drawn quest with its board link and hides its how-to, and counts it in the eyebrow and the tab", async () => {
@@ -243,6 +244,7 @@ describe("HH54 HH55: under two-quests the panel lists the hug quest, then the ku
     ]);
     expect(panel.queryByText("React with your kudos emoji on any message in Slack.")).not.toBeInTheDocument();
     expect(panel.getByRole("button", { name: "Identify it on your board →" })).toBeInTheDocument();
+    expect(panel.getByText("3 days left · new quests Monday at 9:00")).toBeInTheDocument();
   });
 
   it("shows one row and counts one when a side has no quest this week", async () => {
@@ -302,6 +304,7 @@ describe("MQ42 MQ43: no panel off the path, while loading or when the read fails
     ["off the Monday path", { kind: "not-found" }],
     ["while the read is loading", undefined],
     ["when the read fails", { kind: "broken" }],
+    ["under two-quests with no quest this week", questsFixtures.twoQuestsNone],
   ])("%s there is no panel and no tab, and the page works", async (_, answer) => {
     visit("/book#me", { quests: () => answer, album: withPageD });
 

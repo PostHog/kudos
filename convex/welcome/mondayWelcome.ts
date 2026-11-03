@@ -61,7 +61,7 @@ async function mondayWelcomeFor(ctx: QueryCtx, workspace: string, member: Member
     journey,
     next,
     marked: twoQuests ? await markedOnboardingStepOf(ctx, member) : next,
-    hugLadder: twoQuests ? await hugLadderRowOf(ctx, member, Date.now()) : null,
+    hugLadder: twoQuests ? await hugLadderRowOf(ctx, member) : null,
     waiting: await shownWaitingHoggiesAtTheWelcomeOf(ctx, member, links, owesTheWelcomeItem),
     links,
   };

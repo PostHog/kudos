@@ -47,15 +47,15 @@ const hugHint = "React with your kudos emoji on any message in Slack.";
 
 function newcomerSides(): SideQuest[] {
   return [
-    { side: "hug", goal: "Give 3 hugs", hint: hugHint, progress: { done: 1, target: 3 }, done: false, reward: { xp: 20 }, item: null, next: true },
-    { side: "kudos", goal: "Thank someone new", hint: "Someone from another team counts, and so does a new joiner.", progress: once, done: false, reward: { xp: 50 }, item: null, next: false },
+    { side: "hug", goal: "Give 3 hugs", hint: hugHint, progress: { done: 1, target: 3 }, done: false, reward: { xp: 20 }, item: null, next: true, drawn: false },
+    { side: "kudos", goal: "Thank someone new", hint: "Someone from another team counts, and so does a new joiner.", progress: once, done: false, reward: { xp: 50 }, item: null, next: false, drawn: false },
   ];
 }
 
 function drawnSides(): SideQuest[] {
   return [
-    { side: "hug", goal: "Hug messages on 2 different days", hint: hugHint, progress: { done: 2, target: 2 }, done: true, reward: { xp: 20 }, item: "waiting", next: false },
-    { side: "kudos", goal: "Thank 3 people in one day", hint: null, progress: { done: 1, target: 3 }, done: false, reward: { xp: 20 }, item: null, next: true },
+    { side: "hug", goal: "Hug messages on 2 different days", hint: hugHint, progress: { done: 2, target: 2 }, done: true, reward: { xp: 20 }, item: "waiting", next: false, drawn: true },
+    { side: "kudos", goal: "Thank 3 people in one day", hint: null, progress: { done: 1, target: 3 }, done: false, reward: { xp: 20 }, item: null, next: true, drawn: true },
   ];
 }
 
@@ -68,6 +68,7 @@ export const questsFixtures = {
   week: { kind: "monday", firstName: "Sam", next: null, daysLeft: 3, quests: { kind: "drawn", quests: drawnWeek() } },
   twoQuestsNewcomer: { kind: "monday", firstName: "Sam", next: "someone-new", daysLeft: 5, quests: { kind: "two-quests", quests: newcomerSides() } },
   twoQuestsDrawn: { kind: "monday", firstName: "Sam", next: null, daysLeft: 3, quests: { kind: "two-quests", quests: drawnSides() } },
+  twoQuestsNone: { kind: "monday", firstName: "Sam", next: null, daysLeft: 5, quests: { kind: "two-quests", quests: [] } },
   twoQuestsOneSide: { kind: "monday", firstName: "Sam", next: null, daysLeft: 5, quests: { kind: "two-quests", quests: newcomerSides().slice(0, 1) } },
 } as const satisfies Record<string, MondayQuests>;
 

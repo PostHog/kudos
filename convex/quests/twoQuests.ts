@@ -1,9 +1,7 @@
 import type { QueryCtx } from "../_generated/server";
 import type { MemberId } from "../workspace/directory";
-import { rewardKeyOf } from "./crates";
 import { hugLadderReward, hugLadderTargetOf, hugsOnTheLadderOf, nextHugLadderStepOf } from "./hugLadder";
 import { journeyGoalOf } from "./journeyCopy";
-import { nextQuestOf, type NextQuest } from "./next";
 import { nextOnboardingQuestOf, onboardingGoalOf, onboardingQuestFactsOf, onboardingReward, onboardingTargetOf, type OnboardingStep } from "./onboarding";
 import { withoutFullStop, type PoolQuest } from "./pool";
 import { progressUnitOf, type QuestProgress } from "./progress";
@@ -18,15 +16,16 @@ export type TwoQuestsRow = { side: Side; quest: Quest; goal: string; finished: b
 
 type Row = Omit<TwoQuestsRow, "next">;
 
+// The week's quests, the hug side first; the first unfinished row is the member's next quest (HH55).
 export async function twoQuestsOf(ctx: QueryCtx, member: MemberId, at: number): Promise<TwoQuestsRow[]> {
-  const next = await nextQuestOf(ctx, member, at);
-  const rows = [await hugQuestRowOf(ctx, member, at), await kudosQuestRowOf(ctx, member, at)];
-  return rows.flatMap((row) => (row === null ? [] : [{ ...row, next: isNext(row, next) }]));
+  const rows = (await Promise.all([hugQuestRowOf(ctx, member, at), kudosQuestRowOf(ctx, member, at)])).filter((row) => row !== null);
+  const next = rows.findIndex(({ finished }) => !finished);
+  return rows.map((row, index) => ({ ...row, next: index === next }));
 }
 
-export async function hugLadderRowOf(ctx: QueryCtx, member: MemberId, at: number): Promise<TwoQuestsRow | null> {
+export async function hugLadderRowOf(ctx: QueryCtx, member: MemberId): Promise<TwoQuestsRow | null> {
   const row = await ladderStepRowOf(ctx, member);
-  return row === null ? null : { ...row, next: isNext(row, await nextQuestOf(ctx, member, at)) };
+  return row === null ? null : { ...row, next: true };
 }
 
 async function hugQuestRowOf(ctx: QueryCtx, member: MemberId, at: number): Promise<Row | null> {
@@ -59,8 +58,4 @@ async function drawnRowOf(ctx: QueryCtx, member: MemberId, side: Side, at: numbe
 
 function hugUnitOf({ progress: { counts } }: PoolQuest): TwoQuestsProgress["unit"] {
   return counts === "days" ? "days" : "hugs";
-}
-
-function isNext(row: Row, next: NextQuest | null): boolean {
-  return next !== null && next.side === row.side && rewardKeyOf(next.quest) === rewardKeyOf(row.quest);
 }

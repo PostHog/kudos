@@ -12,7 +12,7 @@ export type ShellQuests = { quests: MondayQuests; inSight: boolean; openBoard: (
 type Row = { goal: string; hint: string | null; howToOpen: boolean; next: boolean; progress: { done: number; target: number }; done: boolean; reward: { xp: number } | null; boardLink: boolean };
 
 export function mondayQuestsIn(shown: QuestsShown | undefined): MondayQuests | null {
-  return shown?.kind === "monday" ? shown : null;
+  return shown?.kind === "monday" && doneOf(shown).total > 0 ? shown : null;
 }
 
 export function QuestsPanel({ shown, place }: { shown: ShellQuests; place: FoldPlace }) {
@@ -96,7 +96,10 @@ function Greeting({ quests }: { quests: MondayQuests }) {
 }
 
 function Footer({ quests }: { quests: MondayQuests }) {
-  return <footer className="al-quests-foot">{quests.quests.kind === "journey" ? "Once these are done, three new quests arrive every Monday." : `${daysLeftWords(quests.daysLeft)} · new quests Monday at 9:00`}</footer>;
+  const list = quests.quests;
+  if (list.kind === "journey") return <footer className="al-quests-foot">Once these are done, three new quests arrive every Monday.</footer>;
+  if (list.kind === "two-quests" && !list.quests.some(({ drawn }) => drawn)) return null;
+  return <footer className="al-quests-foot">{`${daysLeftWords(quests.daysLeft)} · new quests Monday at 9:00`}</footer>;
 }
 
 function QuestList({ quests: { quests, next }, openBoard, howTo = null }: { quests: MondayQuests; openBoard: () => void; howTo?: string | null }) {

@@ -25,7 +25,7 @@ export type GettingStartedStep = { step: GettingStartedStepId; goal: string; hin
 
 export type DrawnQuest = { quest: QuestId; goal: string; progress: StepProgress; done: boolean; reward: { xp: number }; item: QuestItemState };
 
-export type SideQuest = { side: Side; goal: string; hint: string | null; progress: StepProgress; done: boolean; reward: { xp: number }; item: QuestItemState; next: boolean };
+export type SideQuest = { side: Side; goal: string; hint: string | null; progress: StepProgress; done: boolean; reward: { xp: number }; item: QuestItemState; next: boolean; drawn: boolean };
 
 export type MondayQuestList = { kind: "journey"; steps: GettingStartedStep[] } | { kind: "drawn"; quests: DrawnQuest[] } | { kind: "two-quests"; quests: SideQuest[] };
 
@@ -100,7 +100,7 @@ async function drawnQuestOf(ctx: QueryCtx, member: MemberId, { quest, goal, prog
 
 async function sideQuestOf(ctx: QueryCtx, member: MemberId, { side, quest, goal, finished, progress, xp, howTo, next }: TwoQuestsRow): Promise<SideQuest> {
   const item = finished ? await itemStateOf(ctx, member, quest) : null;
-  return { side, goal, hint: howTo === null ? null : hintOf(howTo), progress: { done: progress.done, target: progress.of }, done: finished, reward: { xp }, item, next };
+  return { side, goal, hint: howTo === null ? null : hintOf(howTo), progress: { done: progress.done, target: progress.of }, done: finished, reward: { xp }, item, next, drawn: quest.kind === "weekly" };
 }
 
 function hintOf(howTo: HowTo): string {

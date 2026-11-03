@@ -115,8 +115,8 @@ describe("HH54 HH55: the website's quests read answers the week's two quests, th
     expect((await questsReadOf(bob)).quests).toEqual({
       kind: "two-quests",
       quests: [
-        { side: "hug", goal: "Give 3 hugs", hint: hugHint, progress: { done: 1, target: 3 }, done: false, reward: { xp: 20 }, item: null, next: true },
-        { side: "kudos", goal: "Thank someone new", hint: "Someone from another team counts, and so does a new joiner.", progress: { done: 0, target: 1 }, done: false, reward: { xp: 50 }, item: null, next: false },
+        { side: "hug", goal: "Give 3 hugs", hint: hugHint, progress: { done: 1, target: 3 }, done: false, reward: { xp: 20 }, item: null, next: true, drawn: false },
+        { side: "kudos", goal: "Thank someone new", hint: "Someone from another team counts, and so does a new joiner.", progress: { done: 0, target: 1 }, done: false, reward: { xp: 50 }, item: null, next: false, drawn: false },
       ],
     });
   });
@@ -132,7 +132,7 @@ describe("HH54 HH55: the website's quests read answers the week's two quests, th
     if (quests.kind !== "two-quests") throw new Error(`expected the two quests, got ${quests.kind}`);
     const [hugQuest, kudosQuest] = quests.quests;
     expect(hugQuestPool.quests.map(({ goal }) => goal.replace(/\.$/, ""))).toContain(hugQuest!.goal);
-    expect(hugQuest).toMatchObject({ side: "hug", hint: hugHint, done: true, reward: { xp: 20 }, item: "waiting", next: false });
+    expect(hugQuest).toMatchObject({ side: "hug", hint: hugHint, done: true, reward: { xp: 20 }, item: "waiting", next: false, drawn: true });
     expect(hugQuest!.progress.done).toBe(hugQuest!.progress.target);
     expect(mondayQuestPool.quests.map(({ goal }) => goal.replace(/\.$/, ""))).toContain(kudosQuest!.goal);
     expect(kudosQuest).toMatchObject({ side: "kudos", hint: null, done: false, reward: { xp: 20 }, item: null, next: true });

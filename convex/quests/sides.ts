@@ -77,16 +77,12 @@ export type KudosQuestFinished = { goal: string; xp: number };
 export async function advanceSide(ctx: MutationCtx, fact: RecognitionFact): Promise<void> {
   const draw = await sideDrawOf(ctx, fact.giver, weekKeyOfDay(fact.day), fact.source);
   if (draw === null || fact.at < draw.drawnAt || (await isSideFinished(ctx, draw))) return;
-  const reaching = await factReachingTheTarget(ctx, draw);
-  if (reaching === null) return;
+  const reachedAt = await targetReachedAt(ctx, draw);
+  if (reachedAt === null) return;
   const { workspace } = await chatUserOf(ctx, fact.giver);
-  const cause = draw.side === "kudos" ? reaching.message : undefined;
-  await finishMondayQuest(ctx, workspace, fact.giver, sideQuestOf(draw), { reward: draw.reward, catalogueVersion: draw.catalogueVersion, poolQuest: draw.quest }, reaching.at, cause);
-}
-
-export async function unfinishedSideQuestOf(ctx: QueryCtx, member: MemberId, side: Side, at: number): Promise<WeeklyQuest | null> {
-  const draw = await sideDrawOf(ctx, member, weekKeyOf(at, await timeZoneOf(ctx, member)), side);
-  return draw === null || (await isSideFinished(ctx, draw)) ? null : sideQuestOf(draw);
+  // The cause is the kudos being handled, whose reply Quests still holds, even when an earlier-dated fact reached the target.
+  const cause = draw.side === "kudos" ? fact.message : undefined;
+  await finishMondayQuest(ctx, workspace, fact.giver, sideQuestOf(draw), { reward: draw.reward, catalogueVersion: draw.catalogueVersion, poolQuest: draw.quest }, reachedAt, cause);
 }
 
 export async function sideQuestOfTheWeek(ctx: QueryCtx, member: MemberId, side: Side, at: number): Promise<SideQuestOfTheWeek | null> {
@@ -162,11 +158,11 @@ function firstOf<Because>(ranked: PoolQuest[], feasibleBecause: (quest: PoolQues
 
 // Facts can be delivered out of order, so the quest's progress is replayed in time order, and it finishes at the fact
 // that first reached its target.
-async function factReachingTheTarget(ctx: QueryCtx, draw: SideDraw): Promise<RecognitionFact | null> {
+async function targetReachedAt(ctx: QueryCtx, draw: SideDraw): Promise<number | null> {
   const pooled = questOf(draw.quest);
   const facts = await countedFactsOf(ctx, draw);
   const progressOf = await sideProgress(ctx, draw, pooled);
-  for (let reached = 1; reached <= facts.length; reached += 1) if (progressOf(facts.slice(0, reached)) >= pooled.progress.target) return facts[reached - 1]!;
+  for (let reached = 1; reached <= facts.length; reached += 1) if (progressOf(facts.slice(0, reached)) >= pooled.progress.target) return facts[reached - 1]!.at;
   return null;
 }
 
