@@ -127,8 +127,9 @@ describe("HH54 HH55: the website's quests read answers the week's two quests, th
     await thanks(bob, alice);
     await hugs(bob, alice);
 
-    const list: { kind: string; quests?: unknown[]; steps?: Array<{ goal: string; hint: string | null; done: boolean; reward: { xp: number } | null }> } = (await questsReadOf(bob)).quests;
-    const steps = list.kind === "drawn" ? list.quests : list.steps;
+    type JourneyStep = { goal: string; hint: string | null; done: boolean; reward: { xp: number } | null };
+    const list: { kind: string; quests?: unknown[]; steps?: JourneyStep[] } = (await questsReadOf(bob)).quests;
+    const steps = (list.kind === "drawn" ? list.quests : list.steps) as JourneyStep[] | undefined;
 
     expect(steps).toEqual(list.quests);
     expect(steps!.map(({ goal, hint, done, reward }) => ({ goal, hint, done, reward }))).toEqual([
