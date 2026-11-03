@@ -27,8 +27,6 @@ export type DrawnQuest = { quest: QuestId; goal: string; progress: StepProgress;
 
 export type SideQuest = { side: Side; goal: string; hint: string | null; progress: StepProgress; done: boolean; reward: { xp: number }; item: QuestItemState; next: boolean; drawn: boolean };
 
-// `steps` repeats the two quests' rows for a tab still running a website built before them, which reads any list but a
-// drawn one as a journey's steps.
 export type MondayQuestList = { kind: "journey"; steps: GettingStartedStep[] } | { kind: "drawn"; quests: DrawnQuest[] } | { kind: "two-quests"; quests: SideQuest[]; steps: SideQuest[] };
 
 export type MondayQuests = { kind: "monday"; firstName: string | null; next: OnboardingStep | null; daysLeft: number; quests: MondayQuestList };

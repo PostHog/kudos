@@ -304,7 +304,6 @@ describe("MQ42 MQ43: no panel off the path, while loading or when the read fails
     ["off the Monday path", { kind: "not-found" }],
     ["while the read is loading", undefined],
     ["when the read fails", { kind: "broken" }],
-    ["under two-quests with no quest this week", questsFixtures.twoQuestsNone],
   ])("%s there is no panel and no tab, and the page works", async (_, answer) => {
     visit("/book#me", { quests: () => answer, album: withPageD });
 

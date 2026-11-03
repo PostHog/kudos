@@ -12,7 +12,7 @@ export type ShellQuests = { quests: MondayQuests; inSight: boolean; openBoard: (
 type Row = { goal: string; hint: string | null; howToOpen: boolean; next: boolean; progress: { done: number; target: number }; done: boolean; reward: { xp: number } | null; boardLink: boolean };
 
 export function mondayQuestsIn(shown: QuestsShown | undefined): MondayQuests | null {
-  return shown?.kind === "monday" && doneOf(shown).total > 0 ? shown : null;
+  return shown?.kind === "monday" ? shown : null;
 }
 
 export function QuestsPanel({ shown, place }: { shown: ShellQuests; place: FoldPlace }) {

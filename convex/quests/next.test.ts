@@ -163,6 +163,18 @@ describe("HH54 HH55: the website's quests read answers the week's two quests, th
     expect(quests.kind === "two-quests" ? quests.quests.map(({ side, goal }) => `${side}: ${goal}`) : quests.kind).toEqual(["hug: Give 3 hugs"]);
   });
 
+  test("a week with no row, a new week past both onboardings before anything draws it, answers not-found, which every website already hides", async () => {
+    await switchWebsite(t, postHog, true, ...twoQuests);
+    await finishKudosOnboarding(bob);
+    for (let hug = 1; hug <= 10; hug += 1) await hugs(bob, alice);
+    await sweep();
+    expect((await questsReadOf(bob)).quests.kind, "this week's two quests").toBe("two-quests");
+
+    vi.setSystemTime(Date.now() + 7 * dayMs);
+
+    expect(await questsAnswerOf(bob)).toEqual({ kind: "not-found" });
+  });
+
   test("HH57: with two-quests off, the read is the Getting started journey as before", async () => {
     await switchWebsite(t, postHog, true, ...mondayPath);
     await thanks(bob, alice);
@@ -173,9 +185,13 @@ describe("HH54 HH55: the website's quests read answers the week's two quests, th
   });
 });
 
-async function questsReadOf(person: Person) {
+async function questsAnswerOf(person: Person) {
   const { asSignedIn } = await aSignedInSession(t, { user: person.user, name: person.name });
-  const answer = await asSignedIn.query(api.website.quests.getQuests, {});
+  return asSignedIn.query(api.website.quests.getQuests, {});
+}
+
+async function questsReadOf(person: Person) {
+  const answer = await questsAnswerOf(person);
   if (answer.kind !== "monday") throw new Error(`expected the Monday quests, got ${JSON.stringify(answer)}`);
   return answer;
 }

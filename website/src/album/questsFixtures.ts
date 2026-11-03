@@ -68,7 +68,6 @@ export const questsFixtures = {
   week: { kind: "monday", firstName: "Sam", next: null, daysLeft: 3, quests: { kind: "drawn", quests: drawnWeek() } },
   twoQuestsNewcomer: { kind: "monday", firstName: "Sam", next: "someone-new", daysLeft: 5, quests: { kind: "two-quests", quests: newcomerSides(), steps: newcomerSides() } },
   twoQuestsDrawn: { kind: "monday", firstName: "Sam", next: null, daysLeft: 3, quests: { kind: "two-quests", quests: drawnSides(), steps: drawnSides() } },
-  twoQuestsNone: { kind: "monday", firstName: "Sam", next: null, daysLeft: 5, quests: { kind: "two-quests", quests: [], steps: [] } },
   twoQuestsOneSide: { kind: "monday", firstName: "Sam", next: null, daysLeft: 5, quests: { kind: "two-quests", quests: newcomerSides().slice(0, 1), steps: newcomerSides().slice(0, 1) } },
 } as const satisfies Record<string, MondayQuests>;
 
