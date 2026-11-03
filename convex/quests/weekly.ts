@@ -18,7 +18,7 @@ import { onboardingFinishedAt } from "./onboarding";
 import { feasibility, feasibleBecauseValidator, mondayQuestPool, questIdValidator, questOf, withoutFullStop, type DrawFacts, type FeasibleBecause, type PoolQuest } from "./pool";
 import { counts, progressUnitOf, questProgress, type Moved, type MovedQuest, type ProgressRead, type QuestAward } from "./progress";
 import { drawRank } from "./rank";
-import { drawSidesWhenDue } from "./sides";
+import { drawSidesWhenDue, sideGoalOf } from "./sides";
 import { questStartOf } from "./start";
 import type { WeeklyQuest } from "./step";
 import { weekKeyOf, weekKeyOfDay, weekStartOf, type WeekKey } from "./week";
@@ -151,6 +151,8 @@ async function weeklySlotsOf(ctx: QueryCtx, draw: Draw): Promise<WeeklySlot[]> {
 }
 
 export async function weeklyGoalOf(ctx: QueryCtx, member: MemberId, { week, slot }: WeeklyQuest): Promise<string> {
+  const sideGoal = await sideGoalOf(ctx, member, { kind: "weekly", week, slot });
+  if (sideGoal !== null) return sideGoal;
   const draw = (await drawOf(ctx, member, week))!;
   const finished = draw.slots.find((drawn) => drawn.slot === slot)!;
   return questOf(finished.quest).goal;
