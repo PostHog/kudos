@@ -80,7 +80,6 @@ export async function advanceSide(ctx: MutationCtx, fact: RecognitionFact): Prom
   const reachedAt = await targetReachedAt(ctx, draw);
   if (reachedAt === null) return;
   const { workspace } = await chatUserOf(ctx, fact.giver);
-  // The cause is the kudos being handled, whose reply Quests still holds, even when an earlier-dated fact reached the target.
   const cause = draw.side === "kudos" ? fact.message : undefined;
   await finishMondayQuest(ctx, workspace, fact.giver, sideQuestOf(draw), { reward: draw.reward, catalogueVersion: draw.catalogueVersion, poolQuest: draw.quest }, reachedAt, cause);
 }

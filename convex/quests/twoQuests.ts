@@ -16,7 +16,6 @@ export type TwoQuestsRow = { side: Side; quest: Quest; goal: string; finished: b
 
 type Row = Omit<TwoQuestsRow, "next">;
 
-// The week's quests, the hug side first; the first unfinished row is the member's next quest (HH55).
 export async function twoQuestsOf(ctx: QueryCtx, member: MemberId, at: number): Promise<TwoQuestsRow[]> {
   const rows = (await Promise.all([hugQuestRowOf(ctx, member, at), kudosQuestRowOf(ctx, member, at)])).filter((row) => row !== null);
   const next = rows.findIndex(({ finished }) => !finished);
