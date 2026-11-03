@@ -118,7 +118,23 @@ describe("HH54 HH55: the website's quests read answers the week's two quests, th
         { side: "hug", goal: "Give 3 hugs", hint: hugHint, progress: { done: 1, target: 3 }, done: false, reward: { xp: 20 }, item: null, next: true, drawn: false },
         { side: "kudos", goal: "Thank someone new", hint: "Someone from another team counts, and so does a new joiner.", progress: { done: 0, target: 1 }, done: false, reward: { xp: 50 }, item: null, next: false, drawn: false },
       ],
+      steps: expect.any(Array),
     });
+  });
+
+  test("a tab still running a website built before the two quests, which reads any list but a drawn one as a journey's steps, reads the same rows", async () => {
+    await switchWebsite(t, postHog, true, ...twoQuests);
+    await thanks(bob, alice);
+    await hugs(bob, alice);
+
+    const list: { kind: string; quests?: unknown[]; steps?: Array<{ goal: string; hint: string | null; done: boolean; reward: { xp: number } | null }> } = (await questsReadOf(bob)).quests;
+    const steps = list.kind === "drawn" ? list.quests : list.steps;
+
+    expect(steps).toEqual(list.quests);
+    expect(steps!.map(({ goal, hint, done, reward }) => ({ goal, hint, done, reward }))).toEqual([
+      { goal: "Give 3 hugs", hint: hugHint, done: false, reward: { xp: 20 } },
+      { goal: "Thank someone new", hint: "Someone from another team counts, and so does a new joiner.", done: false, reward: { xp: 50 } },
+    ]);
   });
 
   test("past both onboardings it reads the week's drawn quests; a finished hug quest is done with its hoggie waiting, and the kudos quest is next", async () => {

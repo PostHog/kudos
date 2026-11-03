@@ -27,7 +27,9 @@ export type DrawnQuest = { quest: QuestId; goal: string; progress: StepProgress;
 
 export type SideQuest = { side: Side; goal: string; hint: string | null; progress: StepProgress; done: boolean; reward: { xp: number }; item: QuestItemState; next: boolean; drawn: boolean };
 
-export type MondayQuestList = { kind: "journey"; steps: GettingStartedStep[] } | { kind: "drawn"; quests: DrawnQuest[] } | { kind: "two-quests"; quests: SideQuest[] };
+// `steps` repeats the two quests' rows for a tab still running a website built before them, which reads any list but a
+// drawn one as a journey's steps.
+export type MondayQuestList = { kind: "journey"; steps: GettingStartedStep[] } | { kind: "drawn"; quests: DrawnQuest[] } | { kind: "two-quests"; quests: SideQuest[]; steps: SideQuest[] };
 
 export type MondayQuests = { kind: "monday"; firstName: string | null; next: OnboardingStep | null; daysLeft: number; quests: MondayQuestList };
 
@@ -58,7 +60,10 @@ export async function mondayQuestsOf(ctx: QueryCtx, me: VerifiedMember): Promise
 }
 
 async function questListOf(ctx: QueryCtx, member: MemberId, at: number): Promise<MondayQuestList> {
-  if (await twoQuestsOn(ctx, member)) return { kind: "two-quests", quests: await Promise.all((await twoQuestsOf(ctx, member, at)).map((row) => sideQuestOf(ctx, member, row))) };
+  if (await twoQuestsOn(ctx, member)) {
+    const quests = await Promise.all((await twoQuestsOf(ctx, member, at)).map((row) => sideQuestOf(ctx, member, row)));
+    return { kind: "two-quests", quests, steps: quests };
+  }
   const week = (await onboardingFinishedBy(ctx, member)) ? await drawnWeekOf(ctx, member, at) : null;
   if (week === null) return { kind: "journey", steps: await gettingStartedOf(ctx, member, at) };
   return { kind: "drawn", quests: await Promise.all(week.slots.map((slot) => drawnQuestOf(ctx, member, slot))) };
