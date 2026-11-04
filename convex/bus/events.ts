@@ -309,19 +309,16 @@ export const hypeReactedEventValidator = domainEvent({
 
 export type HypeReactedEvent = Infer<typeof hypeReactedEventValidator>;
 
-export const medalUnlockedEventValidator = domainEvent({
-  type: v.literal("medalUnlocked"),
+export const medalsUnlockedEventValidator = domainEvent({
+  type: v.literal("medalsUnlocked"),
   workspace: v.string(),
   member: v.id("members"),
-  milestone: milestoneIdValidator,
-  tier: milestoneTierValidator,
-  xp: v.number(),
-  rewardKey: v.string(),
+  medals: v.array(v.object({ milestone: milestoneIdValidator, tier: milestoneTierValidator, xp: v.number(), rewardKey: v.string() })),
   catalogueVersion: v.string(),
   at: v.number(),
 });
 
-export type MedalUnlockedEvent = Infer<typeof medalUnlockedEventValidator>;
+export type MedalsUnlockedEvent = Infer<typeof medalsUnlockedEventValidator>;
 
 export type DomainEvent =
   | KudosGivenEvent
@@ -352,7 +349,7 @@ export type DomainEvent =
   | ThoughtfulPacksGrantedEvent
   | StickerPutInEvent
   | ItemTurnedEvent
-  | MedalUnlockedEvent
+  | MedalsUnlockedEvent
   | CompanyTeamsReplacedEvent
   | CompanyMatchesKeptEvent;
 

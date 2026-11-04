@@ -156,10 +156,12 @@ describe("LP19a: a medal unlocked by a turn pays XP by its metal", { timeout: 60
     const before = (await albumOf(asAlice)).level.xp;
 
     const turned = await turnTheItem(asAlice, "sticker");
+    const payments = await t.run(async (ctx) => (await ctx.db.system.query("_scheduled_functions").collect()).filter(({ name }) => name.includes("payMedalsUnlocked")).length);
     await settle(t);
     await turn(asAlice, await itemOf(alice, "sticker"));
     await settle(t);
 
+    expect(payments, "one payment for all of the turn's medals, so they never contend").toBe(1);
     for (const [medal, xp] of [[medals[0], 250], [medals[1], 500], [medals[2], 1000]] as const) expect(turned.unlocked.milestones).toContainEqual({ ...medal, xp });
     const owed = turned.unlocked.milestones.reduce((sum, { xp = 0 }) => sum + xp, 0);
     expect((await albumOf(asAlice)).level.xp - before, "the pack bonus and every medal, once").toBe((turned.applied?.xp ?? 0) + owed);

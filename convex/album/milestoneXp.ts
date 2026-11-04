@@ -22,7 +22,7 @@ function rewardKeyOf({ milestone, tier }: ReachedTier) {
 export async function payTheMedals(ctx: MutationCtx, { workspace, member }: Owner, unlocked: ReachedTier[], at: number): Promise<UnlockedTier[]> {
   if (unlocked.length === 0 || !(await milestoneXpPaysFor(ctx, member))) return unlocked;
   const paid = unlocked.map((reached) => ({ ...reached, xp: milestoneXpByMetal[reached.tier] }));
-  for (const medal of paid) await publish(ctx, { type: "medalUnlocked", workspace, member, ...medal, rewardKey: rewardKeyOf(medal), catalogueVersion, at });
+  await publish(ctx, { type: "medalsUnlocked", workspace, member, medals: paid.map((medal) => ({ ...medal, rewardKey: rewardKeyOf(medal) })), catalogueVersion, at });
   return paid;
 }
 
