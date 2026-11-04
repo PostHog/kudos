@@ -64,7 +64,7 @@ describe("an emoji the giver unlocked in the album counts like the workspace's k
     await post(t, [section(text(saysWhy), mention("U_BOB"), text(" "), mention("U_CAROL"), text(" "), emoji(bobsHypeEmoji))], { user: "U_ALICE", ts: messageTs });
     await settle(t);
 
-    expect({ bob: await kudosReceived(t, "U_BOB"), carol: await kudosReceived(t, "U_CAROL") }).toEqual({ bob: 1, carol: 1 });
+    expect({ bob: await kudosReceived(t, "U_BOB"), carol: await kudosReceived(t, "U_CAROL") }, "kudos received").toEqual({ bob: 1, carol: 1 });
   });
 
   test("a kudos message with an emoji only someone else unlocked gives nothing", async () => {
@@ -323,19 +323,8 @@ describe("in a kudos message, an earned emoji counts only when the giver picked 
     await post(t, [section(text(saysWhy), mention("U_BOB"), text(" "), mention("U_CAROL"), text(" "), emoji(bobsHypeEmoji))], { user: "U_ALICE", ts: messageTs });
     await settle(t);
 
-    expect({ bob: await kudosReceived(t, "U_BOB"), carol: await kudosReceived(t, "U_CAROL"), spent: await kudosSpent(t) }).toEqual({ bob: 1, carol: 0, spent: 1 });
-    expect(repliesTo("U_ALICE")[0]?.slice(0, 2)).toEqual(["<@U_BOB> got 1 kudos from you. You have 2 kudos left today.", "I skipped <@U_CAROL>: a hype emoji gives kudos only to its own person."]);
-  });
-
-  test("beside the workspace's kudos emoji, a repeated hype emoji gives its person the repeats and the other mentioned teammate one", async () => {
-    const t = await workspaceWithEmojiNames();
-    await heldHypeEmojiOf(t, "U_ALICE", "U_BOB");
-
-    await post(t, [section(text(saysWhy), mention("U_BOB"), text(" "), mention("U_CAROL"), text(" "), emoji("taco"), emoji(bobsHypeEmoji), emoji(bobsHypeEmoji))], { user: "U_ALICE", ts: messageTs });
-    await settle(t);
-
-    expect({ bob: await kudosReceived(t, "U_BOB"), carol: await kudosReceived(t, "U_CAROL"), spent: await kudosSpent(t) }).toEqual({ bob: 2, carol: 1, spent: 3 });
-    expect(repliesTo("U_ALICE")[0]?.[0]).toBe("<@U_BOB> got 2 kudos and <@U_CAROL> got 1 kudos from you. That was your last kudos for today, and you'll have 3 more at midnight.");
+    expect({ bob: await kudosReceived(t, "U_BOB"), carol: await kudosReceived(t, "U_CAROL"), spent: await kudosSpent(t) }, "kudos received and spent").toEqual({ bob: 1, carol: 0, spent: 1 });
+    expect(repliesTo("U_ALICE")[0]?.slice(0, 2), "the giver's reply").toEqual(["<@U_BOB> got 1 kudos from you. You have 2 kudos left today.", "I skipped <@U_CAROL>: a hype emoji gives kudos only to its own person."]);
   });
 
   test("a message whose recipients would get different kudos than the giver has left gives nothing and says what it needs", async () => {
@@ -345,9 +334,9 @@ describe("in a kudos message, an earned emoji counts only when the giver picked 
     await post(t, [section(text(saysWhy), mention("U_BOB"), text(" "), mention("U_CAROL"), text(" "), emoji("taco"), emoji(bobsHypeEmoji), emoji(bobsHypeEmoji), emoji(bobsHypeEmoji))], { user: "U_ALICE", ts: messageTs });
     await settle(t);
 
-    expect({ bob: await kudosReceived(t, "U_BOB"), carol: await kudosReceived(t, "U_CAROL") }).toEqual({ bob: 0, carol: 0 });
-    expect(repliesTo("U_ALICE")).toEqual([["This needs 4 kudos, but you have 3 left today. Edit the message to give fewer and I'll try again, or edit it after midnight when you have 3 again."]]);
-    expect(await attemptsFailed(t)).toEqual([{ recipients: 2, perRecipient: 3, cost: 4 }]);
+    expect({ bob: await kudosReceived(t, "U_BOB"), carol: await kudosReceived(t, "U_CAROL") }, "kudos received").toEqual({ bob: 0, carol: 0 });
+    expect(repliesTo("U_ALICE"), "the giver's reply").toEqual([["This needs 4 kudos, but you have 3 left today. Edit the message to give fewer and I'll try again, or edit it after midnight when you have 3 again."]]);
+    expect(await attemptsFailed(t), "the attempt failed event").toEqual([{ recipients: 2, perRecipient: 3, cost: 4 }]);
   });
 
   test("the hype emoji of a teammate the giver doesn't mention gives no kudos", async () => {
@@ -389,6 +378,18 @@ describe("a message gives each recipient as many kudos as its most repeated kudo
 
     expect(await kudosReceived(t, "U_BOB")).toBe(kudos);
   });
+
+  test("beside the workspace's kudos emoji, a repeated hype emoji gives its person the repeats and the other mentioned teammate one", async () => {
+    flagsOnForEveryone(slack.fetch, "hugs", "kudos-emoji-picks");
+    const t = await workspaceWithEmojiNames();
+    await heldHypeEmojiOf(t, "U_ALICE", "U_BOB");
+
+    await post(t, [section(text(saysWhy), mention("U_BOB"), text(" "), mention("U_CAROL"), text(" "), emoji("taco"), emoji(bobsHypeEmoji), emoji(bobsHypeEmoji))], { user: "U_ALICE", ts: messageTs });
+    await settle(t);
+
+    expect({ bob: await kudosReceived(t, "U_BOB"), carol: await kudosReceived(t, "U_CAROL"), spent: await kudosSpent(t) }, "kudos received and spent").toEqual({ bob: 2, carol: 1, spent: 3 });
+    expect(repliesTo("U_ALICE")[0]?.[0], "the giver's reply").toBe("<@U_BOB> got 2 kudos and <@U_CAROL> got 1 kudos from you. That was your last kudos for today, and you'll have 3 more at midnight.");
+  });
 });
 
 describe("the app reacts with the kudos emoji closest after the recipient's mention", () => {
@@ -416,7 +417,7 @@ describe("the app reacts with the kudos emoji closest after the recipient's ment
     await post(t, [section(text(saysWhy), mention("U_CAROL"), text(" "), emoji(bobsHypeEmoji), text(" "), mention("U_BOB"), text(" "), emoji("taco"))], { user: "U_ALICE", ts: messageTs });
     await settle(t);
 
-    expect(slack.reactionsOn("C1", messageTs)).toEqual(["taco"]);
+    expect(slack.reactionsOn("C1", messageTs), "the app's reaction").toEqual(["taco"]);
   });
 });
 
