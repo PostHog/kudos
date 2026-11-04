@@ -8,9 +8,9 @@ export const clearLegacyRecapFields = internalMutation({
   handler: async (ctx, { cursor, numItems }) => {
     const { page, isDone, continueCursor } = await ctx.db.query("hugWeeks").paginate({ cursor, numItems });
     let cleared = 0;
-    for (const { _id, _creationTime, recap, tries, dueAt, ...kept } of page) {
+    for (const { _id, recap, tries, dueAt } of page) {
       if (recap === undefined && tries === undefined && dueAt === undefined) continue;
-      await ctx.db.replace(_id, kept);
+      await ctx.db.patch(_id, { recap: undefined, tries: undefined, dueAt: undefined });
       cleared += 1;
     }
     return { cleared, next: isDone ? null : continueCursor };

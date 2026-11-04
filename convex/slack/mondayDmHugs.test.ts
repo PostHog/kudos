@@ -437,12 +437,8 @@ async function hugWeeksSeeded(t: Backend, members: number) {
 
 async function leftByTheStandaloneRecap(t: Backend) {
   await t.run(async (ctx) => {
-    for (const week of await ctx.db.query("hugWeeks").collect()) await ctx.db.replace(week._id, { ...withoutSystemFields(week), recap: "scheduled", dueAt: mondayNineInUtc, tries: 0 });
+    for (const week of await ctx.db.query("hugWeeks").collect()) await ctx.db.patch(week._id, { recap: "scheduled", dueAt: mondayNineInUtc, tries: 0 });
   });
-}
-
-function withoutSystemFields<Row extends { _id: unknown; _creationTime: number }>({ _id, _creationTime, ...fields }: Row) {
-  return fields;
 }
 
 async function hugWeekRows(t: Backend) {
