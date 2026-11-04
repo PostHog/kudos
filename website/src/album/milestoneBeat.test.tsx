@@ -416,6 +416,21 @@ describe("LP19a: a milestone tier unlocks with its own beat on Milestones", { ti
     expect(xpWords(), "and the bar follows the album again").toBe("15 XP to level 7");
   });
 
+  it("keeps the medal's XP in the bar through the next turn when that turn starts before the album answers it", async () => {
+    visitWhere("later", paying(familiarFaces, 250));
+    await clickOnFakeTime(await theFirstItem());
+
+    await at(5.6);
+    await act(async () => fireEvent.pointerDown(document.body));
+    await at(8);
+    expect(xpWords()).toBe("25 XP to level 7");
+    vi.useRealTimers();
+    await clickOnFakeTime(await theFirstItem());
+
+    await at(1);
+    expect(xpWords(), "the next turn lifts off from the paid standing").toBe("25 XP to level 7");
+  });
+
   it("keeps the medal's title card on a short landscape screen", async () => {
     vi.spyOn(window, "innerHeight", "get").mockReturnValue(320);
     vi.spyOn(window, "innerWidth", "get").mockReturnValue(568);

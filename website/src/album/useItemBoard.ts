@@ -20,6 +20,8 @@ type Shown = "board" | "later" | "landed";
 
 export type TurnedItem = { item: string; face: TurnedFaceShown };
 
+type Hold = { xp: number; paying: boolean };
+
 export type ItemTurns = {
   board: ItemBoard | null;
   turnedThisVisit: TurnedItem[];
@@ -79,7 +81,8 @@ export function useItemBoard(answered: ItemBoard | null, turnItem: (item: string
   const [trouble, setTrouble] = useState<string | null>(null);
   const [landing, setLanding] = useState<Landing | null>(null);
   const [landingDue, setLandingDue] = useState(false);
-  const [heldLevel, setHeldLevel] = useState<AlbumLevel | null>(null);
+  const [hold, setHold] = useState<Hold | null>(null);
+  const heldLevel = useMemo(() => (hold !== null && (hold.paying || level.xp < hold.xp) ? levelAt(hold.xp) : null), [hold, level.xp]);
   const [touched, setTouched] = useState(false);
   const touch = useCallback(() => setTouched(true), []);
   const { flight, boxes, fly } = useTurnFlight();
@@ -91,14 +94,6 @@ export function useItemBoard(answered: ItemBoard | null, turnItem: (item: string
   const turnEmojis = useRef(emojis);
   turnEmojis.current = emojis;
   useForgottenOnLeavingThePage(page, landing !== null && flight === null && !turning, setLanding);
-  const liveXp = useRef(level.xp);
-  liveXp.current = level.xp;
-  const paidUpTo = useRef<number | null>(null);
-  useEffect(() => {
-    if (heldLevel === null || paidUpTo.current === null || level.xp < paidUpTo.current) return;
-    paidUpTo.current = null;
-    setHeldLevel(null);
-  }, [heldLevel, level.xp]);
   const land = useCallback(
     (item: string, { face, applied, unlocked, page, teaches }: Turned, flown: boolean) => {
       setTurnedOver((turned) => new Map(turned).set(item, face));
@@ -121,8 +116,7 @@ export function useItemBoard(answered: ItemBoard | null, turnItem: (item: string
   const teamShown = useCallback((shown: (last: Landing) => number) => setLanding((last) => (last === null ? null : { ...last, phase: "done", teamsShown: shown(last) })), []);
   const flyIn = useCallback(
     async (item: string, from: HTMLElement, answer: Promise<Turned | null>) => {
-      paidUpTo.current = null;
-      setHeldLevel(level);
+      setHold((held) => ({ xp: Math.max(level.xp, held?.xp ?? 0), paying: true }));
       let owed = 0;
       let paid = 0;
       const emojiOf = (source: EmojiSource) => turnEmojis.current.answered.find((emoji) => emoji.earned && isTheEmojiOf(source, emoji));
@@ -144,9 +138,8 @@ export function useItemBoard(answered: ItemBoard | null, turnItem: (item: string
         medalSettled,
         paid(xp: number) {
           paid += xp;
-          const standing = level.xp + paid;
-          if (paid >= owed) paidUpTo.current = standing;
-          setHeldLevel(paid >= owed && liveXp.current >= standing ? null : levelAt(standing));
+          const paying = paid < owed;
+          setHold((held) => ({ xp: (held?.xp ?? level.xp) + xp, paying }));
         },
         nothingWaits: () => remaining.current === 0,
         emojiOf,
@@ -154,10 +147,7 @@ export function useItemBoard(answered: ItemBoard | null, turnItem: (item: string
       };
       const turned = await fly(item, from.getBoundingClientRect(), answer, arrival);
       turnEmojis.current.back(away);
-      if (turned === null || paid < owed) {
-        paidUpTo.current = null;
-        setHeldLevel(null);
-      }
+      setHold((held) => held && { ...held, paying: false });
       if (turned !== null) teamShown(({ unlocked }) => unlocked.teamStickers.length);
       if (turned !== null) everyMedalShown();
       if (turned !== null && remaining.current === 0) setShown("landed");
