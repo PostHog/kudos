@@ -3,7 +3,6 @@ import { reportHugsRecapSent } from "../analytics/isolatedUsage";
 import { wallClockAt, type DayKey } from "../engine/allowance";
 import { threadRootOf } from "../engine/engine";
 import { emojiLineOf, type RecapEmojiLine } from "../feedback/albumRecap";
-import { settingsFooterFor, type SettingsFooter } from "../feedback/settingsFooter";
 import { teaserOf } from "../feedback/teaser";
 import { placeOf } from "../messageSettings/messageSettings";
 import { hugXpOf, type HugWeekXp } from "../progression/hugXp";

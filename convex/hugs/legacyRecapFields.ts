@@ -1,7 +1,6 @@
 import { v } from "convex/values";
 import { internalMutation } from "../_generated/server";
 
-// One page of hug weeks a call, run by hand until `next` is null; the schema drops these fields once none is left.
 export const clearLegacyRecapFields = internalMutation({
   args: { cursor: v.union(v.string(), v.null()), numItems: v.number() },
   returns: v.object({ cleared: v.number(), next: v.union(v.string(), v.null()) }),
