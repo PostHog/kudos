@@ -24,7 +24,6 @@ const form = { contentType: "application/x-www-form-urlencoded" };
 const footer = "<slack://app?team=T1&id=A_KUDOS&tab=home|Change what I send you> in App Home's Settings tab.";
 const nudge = "Hugs are a quick thanks. A kudos, a message that mentions a teammate with :taco:, earns much more XP.";
 const recapRow = "section: *Weekly hugs recap* — Last week's hugs, the :taco: you and your teammates reacted, with their XP, on Monday morning. [select: As a DM]";
-const sendHugsRecap = "slack/hugsRecap:sendHugsRecap";
 const sendMondayDm = "slack/mondayDm:sendMondayDm";
 
 const everyone = ["U_ALICE", "U_BOB", "U_CAROL", "U_DANA", "U_ERIN"];
@@ -284,27 +283,30 @@ describe("SR12 SR14: one recap per member and week, in the Monday DM", () => {
   });
 });
 
-describe("SR12: a week queued for the standalone recap before the Monday DM took it over goes out once", () => {
-  test("the recap's queued job sends nothing, and the week goes out in the Monday DM", async () => {
+describe("SR12: a hug week carries no field of the retired standalone recap", () => {
+  test("a week a hug starts has none of them, and goes out once in the Monday DM", async () => {
     const t = await workspace();
     await hug(t, "U_BOB", "U_ALICE", messageOf(1));
-    await queuedForTheStandaloneRecap(t);
 
+    expect(await legacyFieldsOnHugWeeks(t)).toEqual([[], []]);
     await recapsSentOnMonday(t);
-
     expect(recaps().map(({ channel }) => channel)).toEqual(["U_ALICE", "U_BOB"]);
-    expect(mondayDmsSent()).toHaveLength(2);
-    expect(await pendingJobs(t, sendHugsRecap)).toBe(0);
   });
 
-  test("a week whose standalone recap began a try is not sent again", async () => {
+  test("clearing pages through every week, drops only the retired fields, and the cleared weeks go out once in the Monday DM", async () => {
     const t = await workspace();
     await hug(t, "U_BOB", "U_ALICE", messageOf(1));
-    await queuedForTheStandaloneRecap(t, { begunFor: "U_ALICE" });
+    await hug(t, "U_CAROL", "U_ALICE", messageOf(1));
+    await leftByTheStandaloneRecap(t);
+    const before = await hugWeekRows(t);
 
+    expect(await clearedPageByPage(t, 2)).toEqual([2, 1]);
+
+    expect(await legacyFieldsOnHugWeeks(t)).toEqual([[], [], []]);
+    expect(await hugWeekRows(t)).toEqual(before.map(({ recap, tries, dueAt, ...kept }) => kept));
+    expect(await clearedPageByPage(t, 2)).toEqual([0, 0]);
     await recapsSentOnMonday(t);
-
-    expect(recaps().map(({ channel }) => channel)).toEqual(["U_BOB"]);
+    expect(recaps().map(({ channel }) => channel)).toEqual(["U_ALICE", "U_BOB", "U_CAROL"]);
   });
 });
 
@@ -428,20 +430,38 @@ async function hugWeeksSeeded(t: Backend, members: number) {
   await t.run(async (ctx) => {
     for (let index = 0; index < members; index += 1) {
       const member = await ctx.db.insert("members", { workspace: "T1", user: `U_SEEDED${index}`, kind: "member" });
-      await ctx.db.insert("hugWeeks", { workspace: "T1", member, week: "2026-10-12", given: 1, givenXp: 1, received: 0, receivedXp: 0, recap: "waiting", tries: 0 });
+      await ctx.db.insert("hugWeeks", { workspace: "T1", member, week: "2026-10-12", given: 1, givenXp: 1, received: 0, receivedXp: 0 });
     }
   });
 }
 
-async function queuedForTheStandaloneRecap(t: Backend, { begunFor }: { begunFor?: string } = {}) {
-  const begun = begunFor === undefined ? null : await memberOf(t, begunFor);
+async function leftByTheStandaloneRecap(t: Backend) {
   await t.run(async (ctx) => {
-    for (const week of await ctx.db.query("hugWeeks").collect()) {
-      const tries = week.member === begun ? 1 : 0;
-      await ctx.db.patch(week._id, { recap: "scheduled", dueAt: mondayNineInUtc, tries });
-      await ctx.scheduler.runAt(mondayNineInUtc, makeFunctionReference<"action">(sendHugsRecap), { week: week._id, attempt: tries + 1 });
-    }
+    for (const week of await ctx.db.query("hugWeeks").collect()) await ctx.db.replace(week._id, { ...withoutSystemFields(week), recap: "scheduled", dueAt: mondayNineInUtc, tries: 0 });
   });
+}
+
+function withoutSystemFields<Row extends { _id: unknown; _creationTime: number }>({ _id, _creationTime, ...fields }: Row) {
+  return fields;
+}
+
+async function hugWeekRows(t: Backend) {
+  return t.run(async (ctx) => (await ctx.db.query("hugWeeks").collect()).map((week) => ({ ...week }) as Record<string, unknown>));
+}
+
+async function legacyFieldsOnHugWeeks(t: Backend) {
+  return (await hugWeekRows(t)).map((week) => ["recap", "tries", "dueAt"].filter((field) => field in week));
+}
+
+async function clearedPageByPage(t: Backend, numItems: number) {
+  const cleared: number[] = [];
+  let cursor: string | null = null;
+  do {
+    const page: { cleared: number; next: string | null } = await t.mutation(makeFunctionReference<"mutation">("hugs/legacyRecapFields:clearLegacyRecapFields"), { cursor, numItems });
+    cleared.push(page.cleared);
+    cursor = page.next;
+  } while (cursor !== null);
+  return cleared;
 }
 
 function mondayDmSweep() {
