@@ -8,6 +8,7 @@ Kudos parser: turns a chat message's countable content into a kudos message, wit
   via: a message gives each recipient as many kudos as its most repeated kudos emoji
   because: one message is one thank-you, and since every earned album emoji counts as a kudos emoji (AL34 as amended by #746) a giver who adds their team emoji beside the workspace's would pay a teammate twice and spend twice the allowance for the same thanks; a repeat of one emoji is how a giver says more
   refuted: mostRepeatsIn counted the distinct kudos emoji names instead of the most repeats of one name -> 2 of 3 tests failed on their assertions: the workspace's kudos emoji beside the team emoji gave 2 kudos, and the team emoji three times beside it gave 2 (2026-10-21)
+  refuted: kudosFor counted every kudos emoji in the message for each recipient, ignoring whom a claim counts for -> 1 of 4 tests failed on its assertion: two mentions beside the workspace's kudos emoji and one teammate's hype emoji twice asked for 4 kudos and gave nothing where 2 and 1 belong (2026-11-04)
   kinds: state
   checklist: revalidated-permission dismissed: no permission is involved; the count is read in the mutation that decides the kudos
   checklist: separation-of-duties dismissed: no approval policy; a giver's own message decides what it gives
@@ -21,6 +22,7 @@ Kudos parser: turns a chat message's countable content into a kudos message, wit
   via: the app reacts with the kudos emoji closest after the recipient's mention
   because: a giver writes the emoji they mean for a teammate beside that teammate's name, and since every earned album emoji counts as a kudos emoji (#746) the one they put after the mention is the one they chose to thank with; reacting with an emoji written before the mention, or one meant for nobody, shows a different thanks than the one they gave
   refuted: kudosEmojiClosestAfter counted a kudos emoji just before the recipient's mention as after it -> 3 of 4 tests failed on their assertions: the app reacted with the emoji before the mention, or the one before the closest, instead of the one after it (2026-10-21)
+  refuted: kudosEmojiClosestAfter chose among every kudos emoji in the message, not only those that count for the first recipient -> 1 of 5 tests failed on its assertion: the app reacted with another teammate's hype emoji after the first recipient's mention instead of the workspace's kudos emoji (2026-11-04)
   kinds: output
   checklist: destination-confinement dismissed: the reaction goes to the message itself through the Slack adapter's one configured base URL; the choice of emoji changes no destination
   checklist: redaction dismissed: the reaction names an emoji the giver wrote in the message, never its words
