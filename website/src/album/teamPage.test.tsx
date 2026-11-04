@@ -91,14 +91,24 @@ describe("AL45: the team page is the team's class photo", () => {
   });
 
   it("the member stands first on their own team's photo, in colour, marked You and linked to their profile and counted among its people", async () => {
-    visit("/book#teams/lanterns", { album: withFaces(midway, {}) });
+    const samFace = { kind: "slack", image: "https://avatars.slack-edge.com/sam.png", initials: "SE" } as const;
+    visit("/book#teams/lanterns", { album: { ...midway, me: { ...midway.me, face: samFace } } });
 
     const shown = await photo();
     const you = shown.getByRole("link", { name: "Sam Example You" });
     expect(you).toHaveAttribute("href", "/book#me");
+    expect(drawnPicturesIn(you)).toEqual([samFace.image]);
     expect(pictureShownOf(you)).toBe("colour");
     expect(shown.getByText("You")).not.toHaveClass("sr-only");
     expect(screen.getByText("7 people")).toBeInTheDocument();
+  });
+
+  it("the member's own team page is ready to unlock once every teammate is collected, the member never among those to collect", async () => {
+    const kettleWorksIsMine: Album = { ...midway, me: { ...midway.me, team: "kettle-works" }, teams: midway.teams.map((team) => ({ ...team, mine: team.team === "kettle-works" })) };
+    visit("/book#teams/kettle-works", { album: kettleWorksIsMine });
+
+    expect((await photo()).getByRole("link", { name: "Sam Example You" })).toBeInTheDocument();
+    expect(await unlockOnThePhoto()).not.toHaveAttribute("aria-disabled");
   });
 
   it("the member is not on the photo of a team that isn't theirs", async () => {

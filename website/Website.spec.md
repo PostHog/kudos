@@ -486,7 +486,7 @@ The browser package, the signed-in surface where a member sees their kudos besid
   checklist: circuit-breaker-policy dismissed: no breaker is declared; nothing is called
   checklist: declared-target-coverage dismissed: there is no fan-out; each page draws the pets getAlbum lists for the people it shows
 - the member stands on their own team's class photo: While the album shell shows the member's own team page, its class photo shows the member first, from getAlbum's `me`, in colour with their name and a visible `You`, linked to their profile, with their pet beside them while getAlbum lists one, and the lede counts them among the team's people; they are never a sticker to collect, so the page's held of total, its seal and its ready state stay as getAlbum answers them; another team's page never shows the member.
-  over: the member's own team page, the same page with the member's pet, and a team page that isn't theirs
+  over: the member's own team page with their Slack picture, the same page with the member's pet, their own team page ready to unlock, and a team page that isn't theirs
   via: the member stands first on their own team's photo, in colour, marked You and linked to their profile and counted among its people
   refuted: onThePhotoOf left the member off their own team's photo -> 1 of 1 tests red: no `Sam Example You` link on the Lanterns photo (2026-11-04)
   because: Stickers' team pages leave the owner out of the people to collect, as no one collects their own sticker, so a member reading their own team's page found their team without them and took the daily posthog.com copy for stale (2026-11-04)
