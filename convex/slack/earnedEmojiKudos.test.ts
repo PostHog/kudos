@@ -314,6 +314,19 @@ describe("in a kudos message, an earned emoji counts only when the giver picked 
 
     expect(await kudosReceived(t, "U_CAROL")).toBe(0);
   });
+
+  test("the hype emoji of a teammate the giver doesn't mention gives no kudos, even when it was picked before picking it ended", async () => {
+    const t = await workspaceWithEmojiNames();
+    await heldHypeEmojiOf(t, "U_ALICE", "U_BOB");
+    const member = await memberOf(t, "U_ALICE");
+    const bob = await memberOf(t, "U_BOB");
+    await t.run((ctx) => ctx.db.insert("kudosEmojiPicks", { member, emoji: `hype:${bob}` }));
+
+    await post(t, [section(text(saysWhy), mention("U_CAROL"), text(" "), emoji(bobsHypeEmoji))], { user: "U_ALICE", ts: carolsMessageTs });
+    await settle(t);
+
+    expect(await kudosReceived(t, "U_CAROL")).toBe(0);
+  });
 });
 
 describe("a message gives each recipient as many kudos as its most repeated kudos emoji", () => {
