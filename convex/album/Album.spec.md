@@ -411,6 +411,7 @@ Album: the collection-first core loop of the album spec (AL1–AL73, `spec/album
   because: the product owner reported (2026-10-28) that the more emojis a member unlocks, the more kudos they give by accident, such as :wave: beside a teammate's name when saying hi; a kudos stays a deliberate thanks when only the emojis a giver chose count, First thank-you is the album's own kudos emoji that everyone earns with their first thanks, and a teammate's hype emoji beside their name is meant for them; the product owner asked (2026-11-04) that the picker leave out the hype emojis, which crowd it, and that a hype emoji count only for the person it belongs to, so a pick can't make it count beside someone else
   refuted: earnedEmojiHook counted every held earned emoji, whether picked or not -> 3 of 6 tests failed on their assertions: an unpicked team emoji, a team emoji picked and then unpicked, and the hype emoji of a teammate the message doesn't mention each gave kudos (2026-10-28)
   refuted: earnedEmojiHook counted only First thank-you and the giver's picks -> 1 of 6 tests failed on its assertion: the hype emoji of the teammate the message mentions gave no kudos (2026-10-28)
+  refuted: earnedEmojiHook counted a hype emoji the giver picked whether or not the message mentions its person -> 1 of 12 tests failed on its assertion: the hype emoji of a teammate the message doesn't mention, picked before picking one ended, gave kudos (2026-11-04)
   crossing: browser -> domain
   entrances: mutation pickKudosEmoji
   kinds: identity, state
