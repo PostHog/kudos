@@ -621,7 +621,8 @@
       "name": "defect",
       "properties": {
         "family bypassed-door": "In this project a bypassed door is a family: each surface reaches its decision through its own chokepoint (the website's preview, groupQuestAppliesTo, a flag's member decision), so no one guard can stand for every door, and each bypassed-door defect closes with the guard of the door it went past, or a decision.",
-        "class summed-claims": "One thanks paid once for each source that claims it: a message, reaction or click that several parse hooks, emoji or entitlements recognise gives, spends or counts once per recogniser instead of once."
+        "class summed-claims": "One thanks paid once for each source that claims it: a message, reaction or click that several parse hooks, emoji or entitlements recognise gives, spends or counts once per recogniser instead of once.",
+        "class missing-flight-target": "an animation jumps or flies to a page element the page does not render at that moment, because the album holds back what the element shows, so the flight lands nowhere or is cut short"
       },
       "definition": "A recorded behavioral deviation with the evidence that made it a defect: a user report about a UI bug, a field observation, or any deviation fuzzier than an invariant can record. Distinct from a structural defect, which is a state the tool derives for an invariant. Not every part of the car is structural steel."
     },

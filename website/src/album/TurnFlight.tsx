@@ -3,11 +3,13 @@ import type { TurnedFaceShown } from "../../../convex/website/album";
 import { metalOf } from "../book/metal";
 import { EmojiPicture } from "./EmojiPicture";
 import { HoggieArt } from "./HoggieArt";
-import { medalWordsOf } from "./milestones";
+import { LadderEmblem } from "../book/LadderEmblem";
+import { emblemOf, medalWordsOf, milestoneNameOf, tierWordOf } from "./milestones";
+import { stepNameOf } from "../../../convex/album/milestoneCatalogue";
 import { rarityWordOf } from "./opening";
 import { Confetti, Sparkles } from "./PackCards";
 import { PersonPicture } from "./PersonPicture";
-import type { Chip, EmojiUp, Flight, FlightBoxes, MedalPop } from "./useTurnFlight";
+import type { Chip, EmojiUp, Flight, FlightBoxes, MedalShow, MedalXpChip } from "./useTurnFlight";
 
 export function TurnFlight({ flight, boxes }: { flight: Flight; boxes: FlightBoxes }) {
   const { face } = flight;
@@ -20,7 +22,8 @@ export function TurnFlight({ flight, boxes }: { flight: Flight; boxes: FlightBox
         {flight.chip !== null && <XpChip chip={flight.chip} />}
         {flight.rings !== null && face !== null && <Rings rect={flight.rings} face={face} />}
         {flight.flourish !== null && <GoldFlourish rect={flight.flourish} />}
-        {flight.medal !== null && <MedalFlourish medal={flight.medal} />}
+        {flight.medal !== null && <MedalStage medal={flight.medal} picture={boxes.medal} />}
+        {flight.medalXp !== null && <MedalXp chip={flight.medalXp} />}
         {flight.emoji !== null && <EmojiSpring up={flight.emoji} picture={boxes.emoji} />}
         {flight.stage !== "back" && <p className="ib-skip">Click to skip</p>}
       </div>
@@ -104,21 +107,45 @@ function GoldFlourish({ rect }: { rect: DOMRect }) {
   );
 }
 
-function MedalFlourish({ medal: { tier, art, card } }: { medal: MedalPop }) {
+const sparklesByMetal = { bronze: 14, silver: 20, gold: 28, diamond: 36 } as const;
+
+function MedalStage({ medal: { tier, xp, phase, centre, size, art }, picture }: { medal: MedalShow; picture: FlightBoxes["medal"] }) {
   const colour = metalOf(tier.tier);
-  const centre = { left: art.left + art.width / 2, top: art.top + art.height / 2 };
+  const stamped = phase === "stamped";
+  const at = stamped ? { left: art.left + art.width / 2, top: art.top + art.height / 2, width: art.width, height: art.width } : { left: centre.x, top: centre.y, width: size, height: size };
   return (
-    <>
-      <span className="ib-burst ib-medal-burst" data-rare="" style={{ ...centre, width: art.width, height: art.width, "--burst": colour, "--rarity-color": colour } as CSSProperties}>
+    <span className="ib-medal-stage" data-phase={phase} data-metal={tier.tier} style={{ "--burst": colour } as CSSProperties}>
+      <span className="ib-medal-scrim" />
+      <span key={stamped ? "stamped" : "in"} className="ib-burst ib-medal-burst" data-rare="" data-metal={tier.tier} style={{ ...at, "--burst": colour, "--rarity-color": colour } as CSSProperties}>
+        <span className="ib-medal-shine" />
         <span className="ib-rays" />
         <span className="ib-flash" />
-        <Sparkles count={16} seed={art.width + art.top} />
-        {tier.tier === "diamond" && <Confetti size="gold" seed={art.left + art.top} />}
+        <span className="ib-ring" />
+        <span className="ib-ring" data-late="" />
+        <Sparkles count={sparklesByMetal[tier.tier]} seed={at.width + at.top} />
+        {(tier.tier === "gold" || tier.tier === "diamond") && <Confetti size={tier.tier === "diamond" ? "gold" : "modest"} seed={at.left + at.top} />}
       </span>
-      <span className="ib-caption ib-medal-caption" style={{ left: centre.left, top: card.bottom + 14, "--burst": colour } as CSSProperties}>
-        {medalWordsOf(tier)}
+      {!stamped && (
+        <span ref={picture} className="ib-medal-big" style={{ left: centre.x, top: centre.y, width: size, height: size }}>
+          <LadderEmblem ladder={emblemOf(tier.milestone)} best={tier.tier} size={size} />
+        </span>
+      )}
+      <span className="ib-medal-title ph-no-capture" style={{ left: centre.x, top: centre.y + size / 2 + 18 }}>
+        <span className="ib-medal-eyebrow">Medal unlocked</span>
+        <strong className="ib-medal-name">{stepNameOf(tier.milestone, tier.tier)}</strong>
+        <span className="ib-medal-metal">{`${tierWordOf(tier.tier)} · ${milestoneNameOf(tier.milestone)}`}</span>
+        {xp > 0 && <span className="ib-medal-reward">{`+${xp} XP`}</span>}
       </span>
-    </>
+    </span>
+  );
+}
+
+function MedalXp({ chip: { xp, tier, from, to } }: { chip: MedalXpChip }) {
+  return (
+    <span className="ib-medal-xp" data-metal={tier.tier} style={{ left: from.x, top: from.y, "--burst": metalOf(tier.tier), "--dx": `${to.x - from.x}px`, "--dy": `${to.y - from.y}px` } as CSSProperties}>
+      <Sparkles count={sparklesByMetal[tier.tier]} seed={from.x + xp} />
+      <span className="ib-medal-xp-count">{`+${xp} XP`}</span>
+    </span>
   );
 }
 
@@ -139,9 +166,10 @@ function EmojiSpring({ up: { emoji, at, flying }, picture }: { up: EmojiUp; pict
   );
 }
 
-function saidOf({ caption, face, medal, emoji }: Flight) {
+function saidOf({ caption, face, medal, medalXp, emoji }: Flight) {
+  if (medalXp !== null) return `+${medalXp.xp} XP for ${medalWordsOf(medalXp.tier)}`;
   if (emoji !== null) return `:${emoji.emoji.name}: emoji unlocked`;
-  if (medal !== null) return `${medalWordsOf(medal.tier)} medal unlocked`;
+  if (medal !== null) return medal.xp > 0 ? `${medalWordsOf(medal.tier)} medal unlocked, +${medal.xp} XP` : `${medalWordsOf(medal.tier)} medal unlocked`;
   return caption && face !== null ? `${nameOf(face)}: ${whatOf(face)}` : "";
 }
 

@@ -12,7 +12,7 @@ import { rarityValidator } from "../album/hoggies/catalogue";
 import { itemSourceValidator } from "../album/items/records";
 import { surfaceValidator } from "../commands/surface";
 import type { MemberId } from "../workspace/directory";
-import { grantOutcomeValidator } from "../album/records";
+import { grantOutcomeValidator, milestoneIdValidator, milestoneTierValidator } from "../album/records";
 
 function domainEvent<Fields extends PropertyValidators>(fields: Fields) {
   return v.object({ ...fields, fact: v.optional(v.string()) });
@@ -309,6 +309,20 @@ export const hypeReactedEventValidator = domainEvent({
 
 export type HypeReactedEvent = Infer<typeof hypeReactedEventValidator>;
 
+export const medalUnlockedEventValidator = domainEvent({
+  type: v.literal("medalUnlocked"),
+  workspace: v.string(),
+  member: v.id("members"),
+  milestone: milestoneIdValidator,
+  tier: milestoneTierValidator,
+  xp: v.number(),
+  rewardKey: v.string(),
+  catalogueVersion: v.string(),
+  at: v.number(),
+});
+
+export type MedalUnlockedEvent = Infer<typeof medalUnlockedEventValidator>;
+
 export type DomainEvent =
   | KudosGivenEvent
   | AttemptFailedEvent
@@ -338,6 +352,7 @@ export type DomainEvent =
   | ThoughtfulPacksGrantedEvent
   | StickerPutInEvent
   | ItemTurnedEvent
+  | MedalUnlockedEvent
   | CompanyTeamsReplacedEvent
   | CompanyMatchesKeptEvent;
 
