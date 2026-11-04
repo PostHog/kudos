@@ -21,16 +21,12 @@ export async function countHugGiven(ctx: MutationCtx, hug: CountedHug) {
 
 export type HugWeeksPage = { weeks: HugWeek[]; next: string | null };
 
-export async function weeksOfTheMondayDmSince(ctx: QueryCtx, since: DayKey, page: PaginationOptions): Promise<HugWeeksPage> {
+export async function hugWeeksSince(ctx: QueryCtx, since: DayKey, page: PaginationOptions): Promise<HugWeeksPage> {
   const { page: weeks, isDone, continueCursor } = await ctx.db
     .query("hugWeeks")
     .withIndex("by_week", (q) => q.gte("week", since))
     .paginate(page);
-  return { weeks: weeks.filter(belongsToTheMondayDm), next: isDone ? null : continueCursor };
-}
-
-export function belongsToTheMondayDm({ recap, tries }: HugWeek): boolean {
-  return tries === 0 && (recap === "waiting" || recap === "scheduled" || recap === "monday-dm");
+  return { weeks, next: isDone ? null : continueCursor };
 }
 
 export async function weekOfPersonAt(ctx: QueryCtx, person: MemberId, at: number): Promise<DayKey> {
@@ -55,7 +51,7 @@ async function weekRowOf(ctx: MutationCtx, workspace: string, member: MemberId, 
     .withIndex("by_member_week", (q) => q.eq("member", member).eq("week", week))
     .unique();
   if (existing !== null) return existing;
-  const id = await ctx.db.insert("hugWeeks", { workspace, member, week, given: 0, givenXp: 0, received: 0, receivedXp: 0, recap: "waiting", tries: 0 });
+  const id = await ctx.db.insert("hugWeeks", { workspace, member, week, given: 0, givenXp: 0, received: 0, receivedXp: 0 });
   return (await ctx.db.get(id))!;
 }
 

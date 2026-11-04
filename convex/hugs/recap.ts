@@ -3,7 +3,6 @@ import { reportHugsRecapSent } from "../analytics/isolatedUsage";
 import { wallClockAt, type DayKey } from "../engine/allowance";
 import { threadRootOf } from "../engine/engine";
 import { emojiLineOf, type RecapEmojiLine } from "../feedback/albumRecap";
-import { settingsFooterFor, type SettingsFooter } from "../feedback/settingsFooter";
 import { teaserOf } from "../feedback/teaser";
 import { placeOf } from "../messageSettings/messageSettings";
 import { hugXpOf, type HugWeekXp } from "../progression/hugXp";
@@ -13,11 +12,9 @@ import { chatUserOf, isMember, timeZoneOf, type MemberId } from "../workspace/di
 import { settingsOf } from "../workspace/settings";
 import { workspaceUrlOf } from "../workspace/url";
 import { hugsOnAndExposedFor } from "./flag";
-import { belongsToTheMondayDm, type MostHugged, type HugWeek } from "./weeks";
+import type { MostHugged, HugWeek } from "./weeks";
 
 export type RecapLine = string | { text: string; link: { url: string; label: string } };
-
-export type Recap = { workspace: string; user: string; lines: RecapLine[]; emojiLine: RecapEmojiLine | null; footer: SettingsFooter | null };
 
 export type HugsSection = { lines: RecapLine[]; closing: RecapLine[]; emojiLine: RecapEmojiLine | null };
 
@@ -25,7 +22,7 @@ const dayMs = 24 * 60 * 60 * 1000;
 
 export async function hugsSectionFor(ctx: MutationCtx, member: MemberId, monday: DayKey): Promise<HugsSection | null> {
   const week = await hugWeekOf(ctx, member, mondayBefore(monday));
-  return week !== null && belongsToTheMondayDm(week) && (await recapWantedBy(ctx, member)) ? hugsSectionOf(ctx, week) : null;
+  return week !== null && (await recapWantedBy(ctx, member)) ? hugsSectionOf(ctx, week) : null;
 }
 
 export async function hugsSentInTheMondayDm(ctx: MutationCtx, member: MemberId, monday: DayKey) {

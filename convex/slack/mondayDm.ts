@@ -5,13 +5,15 @@ import { observedAction } from "../analytics/boundary";
 import type { Id } from "../_generated/dataModel";
 import type { MondayDm, MondayQuests } from "../mondayDm/mondayDm";
 import type { MondayDmContent } from "../mondayDm/records";
-import type { HugsSection } from "../hugs/recap";
+import type { RecapEmojiLine } from "../feedback/albumRecap";
+import type { HugsSection, RecapLine } from "../hugs/recap";
+import { settingsFooterText } from "./appHomeLinks";
 import { buttonOf, escaped, mrkdwn, urlButtonOf } from "./blocks";
 import { checklistBlockOf } from "./checklist";
-import { attemptArgs, attemptCall, isRateLimited, retryAfter, sendOnce, tryAtMostThreeTimes, type Attempt } from "./delivery";
-import { emojiLineBlockOf, footerOf, lineTextOf, postRecap } from "./hugsRecap";
+import { attemptArgs, attemptCall, isRateLimited, isRefusedForItsBlocks, retryAfter, sendOnce, slackLink, tryAtMostThreeTimes, type Attempt } from "./delivery";
 
 const triesAtMost = 3;
+const mostPicturesInALine = 9;
 
 export const sendMondayDm = observedAction({
   args: { dm: v.id("mondayDms"), attempt: v.number() },
@@ -45,8 +47,18 @@ export const showMondayDm = observedAction({
 
 function postMondayDm(ctx: ActionCtx, dm: MondayDm): Promise<Attempt> {
   const { workspace, user, hugs, quests, footer } = dm;
-  if (quests === null) return postRecap(ctx, { workspace, user, lines: [...hugs!.lines, ...hugs!.closing], emojiLine: hugs!.emojiLine, footer });
+  if (quests === null) return postHugsAlone(ctx, dm, hugs!);
   return attemptCall(ctx, workspace, "chat.postMessage", { channel: user, ...messageOf(dm, quests) });
+}
+
+async function postHugsAlone(ctx: ActionCtx, { workspace, user, footer }: MondayDm, { lines, closing, emojiLine }: HugsSection): Promise<Attempt> {
+  const footers = footerOf(workspace, footer);
+  const allLines = [...lines, ...closing].map(lineTextOf);
+  const words = { channel: user, text: [...allLines, ...(emojiLine === null ? [] : [emojiLine.text]), ...footers].join("\n") };
+  if (emojiLine === null) return attemptCall(ctx, workspace, "chat.postMessage", words);
+  const blocks = [{ type: "section", text: mrkdwn(allLines.join("\n")) }, emojiLineBlockOf(emojiLine), ...footers.map((text) => ({ type: "context", elements: [mrkdwn(text)] }))];
+  const sent = await attemptCall(ctx, workspace, "chat.postMessage", { ...words, blocks });
+  return isRefusedForItsBlocks(sent) ? attemptCall(ctx, workspace, "chat.postMessage", words) : sent;
 }
 
 function messageOf(dm: Omit<MondayDm, "user">, quests: MondayQuests) {
@@ -86,7 +98,19 @@ function blocksOf({ dm, workspace, hugs, nudge, footer }: Omit<MondayDm, "user">
 }
 
 function footerBlocksOf(workspace: string, footer: MondayDmContent["footer"]) {
-  return footerOf({ workspace, footer }).map((text) => ({ type: "context", elements: [mrkdwn(text)] }));
+  return footerOf(workspace, footer).map((text) => ({ type: "context", elements: [mrkdwn(text)] }));
+}
+
+function footerOf(workspace: string, footer: MondayDmContent["footer"]) {
+  return footer === null ? [] : [settingsFooterText(workspace, footer)];
+}
+
+function emojiLineBlockOf({ text, pictures }: RecapEmojiLine) {
+  return { type: "context", elements: [...pictures.slice(0, mostPicturesInALine).map(({ url, name }) => ({ type: "image", image_url: url, alt_text: name })), mrkdwn(text)] };
+}
+
+function lineTextOf(line: RecapLine) {
+  return typeof line === "string" ? line : `${line.text}${slackLink(line.link)}`;
 }
 
 function hugsBlocksOf({ lines, emojiLine }: HugsSection) {
