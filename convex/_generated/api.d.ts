@@ -179,7 +179,6 @@ import type * as groups_transitions from "../groups/transitions.js";
 import type * as http from "../http.js";
 import type * as hugs_flag from "../hugs/flag.js";
 import type * as hugs_hugs from "../hugs/hugs.js";
-import type * as hugs_legacyRecapFields from "../hugs/legacyRecapFields.js";
 import type * as hugs_people from "../hugs/people.js";
 import type * as hugs_reaction from "../hugs/reaction.js";
 import type * as hugs_recap from "../hugs/recap.js";
@@ -596,7 +595,6 @@ declare const fullApi: ApiFromModules<{
   http: typeof http;
   "hugs/flag": typeof hugs_flag;
   "hugs/hugs": typeof hugs_hugs;
-  "hugs/legacyRecapFields": typeof hugs_legacyRecapFields;
   "hugs/people": typeof hugs_people;
   "hugs/reaction": typeof hugs_reaction;
   "hugs/recap": typeof hugs_recap;

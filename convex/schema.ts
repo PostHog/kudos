@@ -332,9 +332,6 @@ export default defineSchema({
     received: v.number(),
     receivedXp: v.number(),
     mostHugged: v.optional(v.object({ conversation: v.string(), message: v.string(), hugs: v.number(), lastAt: v.number() })),
-    recap: v.optional(v.union(v.literal("waiting"), v.literal("scheduled"), v.literal("sent"), v.literal("skipped"), v.literal("failed"), v.literal("monday-dm"))),
-    dueAt: v.optional(v.number()),
-    tries: v.optional(v.number()),
   })
     .index("by_member_week", ["member", "week"])
     .index("by_week", ["week"]),
