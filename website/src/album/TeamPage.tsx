@@ -69,7 +69,9 @@ function petShownWith(album: Album, shown: OnThePhoto): ShownPet | null {
 }
 
 function PhotoPerson({ shown, pet, locked }: { shown: OnThePhoto; pet: ShownPet | null; locked: LockedPhoto | null }) {
-  if (shown.kind === "person" && locked !== null && !shown.person.held) {
+  const landing = useLanding();
+  const landsHere = shown.kind === "person" && landing?.face.kind === "sticker" && landing.face.person === shown.person.person;
+  if (shown.kind === "person" && locked !== null && !shown.person.held && !landsHere) {
     return (
       <MissingTeammate {...locked} person={shown.person}>
         {pet !== null && <PetHoggie pet={pet.pet} owner={pet.owner} className="al-photo-pet" />}

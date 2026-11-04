@@ -468,6 +468,22 @@ describe("LP18 LP19 LP21: the Page-first turn sequence at 0.8×", { timeout: 30_
     expect(theSpotOfCassVey()).toHaveTextContent("New");
   });
 
+  it("drops a sticker into its spot on a team page still locked behind book-next, instead of landing it without the flight", async () => {
+    const putIn = (album: Album, item: string) => ({ ...withTinOrchardFilled(album, item), teams: album.teams });
+    visit({ album: { ...withItems, bookNext: { chatUrl: "https://app.slack.com/client/T1", rarityCaps: true } }, reply: async () => aStickerTurnOfCassVey({ teamStickers: [], hype: null, milestones: [] }), after: putIn });
+    await clickOnFakeTime(await theFirstItem());
+
+    await at(1.8);
+    expect(window.location.hash).toBe("#teams/tin-orchard");
+    expect(theSpotOfCassVey()).toHaveAttribute("data-landed");
+    expect(theSpotOfCassVey()).toHaveAttribute("data-arriving");
+    await at(3.2);
+    expect(stage()).toBe("land");
+    await at(4.1);
+    expect(theSpotOfCassVey()).not.toHaveAttribute("data-arriving");
+    expect(theSpotOfCassVey()).toHaveTextContent("In your album");
+  });
+
   it.each([
     ["a second click", () => fireEvent.pointerDown(document.body)],
     ["Enter", () => fireEvent.keyDown(window, { key: "Enter" })],
