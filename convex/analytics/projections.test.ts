@@ -49,8 +49,8 @@ describe("O3: kudos given", () => {
       { recipients: 2, kudos_per_recipient: 2, kudos_total: 4, daily_allowance_opening: 5, daily_allowance_left: 1 },
     ],
     [
-      "two recipients, two kudos and one",
-      { awards: [{ award: awardId(bob), giver: alice, recipient: bob, kudos: 2 }, { award: awardId(carol), giver: alice, recipient: carol, kudos: 1 }], allowance: { dailyOpening: 5, dailyLeft: 2 } },
+      "two recipients, one kudos and then two",
+      { awards: [{ award: awardId(bob), giver: alice, recipient: bob, kudos: 1 }, { award: awardId(carol), giver: alice, recipient: carol, kudos: 2 }], allowance: { dailyOpening: 5, dailyLeft: 2 } },
       { recipients: 2, kudos_per_recipient: 2, kudos_total: 3, daily_allowance_opening: 5, daily_allowance_left: 2 },
     ],
     ["skipped mentions", { skippedMentions: 3 }, { skipped_mentions: 3 }],
