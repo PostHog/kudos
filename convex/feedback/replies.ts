@@ -2,7 +2,6 @@ import { v, type Infer } from "convex/values";
 import { internal } from "../_generated/api";
 import type { Doc, Id } from "../_generated/dataModel";
 import { internalMutation, internalQuery, type MutationCtx, type QueryCtx } from "../_generated/server";
-import type { Award } from "../engine/awards";
 import { type ChatUserId, type Mention, type MessageRef } from "../engine/messageEvent";
 import { perkOf } from "../progression/tree";
 import { heldReplyOf } from "./heldReplies";
@@ -52,7 +51,7 @@ export type SkipReason = "self" | "bot" | "not-a-member" | "group-or-broadcast" 
 export type SkippedMention = { mention: Mention; reason: SkipReason };
 
 export type Thanked = { user: ChatUserId; kudos: number };
-export type Given = { recipients: Thanked[]; left: number; skipped: SkippedMention[]; awards: Pick<Award, "kudos">[] };
+export type Given = { recipients: Thanked[]; left: number; skipped: SkippedMention[] };
 export type OverAllowance = { cost: number; recipients: number; perRecipient: number; left: number };
 export type Invalid = { skipped: SkippedMention[] };
 
@@ -97,7 +96,7 @@ function saysNothing({ given, lines }: WrittenReply) {
 }
 
 async function gainsWritten(ctx: MutationCtx, member: MemberId | undefined, ref: MessageRef, { outcome }: Extract<Reply, { kind: "given" }>): Promise<Gains> {
-  const xp = giverXpOf(outcome.awards);
+  const xp = giverXpOf(outcome.recipients);
   if (member === undefined) return { xp };
   await xpLevelsShownTo(ctx, member);
   await coinsShownTo(ctx, member);

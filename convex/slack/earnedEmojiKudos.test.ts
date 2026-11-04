@@ -10,7 +10,6 @@ import { pickKudosEmoji } from "../album/kudosEmojis";
 import { milestoneCatalogue } from "../album/milestoneCatalogue";
 import { recordReward, standingOf } from "../progression/progression";
 import type { MemberId } from "../workspace/directory";
-import type { AttemptFailedEvent } from "../bus/events";
 
 const now = new Date("2026-10-13T10:00:00Z");
 const messageTs = `${Math.floor(now.getTime() / 1000) - 3600}.000100`;
@@ -236,8 +235,10 @@ describe("an emoji the giver unlocked in the album counts like the workspace's k
 });
 
 describe("in a kudos message, an earned emoji counts only when the giver picked it, it is First thank-you, or it is the hype emoji of a teammate they mention", { timeout: 30_000 }, () => {
+  let postHog: ReturnType<typeof flagsOnForEveryone>;
+
   beforeEach(() => {
-    flagsOnForEveryone(slack.fetch, "hugs", "kudos-emoji-picks");
+    postHog = flagsOnForEveryone(slack.fetch, "hugs", "kudos-emoji-picks");
   });
 
   test("an earned emoji the giver didn't pick gives no kudos, while a reaction with it is still a hug", async () => {
@@ -336,7 +337,9 @@ describe("in a kudos message, an earned emoji counts only when the giver picked 
 
     expect({ bob: await kudosReceived(t, "U_BOB"), carol: await kudosReceived(t, "U_CAROL") }, "kudos received").toEqual({ bob: 0, carol: 0 });
     expect(repliesTo("U_ALICE"), "the giver's reply").toEqual([["This needs 4 kudos, but you have 3 left today. Edit the message to give fewer and I'll try again, or edit it after midnight when you have 3 again."]]);
-    expect(await attemptsFailed(t), "the attempt failed event").toEqual([{ recipients: 2, perRecipient: 3, cost: 4 }]);
+    expect(postHog.productEvents().filter(({ event }) => event === "attempt failed").map(({ properties }) => properties), "the attempt failed event").toEqual([
+      expect.objectContaining({ recipients: 2, kudos_per_recipient: 3, kudos_total: 4 }),
+    ]);
   });
 
   test("the hype emoji of a teammate the giver doesn't mention gives no kudos", async () => {
@@ -500,14 +503,6 @@ async function xpOf(t: Backend, user: string) {
 
 function repliesTo(user: string) {
   return slack.ephemeralsTo(user).map(({ text }) => String(text).split("\n"));
-}
-
-async function attemptsFailed(t: Backend) {
-  const jobs = await t.run(async (ctx) => (await ctx.db.system.query("_scheduled_functions").collect()).filter(({ name }) => name === "analytics/subscribers:recordAttemptFailed"));
-  return jobs.map(({ args }) => {
-    const { recipients, perRecipient, cost } = (args[0] as { event: AttemptFailedEvent }).event;
-    return { recipients, perRecipient, cost };
-  });
 }
 
 async function memberOf(t: Backend, user: string): Promise<MemberId> {

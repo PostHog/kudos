@@ -18,7 +18,7 @@ export type KudosEmojiClaim = { name: string; onlyFor?: ChatUserId };
 
 export type KudosMessage = { mentions: Mention[]; kudosEmoji: PlacedEmoji[]; ownedEmoji: string[] };
 
-type PlacedEmoji = { name: string; mentionsBefore: number | undefined; countsFor: (user: ChatUserId) => boolean };
+type PlacedEmoji = { name: string; mentionsBefore: number | undefined; claims: KudosEmojiClaim[] };
 
 const workspaceEmoji: ParseHook = {
   name: "workspace emoji",
@@ -41,16 +41,20 @@ export function mostKudosIn({ kudosEmoji }: KudosMessage): number {
 }
 
 export function kudosFor({ kudosEmoji }: KudosMessage, user: ChatUserId): number {
-  return mostRepeatsIn(kudosEmoji.filter(({ countsFor }) => countsFor(user)).map(({ name }) => name));
+  return mostRepeatsIn(countingFor(kudosEmoji, user).map(({ name }) => name));
 }
 
 export function kudosEmojiClosestAfter({ kudosEmoji, mentions }: KudosMessage, user: ChatUserId): string {
   const mention = mentions.findIndex((mentioned) => mentioned.kind === "person" && mentioned.user === user);
-  const counting = kudosEmoji.filter(({ countsFor }) => countsFor(user));
+  const counting = countingFor(kudosEmoji, user);
   const placed = counting.filter((emoji): emoji is PlacedEmoji & { mentionsBefore: number } => emoji.mentionsBefore !== undefined);
   const after = placed.find(({ mentionsBefore }) => mentionsBefore > mention);
   const before = placed.findLast(({ mentionsBefore }) => mentionsBefore <= mention);
   return (after ?? before ?? counting[0]!).name;
+}
+
+function countingFor(kudosEmoji: PlacedEmoji[], user: ChatUserId) {
+  return kudosEmoji.filter(({ claims }) => claims.some(({ onlyFor }) => onlyFor === undefined || onlyFor === user));
 }
 
 function mostRepeatsIn(names: string[]) {
@@ -80,10 +84,8 @@ function claimsOf(ctx: MutationCtx, content: CountableContent, context: ParseCon
 function placedIn({ emoji, mentionsBeforeEmoji }: CountableContent, claims: Claim[]): PlacedEmoji[] {
   const byName = claimsByName(claims);
   return emoji.flatMap((name, index) => {
-    const ofName = byName.get(name);
-    if (ofName === undefined) return [];
-    const countsFor = (user: ChatUserId) => ofName.some(({ onlyFor }) => onlyFor === undefined || onlyFor === user);
-    return [{ name, mentionsBefore: mentionsBeforeEmoji?.[index], countsFor }];
+    const claims = byName.get(name);
+    return claims === undefined ? [] : [{ name, mentionsBefore: mentionsBeforeEmoji?.[index], claims }];
   });
 }
 
