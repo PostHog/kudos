@@ -37,8 +37,12 @@ export const turnTiming = {
   sealPopMs: atBuildSpeed(760),
   unlockHoldMs: atBuildSpeed(1300),
   medalAfterMs: atBuildSpeed(380),
-  medalPopMs: atBuildSpeed(760),
-  medalHoldMs: atBuildSpeed(1500),
+  medalInMs: atBuildSpeed(1000),
+  medalHoldMs: atBuildSpeed(1100),
+  medalDownMs: atBuildSpeed(560),
+  medalStampMs: atBuildSpeed(520),
+  medalXpAfterMs: atBuildSpeed(500),
+  medalXpMs: atBuildSpeed(1500),
   restMs: atBuildSpeed(800),
   backMs: atBuildSpeed(420),
   pageWaitMs: 2000,
@@ -127,10 +131,13 @@ export type TurnSteps = {
   jumpToTheSeal: (team: string) => void;
   unlockTheTeam: (team: string) => Promise<void>;
   endTheUnlock: () => void;
+  medalComing: (tier: ReachedTier) => void;
   medalInView: (tier: ReachedTier) => boolean;
   goToTheMilestones: () => void;
   jumpToTheMedal: (tier: ReachedTier) => void;
-  popTheMedal: (tier: ReachedTier) => Promise<void>;
+  showTheMedal: (tier: ReachedTier, xp: number) => Promise<void>;
+  stampTheMedal: (tier: ReachedTier) => Promise<void>;
+  payTheMedal: (tier: ReachedTier, xp: number) => Promise<void>;
   endTheMedal: () => void;
   sendTheEmojiUp: (source: EmojiSource) => Promise<void>;
   nothingWaits: () => boolean;
@@ -207,7 +214,7 @@ async function dropIn(clock: TurnClock, steps: TurnSteps) {
 }
 
 function followUpsOf(turned: Turned): FollowUp[] {
-  return [...hypeBeatOf(turned), ...turned.unlocked.teamStickers.map(({ team }) => teamUnlockOf(team)), ...milestoneBeatsOf(turned.unlocked.milestones)];
+  return [...hypeBeatOf(turned), ...turned.unlocked.teamStickers.map(({ team }) => teamUnlockOf(team)), ...milestoneBeatsOf(turned.unlocked)];
 }
 
 export function emojiSourcesOf(turned: Turned): EmojiSource[] {
@@ -245,19 +252,31 @@ function teamUnlockOf(team: string): FollowUp {
   };
 }
 
-function milestoneBeatsOf(tiers: ReachedTier[]): FollowUp[] {
-  return tiers.map(medalBeatOf);
+function milestoneBeatsOf({ milestones }: Turned["unlocked"]): FollowUp[] {
+  return milestones.map(({ xp = 0, ...tier }) => medalBeatOf(tier, xp));
 }
 
-function medalBeatOf(tier: ReachedTier): FollowUp {
+export function medalXpOwedIn({ unlocked: { milestones } }: Turned) {
+  return milestones.reduce((sum, { xp = 0 }) => sum + xp, 0);
+}
+
+function medalBeatOf(tier: ReachedTier, xp: number): FollowUp {
   return async (clock, steps) => {
     await clock.sleep(turnTiming.medalAfterMs);
+    steps.medalComing(tier);
     if (!steps.medalInView(tier)) await fadeToAnotherPage(clock, steps, steps.goToTheMilestones, () => steps.jumpToTheMedal(tier));
     steps.stage("medal");
-    await steps.popTheMedal(tier);
-    await Promise.all([clock.sleep(turnTiming.medalHoldMs), steps.sendTheEmojiUp({ kind: "medal", tier })]);
+    await steps.showTheMedal(tier, xp);
+    await clock.sleep(turnTiming.medalHoldMs);
+    await steps.stampTheMedal(tier);
+    await Promise.all([steps.sendTheEmojiUp({ kind: "medal", tier }), payAfterTheEmojiSprings(clock, steps, tier, xp)]);
     steps.endTheMedal();
   };
+}
+
+async function payAfterTheEmojiSprings(clock: TurnClock, steps: TurnSteps, tier: ReachedTier, xp: number) {
+  await clock.sleep(turnTiming.medalXpAfterMs);
+  await steps.payTheMedal(tier, xp);
 }
 
 async function fadeToAnotherPage(clock: TurnClock, steps: TurnSteps, goToThePage: () => void, jump: () => void) {

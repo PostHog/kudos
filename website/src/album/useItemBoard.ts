@@ -8,7 +8,8 @@ import { prefersReducedMotion } from "../reducedMotion";
 import type { TurnReply } from "../shell";
 import type { Album, AlbumEmoji, AlbumLevel } from "./answer";
 import { hrefOf, type Place } from "./place";
-import { emojiSourcesOf, isTheEmojiOf, type EmojiSource, type Turned } from "./turnSequence";
+import { levelOf, xpToReach } from "../../../convex/progression/levels";
+import { emojiSourcesOf, isTheEmojiOf, medalXpOwedIn, type EmojiSource, type Turned } from "./turnSequence";
 import { useTurnFlight, type Flight, type FlightBoxes } from "./useTurnFlight";
 
 export type LandingPhase = "arriving" | "landed" | "done";
@@ -18,6 +19,8 @@ export type Landing = { item: string; face: TurnedFaceShown; applied: AppliedRew
 type Shown = "board" | "later" | "landed";
 
 export type TurnedItem = { item: string; face: TurnedFaceShown };
+
+type Hold = { xp: number; paying: boolean };
 
 export type ItemTurns = {
   board: ItemBoard | null;
@@ -78,7 +81,8 @@ export function useItemBoard(answered: ItemBoard | null, turnItem: (item: string
   const [trouble, setTrouble] = useState<string | null>(null);
   const [landing, setLanding] = useState<Landing | null>(null);
   const [landingDue, setLandingDue] = useState(false);
-  const [heldLevel, setHeldLevel] = useState<AlbumLevel | null>(null);
+  const [hold, setHold] = useState<Hold | null>(null);
+  const heldLevel = useMemo(() => (hold !== null && (hold.paying || level.xp < hold.xp) ? levelAt(hold.xp) : null), [hold, level.xp]);
   const [touched, setTouched] = useState(false);
   const touch = useCallback(() => setTouched(true), []);
   const { flight, boxes, fly } = useTurnFlight();
@@ -101,6 +105,7 @@ export function useItemBoard(answered: ItemBoard | null, turnItem: (item: string
     [navigate, teachesTheLoop],
   );
   const phase = useCallback((next: LandingPhase) => setLanding((last) => (last === null ? null : { ...last, phase: next })), []);
+  const medalComing = useCallback((tier: ReachedTier) => setLanding((last) => (last === null ? null : { ...last, medalInPlace: tier })), []);
   const medalShown = useCallback(() => setLanding((last) => (last === null ? null : { ...last, medalsShown: last.medalsShown + 1, medalInPlace: last.unlocked.milestones[last.medalsShown] ?? null })), []);
   const medalSettled = useCallback(() => setLanding((last) => (last === null ? null : { ...last, medalInPlace: null })), []);
   const everyMedalShown = useCallback(() => setLanding((last) => (last === null ? null : { ...last, medalsShown: last.unlocked.milestones.length, medalInPlace: null })), []);
@@ -111,11 +116,14 @@ export function useItemBoard(answered: ItemBoard | null, turnItem: (item: string
   const teamShown = useCallback((shown: (last: Landing) => number) => setLanding((last) => (last === null ? null : { ...last, phase: "done", teamsShown: shown(last) })), []);
   const flyIn = useCallback(
     async (item: string, from: HTMLElement, answer: Promise<Turned | null>) => {
-      setHeldLevel(level);
+      setHold((held) => ({ xp: Math.max(level.xp, held?.xp ?? 0), paying: true }));
+      let owed = 0;
+      let paid = 0;
       const emojiOf = (source: EmojiSource) => turnEmojis.current.answered.find((emoji) => emoji.earned && isTheEmojiOf(source, emoji));
       let away: string[] = [];
       const arrival = {
         land(turned: Turned) {
+          owed = (turned.applied?.xp ?? 0) + medalXpOwedIn(turned);
           away = emojiSourcesOf(turned).flatMap((source) => emojiOf(source)?.id ?? []);
           turnEmojis.current.leave(away);
           land(item, turned, true);
@@ -125,21 +133,26 @@ export function useItemBoard(answered: ItemBoard | null, turnItem: (item: string
         teamUnlocked: () => teamShown(({ teamsShown }) => teamsShown + 1),
         toTheTeam: (team: string) => navigate(hrefOf({ kind: "team", team })),
         toTheMilestones: () => navigate(hrefOf({ kind: "milestones" })),
+        medalComing,
         medalShown,
         medalSettled,
-        paid: () => setHeldLevel(null),
+        paid(xp: number) {
+          paid += xp;
+          const paying = paid < owed;
+          setHold((held) => ({ xp: (held?.xp ?? level.xp) + xp, paying }));
+        },
         nothingWaits: () => remaining.current === 0,
         emojiOf,
         emojiHome: (id: string) => turnEmojis.current.home(id),
       };
       const turned = await fly(item, from.getBoundingClientRect(), answer, arrival);
       turnEmojis.current.back(away);
-      setHeldLevel(null);
+      setHold((held) => held && { ...held, paying: false });
       if (turned !== null) teamShown(({ unlocked }) => unlocked.teamStickers.length);
       if (turned !== null) everyMedalShown();
       if (turned !== null && remaining.current === 0) setShown("landed");
     },
-    [fly, land, phase, landedWithoutTheFlight, teamShown, medalShown, medalSettled, everyMedalShown, navigate, level],
+    [fly, land, phase, landedWithoutTheFlight, teamShown, medalComing, medalShown, medalSettled, everyMedalShown, navigate, level],
   );
   const turn = useCallback(
     async (item: string, from: HTMLElement | null) => {
@@ -184,6 +197,11 @@ async function turnedOf(sent: Promise<TurnReply>, say: (trouble: string) => void
   if (reply.kind === "turned") return reply;
   say(troubleOf(reply.kind));
   return null;
+}
+
+function levelAt(xp: number): AlbumLevel {
+  const level = levelOf(xp);
+  return { level, xp, startsAt: xpToReach(level), nextAt: xpToReach(level + 1) };
 }
 
 function placeOf(page: Turned["page"]): Place {

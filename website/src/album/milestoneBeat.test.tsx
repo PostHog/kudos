@@ -2,6 +2,7 @@ import { act, fireEvent, screen, waitFor, within } from "@testing-library/react"
 import { useSyncExternalStore } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReachedTier } from "../../../convex/album/milestones";
+import { levelOf, xpToReach } from "../../../convex/progression/levels";
 import { shellFixtures, type TurnReply } from "../shell";
 import { renderAlbum } from "../test/renderApp";
 import { fakeSystemTheme, preferReducedMotion, preferWideScreen } from "../test/systemTheme";
@@ -62,33 +63,58 @@ function anAlbumThatAnswers(first: Album) {
   return { read, answerNext, now: () => answer };
 }
 
-function aTurnThatReaches(...milestones: ReachedTier[]) {
+type Reaching = ReachedTier & { xp?: number };
+
+const tierOf = ({ milestone, tier }: Reaching): ReachedTier => ({ milestone, tier });
+
+const paying = (reached: ReachedTier, xp: number): Reaching => ({ ...reached, xp });
+
+const itemXp = 15;
+
+function medalXpOf(reaching: Reaching[]) {
+  return reaching.reduce((sum, { xp = 0 }) => sum + xp, 0);
+}
+
+function aTurnThatReaches(...reaching: Reaching[]) {
   return async (item: string): Promise<TurnReply> => {
     const turned = fixtureTurnOf(item);
-    return turned.kind === "turned" ? { ...turned, unlocked: { ...turned.unlocked, milestones } } : turned;
+    return turned.kind === "turned" ? { ...turned, unlocked: { ...turned.unlocked, milestones: reaching } } : turned;
   };
 }
 
-function aTurnThatPutsIn(...milestones: ReachedTier[]) {
+function levelAt(xp: number) {
+  const level = levelOf(xp);
+  return { level, xp, startsAt: xpToReach(level), nextAt: xpToReach(level + 1) };
+}
+
+function aTurnThatPutsIn(medalXpLands: MedalXpLands, ...reaching: Reaching[]) {
+  const medalXp = medalXpLands === "with the turn" ? medalXpOf(reaching) : 0;
   return (album: Album, item: string): Album => {
-    const turned = { ...album, board: { ...album.board!, items: album.board!.items.filter((waiting) => waiting.item !== item) } };
-    return milestones.reduce<Album>((reached, tier) => reachedAt(tier, Date.now())(reached), turned);
+    const turned = { ...album, board: { ...album.board!, items: album.board!.items.filter((waiting) => waiting.item !== item) }, level: levelAt(album.level.xp + itemXp + medalXp) };
+    return reaching.map(tierOf).reduce<Album>((reached, tier) => reachedAt(tier, Date.now())(reached), turned);
   };
 }
 
-function visit(...milestones: ReachedTier[]) {
+type MedalXpLands = "with the turn" | "later";
+
+function visit(...reaching: Reaching[]) {
+  return visitWhere("with the turn", ...reaching);
+}
+
+function visitWhere(medalXpLands: MedalXpLands, ...reaching: Reaching[]) {
   window.history.replaceState(null, "", "/book#me");
-  const before = milestones.reduce<Album>((album, tier) => notYetReached(tier)(album), { ...withItems, lastVisit });
+  const before = reaching.map(tierOf).reduce<Album>((album, tier) => notYetReached(tier)(album), { ...withItems, lastVisit });
   const live = anAlbumThatAnswers(before);
-  const reply = aTurnThatReaches(...milestones);
-  const after = aTurnThatPutsIn(...milestones);
+  const reply = aTurnThatReaches(...reaching);
+  const after = aTurnThatPutsIn(medalXpLands, ...reaching);
   const turnItem = vi.fn(async (item: string) => {
     const answer = await reply(item);
     live.answerNext(after(live.now(), item));
     return answer;
   });
   const hoggies: HoggiesRead = (asking) => (asking ? hoggiesFixtures.midway : undefined);
-  return { ...renderAlbum(shellFixtures.member, live.read, { hoggies, people: fixedPeople(withItems), commands: { turnItem } }), turnItem };
+  const gainXp = (xp: number) => act(() => live.answerNext({ ...live.now(), level: levelAt(live.now().level.xp + xp) }));
+  return { ...renderAlbum(shellFixtures.member, live.read, { hoggies, people: fixedPeople(withItems), commands: { turnItem } }), turnItem, gainXp };
 }
 
 const arrival = { timeout: 10_000 };
@@ -129,6 +155,23 @@ function theBurst() {
   return document.querySelector<HTMLElement>(".ib-medal-burst");
 }
 
+function theStage() {
+  return document.querySelector<HTMLElement>(".ib-medal-stage");
+}
+
+function theTitle() {
+  return document.querySelector<HTMLElement>(".ib-medal-title");
+}
+
+function theXpChip() {
+  return document.querySelector<HTMLElement>(".ib-medal-xp");
+}
+
+function xpWords() {
+  const [bar] = screen.getAllByRole("banner", { hidden: true });
+  return within(bar!).getByText(/XP to level/, { selector: ".al-xp-words" }).textContent;
+}
+
 function earnedInTheTopBar() {
   const [bar] = screen.getAllByRole("banner", { hidden: true });
   const label = within(bar!).getByRole("button", { name: /^Your emojis, \d+ earned/, hidden: true }).getAttribute("aria-label")!;
@@ -146,7 +189,7 @@ async function onMilestones(album: Album) {
 }
 
 describe("LP19a: a milestone tier unlocks with its own beat on Milestones", { timeout: 30_000 }, () => {
-  it("after the item lands, fades to Milestones without a scroll and pops the medal from grey into its colour with rays, Familiar faces · Silver and its emoji with New, holds about 1.9 s, then the board comes back", async () => {
+  it("after the item lands, fades to Milestones without a scroll, shows the medal big on centre stage with rays, Familiar faces · Silver, then stamps it into its row with its emoji and New, and the board comes back", async () => {
     const scrolled = vi.spyOn(Element.prototype, "scrollIntoView");
     visit(familiarFaces);
     await clickOnFakeTime(await theFirstItem());
@@ -168,53 +211,119 @@ describe("LP19a: a milestone tier unlocks with its own beat on Milestones", { ti
     expect(dark()).toBe(false);
     expect(scrolled.mock.contexts).toContain(theMedal(familiarFaces));
     expect(scrolled).toHaveBeenLastCalledWith(expect.objectContaining({ behavior: "instant" }));
-    expect(theMedal(familiarFaces)).toHaveAttribute("data-step", "earned");
-    expect(theBurst()).not.toBeNull();
+    expect(theStage()).toHaveAttribute("data-phase", "in");
+    expect(theMedal(familiarFaces), "the row waits while the medal is on centre stage").toHaveAttribute("data-step", "next");
     expect(theBurst()!.style.getPropertyValue("--burst")).toBe("var(--medal-silver)");
     expect(within(theBurst()!).queryByTestId("confetti")).toBeNull();
-    expect(screen.getByText("Familiar faces · Silver", { selector: ".ib-medal-caption" })).toBeInTheDocument();
+    expect(theTitle()).toHaveTextContent("Medal unlockedFamiliar facesSilver · Faces in the album");
+    expect(within(theTitle()!).queryByText(/XP/)).toBeNull();
     expect(screen.getByRole("status", { name: "Identifying" })).toHaveTextContent("Familiar faces · Silver medal unlocked");
+
+    await at(9.0);
+    expect(theStage(), "stamped into its row").toHaveAttribute("data-phase", "stamped");
+    expect(theMedal(familiarFaces)).toHaveAttribute("data-step", "earned");
     expect(newLabelsOn(theMedal(familiarFaces))).toHaveLength(2);
 
-    await at(8.2);
+    await at(10.8);
     expect(stage()).toBe("medal");
-    await at(8.35);
+    await at(11.2);
     expect(stage()).toBe("rest");
-    expect(theBurst()).toBeNull();
-    await at(9.3);
+    expect(theStage()).toBeNull();
+    await at(12.2);
     expect(stage()).toBe("back");
-    await at(9.85);
+    await at(12.8);
     expect(stage()).toBe("idle");
     expect(screen.getByRole("dialog", { name: "Your items" })).toBeInTheDocument();
   });
 
-  it("springs the medal's emoji out as the medal stamps in, and counts it in the top bar only once it lands in the emoji button", async () => {
+  it("springs the medal's emoji out once the medal stamps in, and counts it in the top bar only once it lands in the emoji button", async () => {
     visit(familiarFaces);
     const item = await theFirstItem();
     const before = earnedInTheTopBar();
     await clickOnFakeTime(item);
 
-    await at(5.6);
+    await at(8.6);
     expect(stage()).toBe("medal");
-    expect(earnedInTheTopBar(), "while the medal pops").toBe(before);
-    await at(6.6);
+    expect(document.querySelector(".ib-emoji"), "while the medal is on centre stage").toBeNull();
+    expect(earnedInTheTopBar(), "while the medal is on centre stage").toBe(before);
+    await at(9.6);
     expect(document.querySelector(".ib-emoji"), "the emoji out of the medal").toHaveTextContent("New emoji");
     expect(earnedInTheTopBar(), "while the emoji is out").toBe(before);
-    await at(8.1);
+    await at(11.0);
     expect(document.querySelector(".ib-emoji")).toBeNull();
     expect(earnedInTheTopBar(), "once it lands").toBe(before + 1);
+  });
+
+  it("pays the medal's XP at the end of the beat: names it on the stage, flies it to the bar after the stamp, and holds the bar until it lands", async () => {
+    visit(paying(familiarFaces, 250));
+    await clickOnFakeTime(await theFirstItem());
+
+    await at(5.5);
+    expect(within(theTitle()!).getByText("+250 XP")).toBeInTheDocument();
+    expect(screen.getByRole("status", { name: "Identifying" })).toHaveTextContent("Familiar faces · Silver medal unlocked, +250 XP");
+    expect(xpWords(), "the item's XP is in, the medal's waits").toBe("275 XP to level 7");
+    expect(theXpChip()).toBeNull();
+
+    await at(10.2);
+    expect(theXpChip(), "the medal's XP flies to the bar").toHaveTextContent("+250 XP");
+    expect(theXpChip()).toHaveAttribute("data-metal", "silver");
+    expect(theXpChip()!.style.left, "kept on the screen though the medal's row sits at its edge").toBe("160px");
+    expect(screen.getByRole("status", { name: "Identifying" })).toHaveTextContent("+250 XP for Familiar faces · Silver");
+    expect(xpWords(), "while the XP is in flight").toBe("275 XP to level 7");
+
+    await at(12.1);
+    expect(theXpChip()).toBeNull();
+    expect(xpWords(), "once it lands").toBe("25 XP to level 7");
+  });
+
+  it("keeps the XP chip on the screen when the medal's row sits at the right edge", async () => {
+    const box = Element.prototype.getBoundingClientRect;
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      return this.classList.contains("al-ms-medal-art") ? new DOMRect(window.innerWidth - 40, 300, 40, 40) : box.call(this);
+    });
+    visit(paying(familiarFaces, 250));
+    await clickOnFakeTime(await theFirstItem());
+
+    await at(10.2);
+    expect(theXpChip()!.style.left).toBe(`${window.innerWidth - 160}px`);
+  });
+
+  it("holds a level the medal's XP crosses until its XP lands", async () => {
+    visit(paying({ milestone: "people", tier: "gold" }, 500));
+    await clickOnFakeTime(await theFirstItem());
+
+    await at(10.2);
+    expect(theXpChip()).toHaveTextContent("+500 XP");
+    expect(xpWords()).toBe("275 XP to level 7");
+    await at(12.1);
+    expect(xpWords()).toBe("375 XP to level 8");
   });
 
   it("keeps the reduced-motion line off the strip once the beat has played", async () => {
     visit(familiarFaces);
     await clickOnFakeTime(await theFirstItem());
 
-    await at(9.85);
+    await at(12.8);
     expect(stage()).toBe("idle");
     await act(async () => fireEvent.click(within(screen.getByRole("dialog", { name: "Your items" })).getByRole("button", { name: "Later" })));
 
     expect(screen.getByRole("status", { name: "Identified" }), "the strip after Later").not.toBeEmptyDOMElement();
     expect(screen.queryByRole("note", { name: "Medals unlocked" }), "the line for a beat that played").toBeNull();
+  });
+
+  it("puts a tier far from Closest medals in its row before the fade, so the medal stamps into its own row", async () => {
+    const completionist: ReachedTier = { milestone: "hoggies", tier: "diamond" };
+    const scrolled = vi.spyOn(Element.prototype, "scrollIntoView");
+    visit(completionist);
+    await clickOnFakeTime(await theFirstItem());
+
+    await at(5.05);
+    expect(window.location.hash).toBe("#milestones");
+    expect(theMedal(completionist), "its row is there when the beat jumps to it").toHaveAttribute("data-step", "next");
+    await at(5.5);
+    expect(scrolled.mock.contexts).toContain(theMedal(completionist));
+    await at(9.0);
+    expect(theMedal(completionist)).toHaveAttribute("data-step", "earned");
   });
 
   it("plays each tier the turn reached as its own beat, one after the other", async () => {
@@ -223,11 +332,13 @@ describe("LP19a: a milestone tier unlocks with its own beat on Milestones", { ti
     await clickOnFakeTime(await theFirstItem());
 
     await at(5.5);
-    expect(screen.getByText("Familiar faces · Silver", { selector: ".ib-medal-caption" })).toBeInTheDocument();
+    expect(theTitle()).toHaveTextContent("Familiar faces");
     expect(theMedal(fiveTeams)).toHaveAttribute("data-step", "next");
-    await at(10.1);
+    await at(12.3);
     expect(stage()).toBe("medal");
-    expect(screen.getByText("Five teams strong · Silver", { selector: ".ib-medal-caption" })).toBeInTheDocument();
+    expect(theTitle()).toHaveTextContent("Five teams strong");
+    expect(theMedal(fiveTeams)).toHaveAttribute("data-step", "next");
+    await at(15.7);
     expect(theMedal(fiveTeams)).toHaveAttribute("data-step", "earned");
   });
 
@@ -236,13 +347,14 @@ describe("LP19a: a milestone tier unlocks with its own beat on Milestones", { ti
     visit(familiarFaces, fullOfFriends);
     await clickOnFakeTime(await theFirstItem());
 
-    await at(5.5);
-    expect(theMedal(familiarFaces)).toHaveAttribute("data-step", "earned");
     await at(9.0);
+    expect(theMedal(familiarFaces)).toHaveAttribute("data-step", "earned");
+    await at(11.2);
     expect(theMedal(fullOfFriends), "waiting for its beat").toHaveAttribute("data-step", "next");
-    await at(10.1);
+    await at(12.3);
     expect(stage()).toBe("medal");
-    expect(screen.getByText("Full of friends · Gold", { selector: ".ib-medal-caption" })).toBeInTheDocument();
+    expect(theTitle()).toHaveTextContent("Full of friends");
+    await at(15.7);
     expect(theMedal(fullOfFriends)).toHaveAttribute("data-step", "earned");
     expect(theMedal(fullOfFriends)).toHaveClass("al-ms-next");
   });
@@ -251,12 +363,20 @@ describe("LP19a: a milestone tier unlocks with its own beat on Milestones", { ti
     visit(familiarFaces);
     await clickOnFakeTime(await theFirstItem());
 
-    await at(5.5);
+    await at(9.0);
     expect(theMedal(familiarFaces)).toHaveClass("al-ms-next");
-    await at(9.85);
+    await at(12.8);
     expect(stage()).toBe("idle");
     expect(theMedal(familiarFaces)).toHaveClass("al-ms-earned");
     expect(theMedal({ milestone: "people", tier: "gold" })).toHaveAttribute("data-step", "next");
+  });
+
+  it("adds modest confetti for a gold tier", async () => {
+    visit({ milestone: "people", tier: "gold" });
+    await clickOnFakeTime(await theFirstItem());
+
+    await at(5.5);
+    expect(within(theBurst()!).getByTestId("confetti")).toHaveAttribute("data-size", "modest");
   });
 
   it("adds the gold confetti for a diamond tier", async () => {
@@ -264,19 +384,70 @@ describe("LP19a: a milestone tier unlocks with its own beat on Milestones", { ti
     await clickOnFakeTime(await theFirstItem());
 
     await at(5.5);
+    expect(theStage()).toHaveAttribute("data-metal", "diamond");
     expect(theBurst()!.style.getPropertyValue("--burst")).toBe("var(--medal-diamond)");
     expect(within(theBurst()!).getByTestId("confetti")).toHaveAttribute("data-size", "gold");
   });
 
-  it("skips the beat on a click like the rest, showing the medal unlocked", async () => {
-    visit(familiarFaces);
+  it("skips the beat on a click like the rest, showing the medal unlocked and its XP in the bar", async () => {
+    visit(paying(familiarFaces, 250));
     await clickOnFakeTime(await theFirstItem());
 
     await at(5.6);
     await act(async () => fireEvent.pointerDown(document.body));
     expect(stage()).toBe("rest");
     expect(theMedal(familiarFaces)).toHaveAttribute("data-step", "earned");
-    expect(theBurst()).toBeNull();
+    expect(theStage()).toBeNull();
+    expect(theXpChip()).toBeNull();
+    expect(xpWords()).toBe("25 XP to level 7");
+  });
+
+  it("after a skip, keeps the medal's XP in the bar until the album answers it, then follows the album again", async () => {
+    const { gainXp } = visitWhere("later", paying(familiarFaces, 250));
+    await clickOnFakeTime(await theFirstItem());
+
+    await at(5.6);
+    await act(async () => fireEvent.pointerDown(document.body));
+    await at(8);
+    expect(xpWords(), "the album has not paid the medal yet").toBe("25 XP to level 7");
+    gainXp(250);
+    expect(xpWords(), "the album pays it").toBe("25 XP to level 7");
+    gainXp(10);
+    expect(xpWords(), "and the bar follows the album again").toBe("15 XP to level 7");
+  });
+
+  it("keeps the medal's XP in the bar through the next turn when that turn starts before the album answers it", async () => {
+    visitWhere("later", paying(familiarFaces, 250));
+    await clickOnFakeTime(await theFirstItem());
+
+    await at(5.6);
+    await act(async () => fireEvent.pointerDown(document.body));
+    await at(8);
+    expect(xpWords()).toBe("25 XP to level 7");
+    vi.useRealTimers();
+    await clickOnFakeTime(await theFirstItem());
+
+    await at(1);
+    expect(xpWords(), "the next turn lifts off from the paid standing").toBe("25 XP to level 7");
+  });
+
+  it("keeps the medal's title card on a short landscape screen", async () => {
+    vi.spyOn(window, "innerHeight", "get").mockReturnValue(320);
+    vi.spyOn(window, "innerWidth", "get").mockReturnValue(568);
+    visit(paying(familiarFaces, 250));
+    await clickOnFakeTime(await theFirstItem());
+
+    await at(5.5);
+    expect(Number.parseFloat(theTitle()!.style.top) + 150, "the card's top plus its height").toBeLessThanOrEqual(320);
+  });
+
+  it("under reduced motion names the medal's XP in its line", async () => {
+    preferReducedMotion();
+    visit(paying(familiarFaces, 250));
+    await clickOnFakeTime(await theFirstItem());
+
+    await at(0.05);
+    expect(screen.getByRole("note", { name: "Medals unlocked" })).toHaveTextContent("Familiar faces · Silver · +250 XP");
   });
 
   it("under reduced motion shows the medal and its emoji in place with one line, with no flight", async () => {
