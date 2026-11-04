@@ -98,7 +98,7 @@ describe("the emoji popup leads with the earned emojis the member picks to count
     return picks.getAllByRole("button").map((button: HTMLElement) => `${button.querySelector("code")?.textContent} ${button.getAttribute("aria-pressed")}`);
   }
 
-  it("lists each earned emoji but First thank-you, which always counts, presses the picked ones, and a press picks one more", async () => {
+  it("lists each earned emoji but First thank-you and the hype emojis, which count without a pick, presses the picked ones, and a press picks one more", async () => {
     const pickKudosEmoji = vi.fn<PickKudosEmoji>(async () => ({ kind: "picked", picks: ["level:5", "level:2"] }));
     const view = visit({ album: { ...withFirstThankYou, kudosEmojiPicks: ["level:5"] }, pickKudosEmoji });
     const popup = await openTheEmojis(view);
@@ -106,40 +106,40 @@ describe("the emoji popup leads with the earned emojis the member picks to count
     const picks = picksIn(popup);
     expect(popup.getByRole("region", { name: /^Count in kudos/ })).toHaveAccessibleName("Count in kudos · 1 of 5");
     expect(picks.getByText(/always count/)).toHaveTextContent("Your kudos emoji and :love-hog: always count. Pick up to 5 more for the kudos you write. A teammate's hype emoji counts when you mention them, and a reaction with any emoji is a hug.");
-    expect(pressedIn(picks)).toEqual([":team-quiet-harbour: false", ":ines-okafor-hype: false", ":level-5: true", ":raised_hands: false"]);
+    expect(pressedIn(picks)).toEqual([":team-quiet-harbour: false", ":level-5: true", ":raised_hands: false"]);
 
     await view.user.click(picks.getByRole("button", { name: ":raised_hands:" }));
 
     expect(pickKudosEmoji).toHaveBeenCalledWith("level:2", true);
-    expect(pressedIn(picks)).toEqual([":team-quiet-harbour: false", ":ines-okafor-hype: false", ":level-5: true", ":raised_hands: true"]);
+    expect(pressedIn(picks)).toEqual([":team-quiet-harbour: false", ":level-5: true", ":raised_hands: true"]);
   });
 
   it("with five picked, an unpicked emoji can't be pressed, and a picked one unpicks", async () => {
-    const six = [held({ id: "team:copper-kite", kind: "team", name: "team-copper-kite", from: "Copper Kite" }), held({ id: "level:10", kind: "level", name: "level-10", from: "Level 10" }), ...atLevelTwo.emojis.filter(({ earned }) => earned)];
+    const six = [held({ id: "milestone:people:bronze", kind: "milestone", name: "bronze-people", from: "People" }), held({ id: "team:copper-kite", kind: "team", name: "team-copper-kite", from: "Copper Kite" }), held({ id: "level:10", kind: "level", name: "level-10", from: "Level 10" }), ...atLevelTwo.emojis.filter(({ earned }) => earned)];
     const pickKudosEmoji = vi.fn<PickKudosEmoji>(async () => ({ kind: "picked", picks: ["team:copper-kite", "level:10", "level:5", "level:2"] }));
     const view = visit({ album: { ...atLevelTwo, emojis: six, kudosEmojiPicks: ["team:copper-kite", "level:10", "level:5", "level:2", "team:quiet-harbour"] }, pickKudosEmoji });
     const picks = picksIn(await openTheEmojis(view));
 
-    expect(picks.getByRole("button", { name: ":ines-okafor-hype:" })).toBeDisabled();
+    expect(picks.getByRole("button", { name: ":bronze-people:" })).toBeDisabled();
     await view.user.click(picks.getByRole("button", { name: ":team-quiet-harbour:" }));
 
     expect(pickKudosEmoji).toHaveBeenCalledWith("team:quiet-harbour", false);
-    expect(picks.getByRole("button", { name: ":ines-okafor-hype:" })).toBeEnabled();
+    expect(picks.getByRole("button", { name: ":bronze-people:" })).toBeEnabled();
   });
 
   it("a pick the album no longer lists, such as a random emoji Slack removed, still counts toward the five and can be unpicked", async () => {
     const pickKudosEmoji = vi.fn<PickKudosEmoji>(async () => ({ kind: "picked", picks: ["level:5"] }));
-    const view = visit({ album: { ...withFirstThankYou, kudosEmojiPicks: ["level:5", "random:gone-parrot", "hype:someone-left"] }, pickKudosEmoji });
+    const view = visit({ album: { ...withFirstThankYou, kudosEmojiPicks: ["level:5", "random:gone-parrot", "team:disbanded"] }, pickKudosEmoji });
     const popup = await openTheEmojis(view);
     const picks = picksIn(popup);
 
     expect(popup.getByRole("region", { name: /^Count in kudos/ })).toHaveAccessibleName("Count in kudos · 3 of 5");
-    expect(pressedIn(picks)).toEqual([":team-quiet-harbour: false", ":ines-okafor-hype: false", ":level-5: true", ":raised_hands: false", ":gone-parrot: true", "undefined true"]);
+    expect(pressedIn(picks)).toEqual([":team-quiet-harbour: false", ":level-5: true", ":raised_hands: false", ":gone-parrot: true", "undefined true"]);
     expect(picks.getByRole("button", { name: ":gone-parrot: No longer listed" })).toBeEnabled();
     await view.user.click(picks.getByRole("button", { name: "An emoji no longer listed" }));
 
-    expect(pickKudosEmoji).toHaveBeenCalledWith("hype:someone-left", false);
-    expect(pressedIn(picks)).toEqual([":team-quiet-harbour: false", ":ines-okafor-hype: false", ":level-5: true", ":raised_hands: false"]);
+    expect(pickKudosEmoji).toHaveBeenCalledWith("team:disbanded", false);
+    expect(pressedIn(picks)).toEqual([":team-quiet-harbour: false", ":level-5: true", ":raised_hands: false"]);
   });
 
   it("after a press, the album's next answer shows its own picks", async () => {
@@ -151,7 +151,7 @@ describe("the emoji popup leads with the earned emojis the member picks to count
 
     live.answerNext({ ...live.now(), kudosEmojiPicks: ["team:quiet-harbour"] });
 
-    expect(pressedIn(picks)).toEqual([":team-quiet-harbour: true", ":ines-okafor-hype: false", ":level-5: false", ":raised_hands: false"]);
+    expect(pressedIn(picks)).toEqual([":team-quiet-harbour: true", ":level-5: false", ":raised_hands: false"]);
   });
 
   it("a reply that lands after the album's next answer keeps the album's picks", async () => {
@@ -165,7 +165,7 @@ describe("the emoji popup leads with the earned emojis the member picks to count
     live.answerNext({ ...live.now(), kudosEmojiPicks: ["level:5"] });
     await act(async () => reply({ kind: "picked", picks: ["level:2"] }));
 
-    expect(pressedIn(picks)).toEqual([":team-quiet-harbour: false", ":ines-okafor-hype: false", ":level-5: true", ":raised_hands: false"]);
+    expect(pressedIn(picks)).toEqual([":team-quiet-harbour: false", ":level-5: true", ":raised_hands: false"]);
   });
 
   it("with picking off, the album answers no picks: no section, and every earned emoji counts in a kudos as before", async () => {

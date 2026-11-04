@@ -46,18 +46,38 @@ afterEach(() => {
 describe("a member picks up to five earned emojis that count in their kudos messages", () => {
   test("the album reads the picks; a sixth is full until one is unpicked", async () => {
     await reachesXp(alice, xpToReach(25));
+    await dropsRandomEmoji(alice, bruno, "party-parrot");
+    const asAlice = await signedIn(alice);
+
+    for (const level of levelEmojis) expect(await asAlice.mutation(api.website.album.pickKudosEmoji, { emoji: level, picked: true })).toMatchObject({ kind: "picked" });
+    const sixth = await asAlice.mutation(api.website.album.pickKudosEmoji, { emoji: "random:party-parrot", picked: true });
+    await asAlice.mutation(api.website.album.pickKudosEmoji, { emoji: "level:5", picked: false });
+    const afterUnpick = await asAlice.mutation(api.website.album.pickKudosEmoji, { emoji: "random:party-parrot", picked: true });
+
+    expect(sixth).toEqual({ kind: "full" });
+    expect(afterUnpick).toMatchObject({ kind: "picked" });
+    expect((await picksOf(asAlice)).toSorted()).toEqual([...levelEmojis.slice(1), "random:party-parrot"].toSorted());
+  });
+
+  test("a hype emoji can't be picked: it counts on its own when the kudos mentions its person", async () => {
     await thanks(alice, bruno);
     const asAlice = await signedIn(alice);
     const hype = `hype:${await memberOf(bruno)}`;
 
-    for (const level of levelEmojis) expect(await asAlice.mutation(api.website.album.pickKudosEmoji, { emoji: level, picked: true })).toMatchObject({ kind: "picked" });
-    const sixth = await asAlice.mutation(api.website.album.pickKudosEmoji, { emoji: hype, picked: true });
-    await asAlice.mutation(api.website.album.pickKudosEmoji, { emoji: "level:5", picked: false });
-    const afterUnpick = await asAlice.mutation(api.website.album.pickKudosEmoji, { emoji: hype, picked: true });
+    expect(await asAlice.mutation(api.website.album.pickKudosEmoji, { emoji: hype, picked: true })).toEqual({ kind: "refused" });
+    expect(await picksOf(asAlice)).toEqual([]);
+  });
 
-    expect(sixth).toEqual({ kind: "full" });
-    expect(afterUnpick).toMatchObject({ kind: "picked" });
-    expect((await picksOf(asAlice)).toSorted()).toEqual([...levelEmojis.slice(1), hype].toSorted());
+  test("a hype emoji picked before picking it ended holds no slot: the album leaves it out, and five picks still fit", async () => {
+    await reachesXp(alice, xpToReach(25));
+    await thanks(alice, bruno);
+    const asAlice = await signedIn(alice);
+    const [member, hype] = [await memberOf(alice), `hype:${await memberOf(bruno)}`];
+    await t.run((ctx) => ctx.db.insert("kudosEmojiPicks", { member, emoji: hype }));
+
+    expect(await picksOf(asAlice)).toEqual([]);
+    for (const level of levelEmojis) expect(await asAlice.mutation(api.website.album.pickKudosEmoji, { emoji: level, picked: true })).toMatchObject({ kind: "picked" });
+    expect((await picksOf(asAlice)).toSorted()).toEqual(levelEmojis.toSorted());
   });
 
   test("a pick no longer held holds no slot: the album leaves it out, and a fifth pick still fits", async () => {
@@ -115,6 +135,14 @@ async function picksOf(reader: Reader): Promise<string[]> {
 async function thanks(giver: Person, recipient: Person) {
   await post(t, [section(text(`${why} `), mention(recipient.user), emoji("taco"))], { user: giver.user, ts: `${Date.now() / 1000 - 60}.000100` });
   await settle(t);
+}
+
+async function dropsRandomEmoji(holder: Person, recipient: Person, name: string) {
+  const [member, to] = [await memberOf(holder), await memberOf(recipient)];
+  await t.run(async (ctx) => {
+    const pack = await ctx.db.insert("thoughtfulPacks", { workspace: "T1", giver: member, recipient: to, week: "2026-10-12", message: { workspace: "T1", conversation: "C1", message: "1760000000.000100" }, holdsSticker: false, at: Date.now() });
+    await ctx.db.insert("randomEmojiDrops", { member, name, pack, at: Date.now() });
+  });
 }
 
 async function reachesXp(someone: Person, xp: number) {
