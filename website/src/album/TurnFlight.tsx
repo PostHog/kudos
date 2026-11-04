@@ -167,8 +167,9 @@ function EmojiSpring({ up: { emoji, at, flying }, picture }: { up: EmojiUp; pict
 }
 
 function saidOf({ caption, face, medal, medalXp, emoji }: Flight) {
-  if (medalXp !== null) return `+${medalXp.xp} XP for ${medalWordsOf(medalXp.tier)}`;
-  if (emoji !== null) return `:${emoji.emoji.name}: emoji unlocked`;
+  const paid = medalXp === null ? null : `+${medalXp.xp} XP for ${medalWordsOf(medalXp.tier)}`;
+  if (emoji !== null) return paid === null ? `:${emoji.emoji.name}: emoji unlocked` : `:${emoji.emoji.name}: emoji unlocked, ${paid}`;
+  if (paid !== null) return paid;
   if (medal !== null) return medal.xp > 0 ? `${medalWordsOf(medal.tier)} medal unlocked, +${medal.xp} XP` : `${medalWordsOf(medal.tier)} medal unlocked`;
   return caption && face !== null ? `${nameOf(face)}: ${whatOf(face)}` : "";
 }

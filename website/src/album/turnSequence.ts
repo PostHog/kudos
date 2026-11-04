@@ -252,12 +252,12 @@ function teamUnlockOf(team: string): FollowUp {
   };
 }
 
-function milestoneBeatsOf({ milestones, medalXp = [] }: Turned["unlocked"]): FollowUp[] {
-  return milestones.map((tier) => medalBeatOf(tier, medalXp.find((paid) => medalKeyOf(paid) === medalKeyOf(tier))?.xp ?? 0));
+function milestoneBeatsOf({ milestones }: Turned["unlocked"]): FollowUp[] {
+  return milestones.map(({ xp = 0, ...tier }) => medalBeatOf(tier, xp));
 }
 
-export function medalXpOwedIn({ unlocked: { medalXp = [] } }: Turned) {
-  return medalXp.reduce((sum, { xp }) => sum + xp, 0);
+export function medalXpOwedIn({ unlocked: { milestones } }: Turned) {
+  return milestones.reduce((sum, { xp = 0 }) => sum + xp, 0);
 }
 
 function medalBeatOf(tier: ReachedTier, xp: number): FollowUp {

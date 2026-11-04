@@ -294,8 +294,13 @@
   text-wrap: balance;
 }
 
-.ib-turned-xp {
+.ib-turned-xp,
+.ib-medal-xp-word {
   color: var(--al-accent-ink);
+}
+
+.ib-medal-xp-word {
+  font-weight: 700;
 }
 
 .ib-wait {
@@ -761,7 +766,8 @@
 }
 
 .ib-medal-stage:not([data-phase="in"]) .ib-medal-scrim,
-.ib-medal-stage:not([data-phase="in"]) .ib-medal-title {
+.ib-medal-stage:not([data-phase="in"]) .ib-medal-title,
+.ib-medal-stage[data-phase="down"] .ib-medal-burst {
   animation: ib-fade-out calc(300 * var(--ib-time)) ease both;
 }
 
@@ -794,10 +800,6 @@
 .ib-medal-stage[data-phase="stamped"] .ib-ring,
 .ib-medal-stage[data-phase="stamped"] .ib-medal-shine {
   animation-delay: 0ms;
-}
-
-.ib-medal-burst .al-confetti {
-  top: 50%;
 }
 
 .ib-medal-big {

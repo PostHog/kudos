@@ -72,14 +72,13 @@ const paying = (reached: ReachedTier, xp: number): Reaching => ({ ...reached, xp
 const itemXp = 15;
 
 function medalXpOf(reaching: Reaching[]) {
-  return reaching.flatMap((reached) => (reached.xp === undefined ? [] : [{ ...tierOf(reached), xp: reached.xp }]));
+  return reaching.reduce((sum, { xp = 0 }) => sum + xp, 0);
 }
 
 function aTurnThatReaches(...reaching: Reaching[]) {
   return async (item: string): Promise<TurnReply> => {
     const turned = fixtureTurnOf(item);
-    const medalXp = medalXpOf(reaching);
-    return turned.kind === "turned" ? { ...turned, unlocked: { ...turned.unlocked, milestones: reaching.map(tierOf), ...(medalXp.length > 0 && { medalXp }) } } : turned;
+    return turned.kind === "turned" ? { ...turned, unlocked: { ...turned.unlocked, milestones: reaching } } : turned;
   };
 }
 
@@ -88,27 +87,34 @@ function levelAt(xp: number) {
   return { level, xp, startsAt: xpToReach(level), nextAt: xpToReach(level + 1) };
 }
 
-function aTurnThatPutsIn(...reaching: Reaching[]) {
-  const medalXp = medalXpOf(reaching).reduce((sum, { xp }) => sum + xp, 0);
+function aTurnThatPutsIn(medalXpLands: MedalXpLands, ...reaching: Reaching[]) {
+  const medalXp = medalXpLands === "with the turn" ? medalXpOf(reaching) : 0;
   return (album: Album, item: string): Album => {
-    const turned = { ...album, board: { ...album.board!, items: album.board!.items.filter((waiting) => waiting.item !== item) }, ...(medalXp > 0 && { level: levelAt(album.level.xp + itemXp + medalXp) }) };
+    const turned = { ...album, board: { ...album.board!, items: album.board!.items.filter((waiting) => waiting.item !== item) }, level: levelAt(album.level.xp + itemXp + medalXp) };
     return reaching.map(tierOf).reduce<Album>((reached, tier) => reachedAt(tier, Date.now())(reached), turned);
   };
 }
 
+type MedalXpLands = "with the turn" | "later";
+
 function visit(...reaching: Reaching[]) {
+  return visitWhere("with the turn", ...reaching);
+}
+
+function visitWhere(medalXpLands: MedalXpLands, ...reaching: Reaching[]) {
   window.history.replaceState(null, "", "/book#me");
   const before = reaching.map(tierOf).reduce<Album>((album, tier) => notYetReached(tier)(album), { ...withItems, lastVisit });
   const live = anAlbumThatAnswers(before);
   const reply = aTurnThatReaches(...reaching);
-  const after = aTurnThatPutsIn(...reaching);
+  const after = aTurnThatPutsIn(medalXpLands, ...reaching);
   const turnItem = vi.fn(async (item: string) => {
     const answer = await reply(item);
     live.answerNext(after(live.now(), item));
     return answer;
   });
   const hoggies: HoggiesRead = (asking) => (asking ? hoggiesFixtures.midway : undefined);
-  return { ...renderAlbum(shellFixtures.member, live.read, { hoggies, people: fixedPeople(withItems), commands: { turnItem } }), turnItem };
+  const gainXp = (xp: number) => act(() => live.answerNext({ ...live.now(), level: levelAt(live.now().level.xp + xp) }));
+  return { ...renderAlbum(shellFixtures.member, live.read, { hoggies, people: fixedPeople(withItems), commands: { turnItem } }), turnItem, gainXp };
 }
 
 const arrival = { timeout: 10_000 };
@@ -261,13 +267,25 @@ describe("LP19a: a milestone tier unlocks with its own beat on Milestones", { ti
     await at(10.2);
     expect(theXpChip(), "the medal's XP flies to the bar").toHaveTextContent("+250 XP");
     expect(theXpChip()).toHaveAttribute("data-metal", "silver");
-    expect(theXpChip()!.style.left, "kept on the screen though the medal's row sits at its edge").toBe("120px");
+    expect(theXpChip()!.style.left, "kept on the screen though the medal's row sits at its edge").toBe("160px");
     expect(screen.getByRole("status", { name: "Identifying" })).toHaveTextContent("+250 XP for Familiar faces · Silver");
     expect(xpWords(), "while the XP is in flight").toBe("275 XP to level 7");
 
     await at(12.1);
     expect(theXpChip()).toBeNull();
     expect(xpWords(), "once it lands").toBe("25 XP to level 7");
+  });
+
+  it("keeps the XP chip on the screen when the medal's row sits at the right edge", async () => {
+    const box = Element.prototype.getBoundingClientRect;
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      return this.classList.contains("al-ms-medal-art") ? new DOMRect(window.innerWidth - 40, 300, 40, 40) : box.call(this);
+    });
+    visit(paying(familiarFaces, 250));
+    await clickOnFakeTime(await theFirstItem());
+
+    await at(10.2);
+    expect(theXpChip()!.style.left).toBe(`${window.innerWidth - 160}px`);
   });
 
   it("holds a level the medal's XP crosses until its XP lands", async () => {
@@ -382,6 +400,39 @@ describe("LP19a: a milestone tier unlocks with its own beat on Milestones", { ti
     expect(theStage()).toBeNull();
     expect(theXpChip()).toBeNull();
     expect(xpWords()).toBe("25 XP to level 7");
+  });
+
+  it("after a skip, keeps the medal's XP in the bar until the album answers it, then follows the album again", async () => {
+    const { gainXp } = visitWhere("later", paying(familiarFaces, 250));
+    await clickOnFakeTime(await theFirstItem());
+
+    await at(5.6);
+    await act(async () => fireEvent.pointerDown(document.body));
+    await at(8);
+    expect(xpWords(), "the album has not paid the medal yet").toBe("25 XP to level 7");
+    gainXp(250);
+    expect(xpWords(), "the album pays it").toBe("25 XP to level 7");
+    gainXp(10);
+    expect(xpWords(), "and the bar follows the album again").toBe("15 XP to level 7");
+  });
+
+  it("keeps the medal's title card on a short landscape screen", async () => {
+    vi.spyOn(window, "innerHeight", "get").mockReturnValue(320);
+    vi.spyOn(window, "innerWidth", "get").mockReturnValue(568);
+    visit(paying(familiarFaces, 250));
+    await clickOnFakeTime(await theFirstItem());
+
+    await at(5.5);
+    expect(Number.parseFloat(theTitle()!.style.top) + 150, "the card's top plus its height").toBeLessThanOrEqual(320);
+  });
+
+  it("under reduced motion names the medal's XP in its line", async () => {
+    preferReducedMotion();
+    visit(paying(familiarFaces, 250));
+    await clickOnFakeTime(await theFirstItem());
+
+    await at(0.05);
+    expect(screen.getByRole("note", { name: "Medals unlocked" })).toHaveTextContent("Familiar faces · Silver · +250 XP");
   });
 
   it("under reduced motion shows the medal and its emoji in place with one line, with no flight", async () => {

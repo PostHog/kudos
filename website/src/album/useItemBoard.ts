@@ -91,6 +91,14 @@ export function useItemBoard(answered: ItemBoard | null, turnItem: (item: string
   const turnEmojis = useRef(emojis);
   turnEmojis.current = emojis;
   useForgottenOnLeavingThePage(page, landing !== null && flight === null && !turning, setLanding);
+  const liveXp = useRef(level.xp);
+  liveXp.current = level.xp;
+  const paidUpTo = useRef<number | null>(null);
+  useEffect(() => {
+    if (heldLevel === null || paidUpTo.current === null || level.xp < paidUpTo.current) return;
+    paidUpTo.current = null;
+    setHeldLevel(null);
+  }, [heldLevel, level.xp]);
   const land = useCallback(
     (item: string, { face, applied, unlocked, page, teaches }: Turned, flown: boolean) => {
       setTurnedOver((turned) => new Map(turned).set(item, face));
@@ -113,6 +121,7 @@ export function useItemBoard(answered: ItemBoard | null, turnItem: (item: string
   const teamShown = useCallback((shown: (last: Landing) => number) => setLanding((last) => (last === null ? null : { ...last, phase: "done", teamsShown: shown(last) })), []);
   const flyIn = useCallback(
     async (item: string, from: HTMLElement, answer: Promise<Turned | null>) => {
+      paidUpTo.current = null;
       setHeldLevel(level);
       let owed = 0;
       let paid = 0;
@@ -135,7 +144,9 @@ export function useItemBoard(answered: ItemBoard | null, turnItem: (item: string
         medalSettled,
         paid(xp: number) {
           paid += xp;
-          setHeldLevel(paid >= owed ? null : levelAt(level.xp + paid));
+          const standing = level.xp + paid;
+          if (paid >= owed) paidUpTo.current = standing;
+          setHeldLevel(paid >= owed && liveXp.current >= standing ? null : levelAt(standing));
         },
         nothingWaits: () => remaining.current === 0,
         emojiOf,
@@ -143,7 +154,10 @@ export function useItemBoard(answered: ItemBoard | null, turnItem: (item: string
       };
       const turned = await fly(item, from.getBoundingClientRect(), answer, arrival);
       turnEmojis.current.back(away);
-      setHeldLevel(null);
+      if (turned === null || paid < owed) {
+        paidUpTo.current = null;
+        setHeldLevel(null);
+      }
       if (turned !== null) teamShown(({ unlocked }) => unlocked.teamStickers.length);
       if (turned !== null) everyMedalShown();
       if (turned !== null && remaining.current === 0) setShown("landed");

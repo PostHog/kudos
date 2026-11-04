@@ -5,7 +5,7 @@ import type { MemberId } from "../workspace/directory";
 import type { ReachedTier } from "./milestones";
 import type { MilestoneTier } from "./records";
 
-export type MedalXp = ReachedTier & { xp: number };
+export type UnlockedTier = ReachedTier & { xp?: number };
 
 export const milestoneXpFlag = { key: "milestone-xp", safeDefault: false, values: [false, true] } as const satisfies Flag<boolean>;
 
@@ -19,8 +19,8 @@ function rewardKeyOf({ milestone, tier }: ReachedTier) {
   return `milestone:${milestone}:${tier}`;
 }
 
-export async function payTheMedals(ctx: MutationCtx, { workspace, member }: Owner, unlocked: ReachedTier[], at: number): Promise<MedalXp[]> {
-  if (unlocked.length === 0 || !(await milestoneXpPaysFor(ctx, member))) return [];
+export async function payTheMedals(ctx: MutationCtx, { workspace, member }: Owner, unlocked: ReachedTier[], at: number): Promise<UnlockedTier[]> {
+  if (unlocked.length === 0 || !(await milestoneXpPaysFor(ctx, member))) return unlocked;
   const paid = unlocked.map((reached) => ({ ...reached, xp: milestoneXpByMetal[reached.tier] }));
   for (const medal of paid) await publish(ctx, { type: "medalUnlocked", workspace, member, ...medal, rewardKey: rewardKeyOf(medal), catalogueVersion, at });
   return paid;

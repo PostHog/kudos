@@ -9,7 +9,7 @@ import type { Doc, Id } from "../../_generated/dataModel";
 import type { AlbumAnswer, AlbumRead, TurnAnswer } from "../../website/album";
 import type { Denial } from "../../website/memberQuery";
 import type { MemberId } from "../../workspace/directory";
-import { payTheMedals } from "../milestoneXp";
+import { milestoneCatalogue } from "../milestoneCatalogue";
 
 const tuesday = new Date("2026-10-13T10:00:00Z");
 const minuteMs = 60_000;
@@ -133,14 +133,14 @@ describe("LP19a: a medal unlocked by a turn pays XP by its metal", { timeout: 60
     const again = await turn(asAlice, await itemOf(alice, "sticker"));
     await settle(t);
 
-    expect(turned.unlocked.medalXp).toEqual(turned.unlocked.milestones.map((tier) => ({ ...tier, xp: 100 })));
-    expect(turned.unlocked.medalXp).toContainEqual({ ...firstFace, xp: 100 });
+    expect(turned.unlocked.milestones.map(({ tier, xp }) => [tier, xp])).toEqual(turned.unlocked.milestones.map(() => ["bronze", 100]));
+    expect(turned.unlocked.milestones).toContainEqual({ ...firstFace, xp: 100 });
     expect(paid - before, "the pack bonus and every bronze medal").toBe((turned.applied?.xp ?? 0) + 100 * turned.unlocked.milestones.length);
-    expect(again).not.toHaveProperty("unlocked.medalXp");
+    expect(again).toMatchObject({ unlocked: { milestones: [] } });
     expect((await albumOf(asAlice)).level.xp, "after the replay").toBe(paid);
   });
 
-  test("pays silver 250, gold 500 and diamond 1000, recorded once under the tier's reward key", async () => {
+  test("a turn that unlocks silver, gold and diamond pays 250, 500 and 1000, each recorded once under the tier's reward key", async () => {
     await switchWebsite(t, postHog, true, ...itemsOn, "milestone-xp");
     const member = await memberOf(alice);
     const medals = [
@@ -148,17 +148,23 @@ describe("LP19a: a medal unlocked by a turn pays XP by its metal", { timeout: 60
       { milestone: "teams", tier: "gold" },
       { milestone: "hoggies", tier: "diamond" },
     ] as const;
-
-    const paid = await t.run(async (ctx) => {
-      const first = await payTheMedals(ctx, { workspace: "T1", member }, [...medals], Date.now());
-      await payTheMedals(ctx, { workspace: "T1", member }, [medals[0]], Date.now());
-      return first;
+    await t.run(async (ctx) => {
+      for (const medal of medals) await ctx.db.insert("milestoneTiers", { member, ...medal, at: Date.now(), catalogue: milestoneCatalogue.version });
     });
+    await thanks(alice, bob);
+    const asAlice = await signedIn(alice);
+    const before = (await albumOf(asAlice)).level.xp;
+
+    const turned = await turnTheItem(asAlice, "sticker");
+    await settle(t);
+    await turn(asAlice, await itemOf(alice, "sticker"));
     await settle(t);
 
-    expect(paid.map(({ xp }) => xp)).toEqual([250, 500, 1000]);
+    for (const [medal, xp] of [[medals[0], 250], [medals[1], 500], [medals[2], 1000]] as const) expect(turned.unlocked.milestones).toContainEqual({ ...medal, xp });
+    const owed = turned.unlocked.milestones.reduce((sum, { xp = 0 }) => sum + xp, 0);
+    expect((await albumOf(asAlice)).level.xp - before, "the pack bonus and every medal, once").toBe((turned.applied?.xp ?? 0) + owed);
     const rewards = await t.run((ctx) => ctx.db.query("rewardRecords").collect());
-    expect(rewards.filter(({ key }) => key.startsWith("milestone:")).map(({ key, xp }) => [key, xp])).toEqual([
+    expect(rewards.filter(({ key }) => medals.some(({ milestone, tier }) => key === `milestone:${milestone}:${tier}`)).map(({ key, xp }) => [key, xp])).toEqual([
       ["milestone:people:silver", 250],
       ["milestone:teams:gold", 500],
       ["milestone:hoggies:diamond", 1000],
@@ -174,7 +180,7 @@ describe("LP19a: a medal unlocked by a turn pays XP by its metal", { timeout: 60
     await settle(t);
 
     expect(turned.unlocked.milestones).toContainEqual(firstFace);
-    expect(turned.unlocked).not.toHaveProperty("medalXp");
+    expect(turned.unlocked.milestones.filter((tier) => "xp" in tier)).toEqual([]);
     expect((await albumOf(asAlice)).level.xp - before).toBe(turned.applied?.xp ?? 0);
   });
 });

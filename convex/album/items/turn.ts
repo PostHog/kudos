@@ -2,7 +2,6 @@ import type { Doc, Id } from "../../_generated/dataModel";
 import { storedRangeOf } from "../hoggies/rarityCaps";
 import type { MutationCtx, QueryCtx } from "../../_generated/server";
 import { hypeFaceOf, unlockHypeEmojiOf, type HypeEmoji } from "../earnedEmojis";
-import type { ReachedTier } from "../milestones";
 import { isTrayKey, openThePackOnceAllTurned, trayItemKeyed } from "../opening";
 import { crateKeyOf } from "../packs";
 import { markTrayStickerPutIn, placeFromTheTray, putStickerIn } from "../putIn";
@@ -21,7 +20,7 @@ import type { MemberId } from "../../workspace/directory";
 import { achievementHoggiesShownTo, isAnAchievement } from "./achievementFlag";
 import { stickerWaitsFor } from "./ledger";
 import { unlockMilestoneTiers } from "./milestoneUnlocks";
-import type { MedalXp } from "../milestoneXp";
+import type { UnlockedTier } from "../milestoneXp";
 
 export type TurnedFace = { kind: "hoggie"; drop: Drop } | { kind: "sticker"; person: MemberId; isNew: boolean };
 
@@ -29,7 +28,7 @@ export type LandingPage = { kind: "hoggies" } | { kind: "team"; team: string } |
 
 export type UnlockedHype = HypeEmoji & { from: string };
 
-export type Unlocked = { teamStickers: TeamSticker[]; hype: UnlockedHype | null; milestones: ReachedTier[]; medalXp?: MedalXp[] };
+export type Unlocked = { teamStickers: TeamSticker[]; hype: UnlockedHype | null; milestones: UnlockedTier[] };
 
 export type Turned = { face: TurnedFace; applied: AppliedReward | null; page: LandingPage; unlocked: Unlocked; again: boolean };
 
@@ -49,11 +48,11 @@ export async function turn(ctx: MutationCtx, owner: PageOwner, item: Id<"items">
   const landed = await landFirstTime(ctx, owner, row, at);
   if (landed === null) return null;
   const hype = await hypeUnlockedBy(ctx, owner, row, at);
-  const { milestones, medalXp } = await unlockMilestoneTiers(ctx, owner, at);
+  const milestones = await unlockMilestoneTiers(ctx, owner, at);
   await ctx.db.patch(row._id, { turnedAt: at });
   await openThePackOnceAllTurned(ctx, row, at);
   await publish(ctx, { type: "itemTurned", workspace: owner.workspace, member: owner.member, ...analyticsFaceOf(landed.face), at });
-  return { face: landed.face, applied: landed.applied, page: landed.page, unlocked: { teamStickers: landed.teamStickers, hype, milestones, ...(medalXp.length > 0 && { medalXp }) }, again: false };
+  return { face: landed.face, applied: landed.applied, page: landed.page, unlocked: { teamStickers: landed.teamStickers, hype, milestones }, again: false };
 }
 
 async function landFirstTime(ctx: MutationCtx, owner: PageOwner, row: Item, at: number): Promise<Landed | null> {

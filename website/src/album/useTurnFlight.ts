@@ -152,7 +152,7 @@ function stepsOf(clock: TurnClock, boxes: FlightBoxes, change: Change, arrival: 
 
 async function showTheMedal(clock: TurnClock, boxes: FlightBoxes, change: Change, tier: ReachedTier, xp: number) {
   const size = Math.round(Math.min(220, Math.min(window.innerWidth, window.innerHeight) * 0.3));
-  const centre = { x: window.innerWidth / 2, y: window.innerHeight * 0.4 };
+  const centre = { x: window.innerWidth / 2, y: Math.max(size / 2, Math.min(window.innerHeight * 0.4, window.innerHeight - medalTitleRoom - size / 2)) };
   flushSync(() => change({ medal: { tier, xp, phase: "in", centre, size, art: rectOf(theMedalArt(tier)) } }));
   await clock.animate(boxes.medal.current, medalInFrames, { duration: turnTiming.medalInMs, easing: "cubic-bezier(0.25, 0.8, 0.3, 1)" });
 }
@@ -210,7 +210,9 @@ function emojiSpotOf(source: EmojiSource): Element | null {
   }
 }
 
-const medalXpHalfWidth = 120;
+const medalTitleRoom = 170;
+
+const medalXpHalfWidth = 160;
 
 function withinTheScreen(x: number) {
   return window.innerWidth <= medalXpHalfWidth * 2 ? window.innerWidth / 2 : Math.min(Math.max(x, medalXpHalfWidth), window.innerWidth - medalXpHalfWidth);
