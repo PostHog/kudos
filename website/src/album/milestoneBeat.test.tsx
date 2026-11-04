@@ -261,6 +261,7 @@ describe("LP19a: a milestone tier unlocks with its own beat on Milestones", { ti
     await at(10.2);
     expect(theXpChip(), "the medal's XP flies to the bar").toHaveTextContent("+250 XP");
     expect(theXpChip()).toHaveAttribute("data-metal", "silver");
+    expect(theXpChip()!.style.left, "kept on the screen though the medal's row sits at its edge").toBe("120px");
     expect(screen.getByRole("status", { name: "Identifying" })).toHaveTextContent("+250 XP for Familiar faces · Silver");
     expect(xpWords(), "while the XP is in flight").toBe("275 XP to level 7");
 

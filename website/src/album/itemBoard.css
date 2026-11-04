@@ -758,13 +758,11 @@
   inset: 0;
   background: radial-gradient(circle at 50% 40%, color-mix(in oklab, var(--burst) 26%, transparent), color-mix(in oklab, var(--foreground) 62%, transparent) 70%);
   animation: ib-fade-in calc(380 * var(--ib-time)) ease-out both;
-  transition: opacity calc(420 * var(--ib-time)) ease;
 }
 
 .ib-medal-stage:not([data-phase="in"]) .ib-medal-scrim,
 .ib-medal-stage:not([data-phase="in"]) .ib-medal-title {
-  opacity: 0;
-  transition: opacity calc(300 * var(--ib-time)) ease;
+  animation: ib-fade-out calc(300 * var(--ib-time)) ease both;
 }
 
 .ib-medal-burst {
@@ -894,6 +892,16 @@
 
 .ib-medal-xp[data-metal="diamond"] .ib-medal-xp-count {
   font-size: 2.5rem;
+}
+
+@keyframes ib-fade-out {
+  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0;
+  }
 }
 
 @keyframes ib-fade-in {

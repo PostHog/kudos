@@ -174,7 +174,7 @@ async function payTheMedal(clock: TurnClock, change: Change, arrival: Arrival, t
   if (xp === 0) return;
   const art = rectOf(theMedalArt(tier));
   const bar = document.querySelector(".al-xp-track")?.getBoundingClientRect();
-  const from = { x: art.left + art.width / 2, y: art.top + art.height / 2 };
+  const from = { x: withinTheScreen(art.left + art.width / 2), y: art.top + art.height / 2 };
   change({ medalXp: { xp, tier, from, to: bar === undefined ? from : { x: bar.left + bar.width * 0.8, y: bar.top + bar.height / 2 } } });
   await clock.sleep(turnTiming.medalXpMs);
   change({ medalXp: null });
@@ -208,6 +208,12 @@ function emojiSpotOf(source: EmojiSource): Element | null {
     case "medal":
       return theMedal(source.tier)?.querySelector(".al-ms-emoji") ?? theMedal(source.tier);
   }
+}
+
+const medalXpHalfWidth = 120;
+
+function withinTheScreen(x: number) {
+  return window.innerWidth <= medalXpHalfWidth * 2 ? window.innerWidth / 2 : Math.min(Math.max(x, medalXpHalfWidth), window.innerWidth - medalXpHalfWidth);
 }
 
 function rectOf(element: Element | null | undefined) {
