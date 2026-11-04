@@ -150,7 +150,7 @@ export function projectKudosGiven(event: KudosGivenEvent, history: GivingHistory
 }
 
 function kudosGiven(event: KudosGivenEvent, { newRecipients }: GivingHistory): ProductEvent {
-  const kudosPerRecipient = event.awards[0]?.kudos ?? 0;
+  const kudos = event.awards.map((award) => award.kudos);
   const wordCount = wordCountOf(event.annotations);
   return {
     event: "kudos given",
@@ -158,8 +158,8 @@ function kudosGiven(event: KudosGivenEvent, { newRecipients }: GivingHistory): P
     at: event.at,
     properties: {
       recipients: event.awards.length,
-      kudos_per_recipient: kudosPerRecipient,
-      kudos_total: event.awards.length * kudosPerRecipient,
+      kudos_per_recipient: Math.max(0, ...kudos),
+      kudos_total: kudos.reduce((sum, each) => sum + each, 0),
       skipped_mentions: event.skippedMentions,
       retry: event.retry,
       in_thread: event.inThread,

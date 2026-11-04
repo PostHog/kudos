@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { FakeSlack } from "../../testing/fakeSlack";
 import { flagsLoaded, flagsOnForEveryone } from "../../testing/flags";
 import { signingSecret } from "../../testing/signedSlack";
-import { edit, kudosReceived, post, react, settle, testBackend, type Backend } from "../../testing/slackBackend";
+import { edit, kudosReceived, kudosSpent, post, react, settle, testBackend, type Backend } from "../../testing/slackBackend";
 import { emoji, mention, section, text, tonedEmoji } from "../../testing/slackMessages";
 import { internal } from "../_generated/api";
 import { xpToReach } from "../progression/levels";
@@ -10,6 +10,7 @@ import { pickKudosEmoji } from "../album/kudosEmojis";
 import { milestoneCatalogue } from "../album/milestoneCatalogue";
 import { recordReward, standingOf } from "../progression/progression";
 import type { MemberId } from "../workspace/directory";
+import type { AttemptFailedEvent } from "../bus/events";
 
 const now = new Date("2026-10-13T10:00:00Z");
 const messageTs = `${Math.floor(now.getTime() / 1000) - 3600}.000100`;
@@ -54,6 +55,16 @@ describe("an emoji the giver unlocked in the album counts like the workspace's k
     await settle(t);
 
     expect(await kudosReceived(t, "U_BOB")).toBe(1);
+  });
+
+  test("a hype emoji the giver holds gives kudos to every mentioned teammate", async () => {
+    const t = await workspaceWithEmojiNames();
+    await heldHypeEmojiOf(t, "U_ALICE", "U_BOB");
+
+    await post(t, [section(text(saysWhy), mention("U_BOB"), text(" "), mention("U_CAROL"), text(" "), emoji(bobsHypeEmoji))], { user: "U_ALICE", ts: messageTs });
+    await settle(t);
+
+    expect({ bob: await kudosReceived(t, "U_BOB"), carol: await kudosReceived(t, "U_CAROL") }).toEqual({ bob: 1, carol: 1 });
   });
 
   test("a kudos message with an emoji only someone else unlocked gives nothing", async () => {
@@ -305,6 +316,40 @@ describe("in a kudos message, an earned emoji counts only when the giver picked 
     expect(await kudosReceived(t, "U_BOB")).toBe(1);
   });
 
+  test("the hype emoji of one of two mentioned teammates gives kudos only to its person, and the giver hears the other got none", async () => {
+    const t = await workspaceWithEmojiNames();
+    await heldHypeEmojiOf(t, "U_ALICE", "U_BOB");
+
+    await post(t, [section(text(saysWhy), mention("U_BOB"), text(" "), mention("U_CAROL"), text(" "), emoji(bobsHypeEmoji))], { user: "U_ALICE", ts: messageTs });
+    await settle(t);
+
+    expect({ bob: await kudosReceived(t, "U_BOB"), carol: await kudosReceived(t, "U_CAROL"), spent: await kudosSpent(t) }).toEqual({ bob: 1, carol: 0, spent: 1 });
+    expect(repliesTo("U_ALICE")[0]?.slice(0, 2)).toEqual(["<@U_BOB> got 1 kudos from you. You have 2 kudos left today.", "I skipped <@U_CAROL>: a hype emoji gives kudos only to its own person."]);
+  });
+
+  test("beside the workspace's kudos emoji, a repeated hype emoji gives its person the repeats and the other mentioned teammate one", async () => {
+    const t = await workspaceWithEmojiNames();
+    await heldHypeEmojiOf(t, "U_ALICE", "U_BOB");
+
+    await post(t, [section(text(saysWhy), mention("U_BOB"), text(" "), mention("U_CAROL"), text(" "), emoji("taco"), emoji(bobsHypeEmoji), emoji(bobsHypeEmoji))], { user: "U_ALICE", ts: messageTs });
+    await settle(t);
+
+    expect({ bob: await kudosReceived(t, "U_BOB"), carol: await kudosReceived(t, "U_CAROL"), spent: await kudosSpent(t) }).toEqual({ bob: 2, carol: 1, spent: 3 });
+    expect(repliesTo("U_ALICE")[0]?.[0]).toBe("<@U_BOB> got 2 kudos and <@U_CAROL> got 1 kudos from you. That was your last kudos for today, and you'll have 3 more at midnight.");
+  });
+
+  test("a message whose recipients would get different kudos than the giver has left gives nothing and says what it needs", async () => {
+    const t = await workspaceWithEmojiNames();
+    await heldHypeEmojiOf(t, "U_ALICE", "U_BOB");
+
+    await post(t, [section(text(saysWhy), mention("U_BOB"), text(" "), mention("U_CAROL"), text(" "), emoji("taco"), emoji(bobsHypeEmoji), emoji(bobsHypeEmoji), emoji(bobsHypeEmoji))], { user: "U_ALICE", ts: messageTs });
+    await settle(t);
+
+    expect({ bob: await kudosReceived(t, "U_BOB"), carol: await kudosReceived(t, "U_CAROL") }).toEqual({ bob: 0, carol: 0 });
+    expect(repliesTo("U_ALICE")).toEqual([["This needs 4 kudos, but you have 3 left today. Edit the message to give fewer and I'll try again, or edit it after midnight when you have 3 again."]]);
+    expect(await attemptsFailed(t)).toEqual([{ recipients: 2, perRecipient: 3, cost: 4 }]);
+  });
+
   test("the hype emoji of a teammate the giver doesn't mention gives no kudos", async () => {
     const t = await workspaceWithEmojiNames();
     await heldHypeEmojiOf(t, "U_ALICE", "U_BOB");
@@ -361,6 +406,17 @@ describe("the app reacts with the kudos emoji closest after the recipient's ment
     await settle(t);
 
     expect(slack.reactionsOn("C1", messageTs)).toEqual([reaction]);
+  });
+
+  test("the app reacts with the kudos emoji closest after the first recipient's mention that counts for them, never another teammate's hype emoji", async () => {
+    flagsOnForEveryone(slack.fetch, "hugs", "kudos-emoji-picks");
+    const t = await workspaceWithEmojiNames();
+    await heldHypeEmojiOf(t, "U_ALICE", "U_BOB");
+
+    await post(t, [section(text(saysWhy), mention("U_CAROL"), text(" "), emoji(bobsHypeEmoji), text(" "), mention("U_BOB"), text(" "), emoji("taco"))], { user: "U_ALICE", ts: messageTs });
+    await settle(t);
+
+    expect(slack.reactionsOn("C1", messageTs)).toEqual(["taco"]);
   });
 });
 
@@ -439,6 +495,18 @@ async function reachedLevelFive(t: Backend, user: string) {
 async function xpOf(t: Backend, user: string) {
   const member = await memberOf(t, user);
   return t.run(async (ctx) => (await standingOf(ctx, member)).xp);
+}
+
+function repliesTo(user: string) {
+  return slack.ephemeralsTo(user).map(({ text }) => String(text).split("\n"));
+}
+
+async function attemptsFailed(t: Backend) {
+  const jobs = await t.run(async (ctx) => (await ctx.db.system.query("_scheduled_functions").collect()).filter(({ name }) => name === "analytics/subscribers:recordAttemptFailed"));
+  return jobs.map(({ args }) => {
+    const { recipients, perRecipient, cost } = (args[0] as { event: AttemptFailedEvent }).event;
+    return { recipients, perRecipient, cost };
+  });
 }
 
 async function memberOf(t: Backend, user: string): Promise<MemberId> {

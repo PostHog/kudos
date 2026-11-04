@@ -10,7 +10,7 @@ import { replyPrivately, type Given } from "../feedback/replies";
 const now = new Date("2026-10-13T10:00:00Z");
 const xpLevels = "xp-levels";
 const ref = { workspace: "T1", conversation: "C1", message: "1760349600.000100" };
-const givenToBob: Given = { recipients: ["U_BOB"], perRecipient: 1, left: 9, skipped: [], awards: [{ kudos: 1 }] };
+const givenToBob: Given = { recipients: [{ user: "U_BOB", kudos: 1 }], left: 9, skipped: [], awards: [{ kudos: 1 }] };
 
 let slack: FakeSlack;
 let postHog: FakePostHog;

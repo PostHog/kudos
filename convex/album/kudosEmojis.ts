@@ -1,8 +1,8 @@
 import type { MutationCtx, QueryCtx } from "../_generated/server";
-import type { Mention } from "../engine/messageEvent";
-import type { ParseHook } from "../parser/parser";
+import type { ChatUserId, Mention } from "../engine/messageEvent";
+import type { KudosEmojiClaim, ParseHook } from "../parser/parser";
 import type { MemberId } from "../workspace/directory";
-import { earnedEmojiNamesAmong, holdsEarnedEmoji } from "./earnedEmojis";
+import { earnedEmojisAmong, holdsEarnedEmoji } from "./earnedEmojis";
 import { firstThankYouEmoji, mostKudosEmojiPicks } from "./emojiCatalogue";
 import { kudosEmojiPicksCountFor } from "./flag";
 
@@ -10,35 +10,47 @@ const hypePrefix = "hype:";
 
 export type KudosEmojiPick = { kind: "picked"; picks: string[] } | { kind: "full" } | { kind: "refused" };
 
+type CountsFor = Omit<KudosEmojiClaim, "name">;
+
 export const earnedEmojiHook: ParseHook = {
   name: "earned emoji",
   kudosEmoji: async (ctx, { workspace, giver }, { emoji, mentions }) => {
     if (giver === undefined) return [];
-    const counts = (await kudosEmojiPicksCountFor(ctx, giver)) ? await pickedOrMentioned(ctx, giver, mentions) : everyEarnedEmoji;
-    return earnedEmojiNamesAmong(ctx, workspace, giver, emoji, counts);
+    const countsFor = (await kudosEmojiPicksCountFor(ctx, giver)) ? await pickedOrMentioned(ctx, giver, mentions) : everyone;
+    const counting = new Map<string, CountsFor>();
+    const earned = await earnedEmojisAmong(ctx, workspace, giver, emoji, async (id) => {
+      const whom = await countsFor(id);
+      if (whom !== null) counting.set(id, whom);
+      return whom !== null;
+    });
+    return earned.map(({ name, emoji: id }) => ({ name, ...counting.get(id) }));
   },
 };
 
-const everyEarnedEmoji = () => true;
+const everyone = async (): Promise<CountsFor> => ({});
 
 async function pickedOrMentioned(ctx: QueryCtx, giver: MemberId, mentions: Mention[]) {
   const picked = new Set([firstThankYouEmoji, ...(await pickRowsOf(ctx, giver)).map(({ emoji }) => emoji)]);
   const mentioned = mentionedPeopleIn(mentions);
-  return async (earned: string) => (isHype(earned) ? isHypeEmojiOfOneOf(ctx, earned, mentioned) : picked.has(earned));
+  return async (earned: string): Promise<CountsFor | null> => {
+    if (!isHype(earned)) return picked.has(earned) ? {} : null;
+    const person = await mentionedPersonOf(ctx, earned, mentioned);
+    return person === null ? null : { onlyFor: person };
+  };
 }
 
 function isHype(emoji: string): boolean {
   return emoji.startsWith(hypePrefix);
 }
 
-function mentionedPeopleIn(mentions: Mention[]): Set<string> {
+function mentionedPeopleIn(mentions: Mention[]): Set<ChatUserId> {
   return new Set(mentions.flatMap((mention) => (mention.kind === "person" ? [mention.user] : [])));
 }
 
-async function isHypeEmojiOfOneOf(ctx: QueryCtx, emoji: string, users: Set<string>): Promise<boolean> {
-  const person = ctx.db.normalizeId("members", emoji.slice(hypePrefix.length));
+async function mentionedPersonOf(ctx: QueryCtx, hypeEmoji: string, mentioned: Set<ChatUserId>): Promise<ChatUserId | null> {
+  const person = ctx.db.normalizeId("members", hypeEmoji.slice(hypePrefix.length));
   const row = person === null ? null : await ctx.db.get(person);
-  return row !== null && users.has(row.user);
+  return row !== null && mentioned.has(row.user) ? row.user : null;
 }
 
 export async function kudosEmojiPicksOf(ctx: QueryCtx, member: MemberId): Promise<string[]> {

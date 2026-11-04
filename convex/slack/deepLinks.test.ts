@@ -13,7 +13,7 @@ import type { MemberId } from "../workspace/directory";
 const now = new Date("2026-10-13T10:00:00Z");
 const siteUrl = "https://kudos-site.test";
 const ref = { workspace: "T1", conversation: "C1", message: "1760349600.000100" };
-const givenToBob: Given = { recipients: ["U_BOB"], perRecipient: 1, left: 9, skipped: [], awards: [{ kudos: 1 }] };
+const givenToBob: Given = { recipients: [{ user: "U_BOB", kudos: 1 }], left: 9, skipped: [], awards: [{ kudos: 1 }] };
 const leaderboardReady = `section: *Leaderboard* is ready. It opens the boards. [link: Open ${siteUrl}/leaderboard?src=reply]`;
 const openLeaderboardCommand = JSON.stringify({ type: "openUnlock", feature: "leaderboard" });
 const openLeaderboard = { type: "button", action_id: openLeaderboardCommand, value: openLeaderboardCommand } as const;

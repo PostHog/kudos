@@ -48,10 +48,11 @@ type Gains = Infer<typeof gainsValidator>;
 
 type GainsShown = Omit<Required<Gains>, "questsDone"> & { questsDone: QuestDoneShown[] };
 
-export type SkipReason = "self" | "bot" | "not-a-member" | "group-or-broadcast";
+export type SkipReason = "self" | "bot" | "not-a-member" | "group-or-broadcast" | "someone-elses-hype-emoji";
 export type SkippedMention = { mention: Mention; reason: SkipReason };
 
-export type Given = { recipients: ChatUserId[]; perRecipient: number; left: number; skipped: SkippedMention[]; awards: Pick<Award, "kudos">[] };
+export type Thanked = { user: ChatUserId; kudos: number };
+export type Given = { recipients: Thanked[]; left: number; skipped: SkippedMention[]; awards: Pick<Award, "kudos">[] };
 export type OverAllowance = { cost: number; recipients: number; perRecipient: number; left: number };
 export type Invalid = { skipped: SkippedMention[] };
 
@@ -267,13 +268,19 @@ export function renderReply(reply: Exclude<Reply, { kind: "given" }>): Line[] {
   }
 }
 
-function givenLine({ recipients, perRecipient, left }: Given, base: number): Line {
-  const whatIsLeft = left > 0 ? `You have ${left} kudos left today.` : lastKudosOf(base);
-  return [...listOf(recipients.map((user) => [person(user)])), { text: ` got ${perRecipient} kudos from you. ${whatIsLeft}` }];
+function givenLine(given: Given, base: number): Line {
+  const whatIsLeft = given.left > 0 ? `You have ${given.left} kudos left today.` : lastKudosOf(base);
+  return [...headlineOf(given), { text: `. ${whatIsLeft}` }];
 }
 
-function headlineOf({ recipients, perRecipient }: Given): Line {
-  return [...listOf(recipients.map((user) => [person(user)])), { text: ` got ${perRecipient} kudos from you` }];
+function headlineOf({ recipients }: Given): Line {
+  return [...listOf([...byKudos(recipients)].map(([kudos, users]) => [...listOf(users.map((user) => [person(user)])), { text: ` got ${kudos} kudos` }])), { text: " from you" }];
+}
+
+function byKudos(recipients: Thanked[]) {
+  const grouped = new Map<number, ChatUserId[]>();
+  for (const { user, kudos } of recipients) grouped.set(kudos, [...(grouped.get(kudos) ?? []), user]);
+  return grouped;
 }
 
 function leftOf({ left }: Given, base: number) {
@@ -285,9 +292,10 @@ function lastKudosOf(base: number) {
 }
 
 function overAllowanceLine({ cost, recipients, perRecipient, left }: OverAllowance, base: number): Line {
+  const breakdown = cost === recipients * perRecipient ? ` (${people(recipients)} × ${perRecipient} kudos emoji)` : "";
   return [
     {
-      text: `This needs ${cost} kudos (${people(recipients)} × ${perRecipient} kudos emoji), but you have ${left} left today. Edit the message to give fewer and I'll try again, or edit it after midnight when you have ${base} again.`,
+      text: `This needs ${cost} kudos${breakdown}, but you have ${left} left today. Edit the message to give fewer and I'll try again, or edit it after midnight when you have ${base} again.`,
     },
   ];
 }
@@ -323,6 +331,8 @@ function reasonLine(reason: SkipReason, mention: Mention): Line {
       return [{ mention }, { text: " isn't an active member of this workspace" }];
     case "group-or-broadcast":
       return [{ text: "`@here`, `@channel` and user groups don't receive kudos, so tag people individually" }];
+    case "someone-elses-hype-emoji":
+      return [{ text: "a hype emoji gives kudos only to its own person" }];
   }
 }
 
