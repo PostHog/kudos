@@ -194,15 +194,15 @@ Items: every reward a member has not seen (LP2, `spec/core-loop.md` on `spec/cor
   checklist: resumption-coverage dismissed: no batch operation resumes; each turn is one mutation
   checklist: circuit-breaker-policy dismissed: no breaker is declared; nothing is sent
   checklist: declared-target-coverage dismissed: turnItem is the only mutation that turns an item, reached by the oracle through a signed-in website session
-- a medal unlocked by a turn pays XP by its metal: While `milestone-xp` is on for the member, the turn that unlocks a milestone tier answers it in `medalXp` with its XP, 100 for bronze, 250 for silver, 500 for gold and 1,000 for diamond, and publishes `medalUnlocked` for it, which Progression records once under `milestone:{milestone}:{tier}`, so a replay or a redelivered fact pays nothing more; with the flag off it answers no `medalXp` and pays nothing, and a tier unlocked before the flag pays nothing later.
+- a medal unlocked by a turn pays XP by its metal: While `milestone-xp` is on for the member, the turn that unlocks a milestone tier answers it in `medalXp` with its XP, 100 for bronze, 250 for silver, 500 for gold and 1,000 for diamond, and publishes `medalUnlocked` for it, which payMedalUnlocked records once through recordReward under `milestone:{milestone}:{tier}`, so a replay or a redelivered fact pays nothing more; with the flag off it answers no `medalXp` and pays nothing, and a tier unlocked before the flag pays nothing later.
   over: a sticker item turned that unlocks the first people tier with the flag on, its XP read before and after the scheduled payment and after a replay; silver, gold and diamond tiers paid through payTheMedals, their reward records read by key; the same turn with the flag off
   via: LP19a: a medal unlocked by a turn pays XP by its metal
   refuted: payTheMedals answered the medals' XP without publishing medalUnlocked -> 2 of 3 tests failed: the member's XP stayed at the item's pack bonus and no reward record was written under the tier's key (2026-11-04)
-  because: the product owner asked that a medal pay massive XP, more the harder its tier, added at the end of its beat (LP19a); paying through a bus fact keeps the album from writing progression, and the reward key keeps a tier from paying twice
+  because: the product owner asked that a medal pay massive XP, more the harder its tier, added at the end of its beat (LP19a); paying through a bus fact keeps the album from writing XP itself, and the reward key keeps a tier from paying twice
   kinds: state, output
   checklist: legal-state-succession dismissed: the reward record is insert-only and keyed by the tier, so a tier pays once
   checklist: supersession-safety dismissed: the fact is published in the turn's own mutation, once per tier its emoji's seen mark lets it unlock, and recordReward writes nothing for a key it holds
-  checklist: commit-ordered-effects dismissed: publishing the fact schedules Progression's mutation in the turn's transaction, so it commits with the turn or not at all
+  checklist: commit-ordered-effects dismissed: publishing the fact schedules payMedalUnlocked in the turn's transaction, so it commits with the turn or not at all
   checklist: durable-dispatch-intent dismissed: the bus schedules the payment in the publisher's transaction
   checklist: revalidated-permission dismissed: the flag, the session and the item's owner are read in the same mutation that turns it
   checklist: scoped-reads dismissed: the turn reads only the member's own tiers and emojis' seen rows
@@ -211,7 +211,7 @@ Items: every reward a member has not seen (LP2, `spec/core-loop.md` on `spec/cor
   checklist: resumption-coverage dismissed: no batch operation resumes; each turn is one mutation
   checklist: circuit-breaker-policy dismissed: no breaker is declared; nothing is sent outside Convex
   checklist: declared-target-coverage dismissed: unlockMilestoneTiers, run only by the turn, is the only caller of payTheMedals
-  checklist: destination-confinement dismissed: medalUnlocked goes only to the subscriber the bus registers, Progression's payMedalUnlocked
+  checklist: destination-confinement dismissed: medalUnlocked goes only to the subscriber the bus registers, payMedalUnlocked
   checklist: redaction dismissed: the fact and the answer name only the member's own tier and its XP
 - a milestone tier unlocks once, in the turn that brings it: While `hidden-items` is on, getAlbum answers a milestone tier the member reached but whose emoji they have not seen as not yet earned, with its emoji unearned, so no emoji moment shows it; the turn that unlocks it answers it once and marks its emoji seen, and getAlbum then answers it earned from its reaching with `unlockedAt` at the turn; with the flag off a tier is earned with its emoji unseen from its reaching, as before.
   over: a sticker item turned that reaches the first people tier and its replay; a thoughtful kudos whose first thoughtful tier waits through getAlbum before the giver's next turn, that turn and the one after it; the same kudos with hidden-items off

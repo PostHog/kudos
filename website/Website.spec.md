@@ -164,7 +164,7 @@ The browser package, the signed-in surface where a member sees their kudos besid
   via: LP19a: a milestone tier unlocks with its own beat on Milestones
   refuted: milestoneBeatsOf played no beat for the tiers the turn answered -> 4 of 5 tests failed: no medal burst, caption or medal stage played after the item landed (2026-10-21)
   refuted: the strip kept the reduced-motion medals line after the beat had played the medal on Milestones -> 1 of 6 tests red: the medals line stayed on the strip once the beat had played (2026-10-21)
-  refuted: the beat put no held tier in its row before the fade -> 1 of 1 tests failed: the Hoggies diamond row was missing when the beat jumped to it, so the medal popped mid-screen (2026-11-04)
+  refuted: the beat put no held tier in its row before the fade -> 1 of 1 tests failed: the Hoggie hunter diamond row was missing when the beat jumped to it, so the medal popped mid-screen (2026-11-04)
   refuted: the medal's XP chip landed without paying the bar -> 3 of 3 tests failed: the bar stayed at the standing before the medal's XP after the chip landed and after a skip (2026-11-04)
   because: the product owner gave a milestone its own beat (LP19a): a tier shown unlocked before its beat would give it away, a scroll to the medal would read as moving the page, and a member who has seen it moves on with a click (LP21); the product owner asked for a bigger, smoother beat that no longer cuts off, and for XP scaled by the tier added at its end, after the unlock, so the bar must not show that XP before the chip lands
   kinds: output
