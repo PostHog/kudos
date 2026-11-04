@@ -12,7 +12,7 @@ export function KudosEmojiPicker({ album, pickKudosEmoji, Heading = "h2" }: Pick
   const heading = useId();
   const [replied, setReplied] = useState<Reply | null>(null);
   const [sending, setSending] = useState(false);
-  const pickable = usableNowOf(album.emojis).filter(({ id }) => id !== firstThankYouEmoji);
+  const pickable = usableNowOf(album.emojis).filter(({ id, kind }) => id !== firstThankYouEmoji && kind !== "hype");
   if (!picksKudosEmojis(album)) return null;
   const read = album.kudosEmojiPicks;
   const picked = new Set(replied !== null && replied.to === read ? replied.picks : (read ?? []));

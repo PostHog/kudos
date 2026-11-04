@@ -24,7 +24,11 @@ const everyEarnedEmoji = () => true;
 async function pickedOrMentioned(ctx: QueryCtx, giver: MemberId, mentions: Mention[]) {
   const picked = new Set([firstThankYouEmoji, ...(await pickRowsOf(ctx, giver)).map(({ emoji }) => emoji)]);
   const mentioned = mentionedPeopleIn(mentions);
-  return async (earned: string) => picked.has(earned) || (await isHypeEmojiOfOneOf(ctx, earned, mentioned));
+  return async (earned: string) => (isHype(earned) ? isHypeEmojiOfOneOf(ctx, earned, mentioned) : picked.has(earned));
+}
+
+function isHype(emoji: string): boolean {
+  return emoji.startsWith(hypePrefix);
 }
 
 function mentionedPeopleIn(mentions: Mention[]): Set<string> {
@@ -32,7 +36,6 @@ function mentionedPeopleIn(mentions: Mention[]): Set<string> {
 }
 
 async function isHypeEmojiOfOneOf(ctx: QueryCtx, emoji: string, users: Set<string>): Promise<boolean> {
-  if (!emoji.startsWith(hypePrefix)) return false;
   const person = ctx.db.normalizeId("members", emoji.slice(hypePrefix.length));
   const row = person === null ? null : await ctx.db.get(person);
   return row !== null && users.has(row.user);
@@ -40,8 +43,12 @@ async function isHypeEmojiOfOneOf(ctx: QueryCtx, emoji: string, users: Set<strin
 
 export async function kudosEmojiPicksOf(ctx: QueryCtx, member: MemberId): Promise<string[]> {
   const held: string[] = [];
-  for (const { emoji } of await pickRowsOf(ctx, member)) if (await holdsEarnedEmoji(ctx, member, emoji)) held.push(emoji);
+  for (const { emoji } of await pickRowsOf(ctx, member)) if (await isPickableBy(ctx, member, emoji)) held.push(emoji);
   return held;
+}
+
+async function isPickableBy(ctx: QueryCtx, member: MemberId, emoji: string): Promise<boolean> {
+  return emoji !== firstThankYouEmoji && !isHype(emoji) && (await holdsEarnedEmoji(ctx, member, emoji));
 }
 
 export async function pickKudosEmoji(ctx: MutationCtx, member: MemberId, emoji: string, picked: boolean): Promise<KudosEmojiPick> {
@@ -50,18 +57,18 @@ export async function pickKudosEmoji(ctx: MutationCtx, member: MemberId, emoji: 
     if (existing !== undefined) await ctx.db.delete(existing._id);
     return { kind: "picked", picks: await kudosEmojiPicksOf(ctx, member) };
   }
-  if (emoji === firstThankYouEmoji || !(await holdsEarnedEmoji(ctx, member, emoji))) return { kind: "refused" };
+  if (!(await isPickableBy(ctx, member, emoji))) return { kind: "refused" };
   if (existing === undefined) {
-    if ((await stillEarnedPicksOf(ctx, member)).length >= mostKudosEmojiPicks) return { kind: "full" };
+    if ((await stillPickableOf(ctx, member)).length >= mostKudosEmojiPicks) return { kind: "full" };
     await ctx.db.insert("kudosEmojiPicks", { member, emoji });
   }
   return { kind: "picked", picks: await kudosEmojiPicksOf(ctx, member) };
 }
 
-async function stillEarnedPicksOf(ctx: MutationCtx, member: MemberId) {
+async function stillPickableOf(ctx: MutationCtx, member: MemberId) {
   const kept = [];
   for (const pick of await pickRowsOf(ctx, member)) {
-    if (await holdsEarnedEmoji(ctx, member, pick.emoji)) kept.push(pick);
+    if (await isPickableBy(ctx, member, pick.emoji)) kept.push(pick);
     else await ctx.db.delete(pick._id);
   }
   return kept;
