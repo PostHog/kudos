@@ -1,11 +1,12 @@
-import type { Album, AlbumEmoji, AlbumPerson, AlbumTeam } from "./answer";
+import type { Album, AlbumEmoji, AlbumMe, AlbumPerson, AlbumTeam } from "./answer";
 import { comingSoonToSlackWords, type SlackWay } from "./slackWay";
 
-export type OnThePhoto = { kind: "person"; person: AlbumPerson } | { kind: "unmatched"; name: string };
+export type OnThePhoto = { kind: "me"; me: AlbumMe } | { kind: "person"; person: AlbumPerson } | { kind: "unmatched"; name: string };
 
 export function onThePhotoOf(album: Album, team: AlbumTeam): OnThePhoto[] {
+  const me: OnThePhoto[] = team.mine ? [{ kind: "me", me: album.me }] : [];
   const people = team.people.map((person): OnThePhoto => ({ kind: "person", person: personIn(album, person) }));
-  return [...people, ...team.unmatched.map((name): OnThePhoto => ({ kind: "unmatched", name }))];
+  return [...me, ...people, ...team.unmatched.map((name): OnThePhoto => ({ kind: "unmatched", name }))];
 }
 
 export function personIn(album: Album, person: string): AlbumPerson {
@@ -13,6 +14,7 @@ export function personIn(album: Album, person: string): AlbumPerson {
 }
 
 export function nameOnThePhoto(shown: OnThePhoto) {
+  if (shown.kind === "me") return shown.me.name;
   return shown.kind === "person" ? shown.person.name : shown.name;
 }
 

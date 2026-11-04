@@ -76,6 +76,7 @@ describe("AL45: the team page is the team's class photo", () => {
     expect(await screen.findByRole("heading", { level: 1, name: "Lanterns" }, arrival)).toBeInTheDocument();
     const shown = await photo();
     expect(shown.getAllByRole("listitem").map((person) => person.textContent)).toEqual([
+      "SESam Example You",
       "IOInes Okafor In your album",
       "BTBram Teller In your album",
       "OVOona Vasquez In your album",
@@ -87,6 +88,25 @@ describe("AL45: the team page is the team's class photo", () => {
     expect(shown.queryByRole("link", { name: /Hal Corwin/ })).not.toBeInTheDocument();
     expect(screen.getByRole("figure", { name: "Lanterns team photo" })).toBeInTheDocument();
     expect(screen.queryByText(/Left to right/)).not.toBeInTheDocument();
+  });
+
+  it("the member stands first on their own team's photo, in colour, marked You and linked to their profile and counted among its people", async () => {
+    visit("/book#teams/lanterns", { album: withFaces(midway, {}) });
+
+    const shown = await photo();
+    const you = shown.getByRole("link", { name: "Sam Example You" });
+    expect(you).toHaveAttribute("href", "/book#me");
+    expect(pictureShownOf(you)).toBe("colour");
+    expect(shown.getByText("You")).not.toHaveClass("sr-only");
+    expect(screen.getByText("7 people")).toBeInTheDocument();
+  });
+
+  it("the member is not on the photo of a team that isn't theirs", async () => {
+    visit("/book#teams/quiet-harbour");
+
+    const shown = await photo();
+    expect(shown.queryByText("Sam Example")).not.toBeInTheDocument();
+    expect(screen.getByText("2 people")).toBeInTheDocument();
   });
 
   it("leaves whether someone is in your album to their picture, and says it in words only to a screen reader", async () => {
@@ -584,6 +604,14 @@ describe("LP58: a member's pet shows in colour beside their sticker on team page
     expect(shown.getAllByRole("img", { name: /'s pet, / }).map((pet) => pet.getAttribute("aria-label"))).toEqual(["Ines's pet, Banana", "Juno's pet, Rocket"]);
   });
 
+  it("on their own team page the member's pet stands beside them as their pet", async () => {
+    const sparky: AlbumPet = { person: "sam-example" as MemberId, hoggie: "rocket", name: "Sparky", rarity: "rare" };
+    visit("/book#teams/lanterns", { album: withPets(sparky) });
+
+    const you = (await photo()).getAllByRole("listitem")[0]!;
+    expect(within(you).getByRole("img", { name: "Your pet, Sparky" })).toBeInTheDocument();
+  });
+
   it("on a person page their pet stands beside their sticker in colour, named, even before they are in the viewer's album", async () => {
     visit("/book#people/juno-park", { album: withPets(rocket) });
 
@@ -605,7 +633,7 @@ describe("LP58: a member's pet shows in colour beside their sticker on team page
   it("with pet-hoggie off, getAlbum names no pets and no page shows one", async () => {
     visit("/book#teams/lanterns");
 
-    expect((await photo()).getAllByRole("listitem")).toHaveLength(6);
+    expect((await photo()).getAllByRole("listitem")).toHaveLength(7);
     expect(screen.queryByRole("img", { name: /'s pet, / })).not.toBeInTheDocument();
   });
 });
