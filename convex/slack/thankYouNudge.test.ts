@@ -154,6 +154,19 @@ describe("messages that aren't a thank-you without a kudos get no nudge", () => 
     expect(slack.callsTo("chat.postEphemeral")).toEqual([]);
   });
 
+  test.each([
+    ["just under the bar", 0.89, false],
+    ["at the bar", 0.9, true],
+  ])("a thank-you the gateway is %s about is nudged only from 0.9", async (_, probability, nudged) => {
+    gateway.answering(() => thanksProbability(probability));
+    const t = await workspace();
+
+    await post(t, [section(text("Thanks "), mention("U_BOB"), text(" for the review!"))], { user: maintainer.user });
+    await settle(t);
+
+    expect(slack.callsTo("chat.postEphemeral").map(({ text }) => text)).toEqual(nudged ? [nudge] : []);
+  });
+
   test.each<[string, RichElement[]]>([
     ["no word of thanks", [section(mention("U_BOB"), text(" can you review my PR today?"))]],
     ["no one mentioned", [section(text("Thanks everyone for a great week!"))]],
