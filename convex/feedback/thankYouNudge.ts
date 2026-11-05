@@ -35,7 +35,7 @@ function classifiedTextOfSegment(segment: WordSegment) {
     case "channel":
       return "#channel";
     case "emoji":
-      return `:${segment.name}:`;
+      return segment.unicode ?? `:${segment.name}:`;
     case "link":
       return segment.label ?? "a link";
     case "break":

@@ -167,13 +167,13 @@ describe("messages that aren't a thank-you without a kudos get no nudge", () => 
     expect(slack.callsTo("chat.postEphemeral").map(({ text }) => text)).toEqual(nudged ? [nudge] : []);
   });
 
-  test("a thank-you said with :pray: alone is asked about and nudged", async () => {
+  test("a thank-you said with :pray: alone is asked about as the 🙏 it shows, and nudged", async () => {
     const t = await workspace();
 
-    await post(t, [section(mention("U_BOB"), text(" "), tonedEmoji("pray", 3), text(" for fixing the build"))], { user: maintainer.user });
+    await post(t, [section(mention("U_BOB"), text(" "), tonedEmoji("pray", 4, "1f64f-1f3fd"), text(" for fixing the build"))], { user: maintainer.user });
     await settle(t);
 
-    expect(gateway.requests.map(({ body }) => body.state)).toEqual([{ message: "@teammate :pray::skin-tone-3: for fixing the build" }]);
+    expect(gateway.requests.map(({ body }) => body.state)).toEqual([{ message: "@teammate \u{1F64F}\u{1F3FD} for fixing the build" }]);
     expect(slack.callsTo("chat.postEphemeral").map(({ text }) => text)).toEqual([nudge]);
   });
 
