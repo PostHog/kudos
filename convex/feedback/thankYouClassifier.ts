@@ -11,11 +11,21 @@ const criteria = {
   false: "It asks for something (even politely, with thanks in advance), only greets, or thanks nobody specific.",
 };
 
-export async function isThankYou(message: string): Promise<boolean> {
+export function gatewayIsSet() {
+  return gatewaySettings() !== null;
+}
+
+function gatewaySettings() {
   const url = process.env.AI_GATEWAY_URL;
   const key = process.env.AI_GATEWAY_KEY;
   const model = process.env.AI_GATEWAY_MODEL;
-  if (!url || !key || !model) return false;
+  return url && key && model ? { url, key, model } : null;
+}
+
+export async function isThankYou(message: string): Promise<boolean> {
+  const settings = gatewaySettings();
+  if (settings === null) return false;
+  const { url, key, model } = settings;
   try {
     const response = await fetch(url, {
       method: "POST",

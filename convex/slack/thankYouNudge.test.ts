@@ -4,7 +4,7 @@ import { flagsFromPostHog, onForEmails, postHogDeciding } from "../../testing/fl
 import { routedFetch, type FakePostHog } from "../../testing/fakePostHog";
 import { signedRequest, signingSecret } from "../../testing/signedSlack";
 import { edit, everythingStored, memberChanged, post, settle, setWorkspaceSettings, testBackend, type Backend } from "../../testing/slackBackend";
-import { emoji, mention, messageEvent, quote, section, text, type RichElement } from "../../testing/slackMessages";
+import { emoji, mention, messageEvent, quote, section, text, tonedEmoji, type RichElement } from "../../testing/slackMessages";
 
 const now = new Date("2026-11-05T10:00:00Z");
 const gatewayUrl = "https://gateway.example.test/v1/classify";
@@ -167,6 +167,16 @@ describe("messages that aren't a thank-you without a kudos get no nudge", () => 
     expect(slack.callsTo("chat.postEphemeral").map(({ text }) => text)).toEqual(nudged ? [nudge] : []);
   });
 
+  test("a thank-you said with :pray: alone is asked about and nudged", async () => {
+    const t = await workspace();
+
+    await post(t, [section(mention("U_BOB"), text(" "), tonedEmoji("pray", 3), text(" for fixing the build"))], { user: maintainer.user });
+    await settle(t);
+
+    expect(gateway.requests.map(({ body }) => body.state)).toEqual([{ message: "@teammate :pray::skin-tone-3: for fixing the build" }]);
+    expect(slack.callsTo("chat.postEphemeral").map(({ text }) => text)).toEqual([nudge]);
+  });
+
   test.each<[string, RichElement[]]>([
     ["no word of thanks", [section(mention("U_BOB"), text(" can you review my PR today?"))]],
     ["no one mentioned", [section(text("Thanks everyone for a great week!"))]],
@@ -208,12 +218,28 @@ describe("the flag keeps everyone else's messages away from the gateway", () => 
   test("without the gateway's settings nothing is asked or sent", async () => {
     vi.stubEnv("AI_GATEWAY_URL", "");
     const t = await workspace();
+    const before = await everythingStored(t);
 
     await post(t, thanksBob, { user: maintainer.user });
     await settle(t);
 
     expect(gateway.requests).toEqual([]);
     expect(slack.callsTo("chat.postEphemeral")).toEqual([]);
+    expect(await everythingStored(t)).toEqual(before);
+  });
+
+  test("a thank-you posted before the gateway's settings arrive is still asked about when Slack delivers it again", async () => {
+    vi.stubEnv("AI_GATEWAY_URL", "");
+    const t = await workspace();
+    await post(t, thanksBob, { user: maintainer.user, ts: "1762336800.000200" });
+    await settle(t);
+
+    vi.stubEnv("AI_GATEWAY_URL", gatewayUrl);
+    await post(t, thanksBob, { user: maintainer.user, ts: "1762336800.000200" });
+    await settle(t);
+
+    expect(gateway.requests).toHaveLength(1);
+    expect(slack.callsTo("chat.postEphemeral").map(({ text }) => text)).toEqual([nudge]);
   });
 });
 

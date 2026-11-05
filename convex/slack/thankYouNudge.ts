@@ -3,13 +3,13 @@ import { internal } from "../_generated/api";
 import type { ActionCtx } from "../_generated/server";
 import { observedAction } from "../analytics/boundary";
 import { countableOf, type MessageDeleted, type MessageEvent } from "../engine/messageEvent";
-import { isThankYou } from "../feedback/thankYouClassifier";
+import { gatewayIsSet, isThankYou } from "../feedback/thankYouClassifier";
 import { classifiedTextOf, mayThankSomeone, thankYouNudgeText } from "../feedback/thankYouNudge";
 import { attemptArgs, sendAtMostOnce, tryAtMostThreeTimes } from "./delivery";
 
 export async function nudgeIfThankYou(ctx: ActionCtx, event: MessageEvent | MessageDeleted | null) {
   if (event === null || event.kind !== "posted") return;
-  if (!mayThankSomeone({ author: event.author, mentions: event.content.mentions, text: event.content.text })) return;
+  if (!gatewayIsSet() || !mayThankSomeone({ author: event.author, ...event.content })) return;
   try {
     const claimed = await ctx.runMutation(internal.feedback.thankYouNudge.claim, { ref: event.ref, author: event.author, content: countableOf(event.content) });
     if (!claimed || !(await isThankYou(classifiedTextOf(event.words.segments)))) return;

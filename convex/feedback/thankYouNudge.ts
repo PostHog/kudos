@@ -7,14 +7,15 @@ import { currentMemberOfUser } from "../workspace/directory";
 
 export const thankYouNudgeFlag = { key: "thank-you-nudge", safeDefault: false, values: [false, true] } as const satisfies Flag<boolean>;
 
-const gratitude = /\b(thanks?|thank\s?you|thankful|thanking|thx|thnx|ty|tysm|tyvm|appreciated?|appreciates|appreciation|grateful|gratitude|kudos|shout[\s-]?outs?|props|cheers|danke|merci|gracias)\b|:pray:/iu;
+const gratitude = /\b(thanks?|thank\s?you|thankful|thanking|thx|thnx|ty|tysm|tyvm|appreciated?|appreciates|appreciation|grateful|gratitude|kudos|shout[\s-]?outs?|props|cheers|danke|merci|gracias)\b/iu;
+const gratitudeEmoji = "pray";
 
 export function thankYouNudgeText(kudosEmoji: string) {
   return `You can edit this message and add :${kudosEmoji}: to give a kudos and collect a hoggie.`;
 }
 
-export function mayThankSomeone({ author, mentions, text }: { author: string; mentions: Mention[]; text: string }) {
-  return mentions.some((mention) => mention.kind === "person" && mention.user !== author) && gratitude.test(text);
+export function mayThankSomeone({ author, mentions, emoji, text }: { author: string; mentions: Mention[]; emoji: string[]; text: string }) {
+  return mentions.some((mention) => mention.kind === "person" && mention.user !== author) && (gratitude.test(text) || emoji.includes(gratitudeEmoji));
 }
 
 export function classifiedTextOf(segments: WordSegment[]) {
