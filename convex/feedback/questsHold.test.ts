@@ -41,7 +41,7 @@ describe("P71 R36: a success reply held for Quests is never lost", () => {
     flagsOnForEveryone(slack.fetch, "xp-levels", "monday-quest");
     const t = await workspace();
     const ref = { workspace: "T1", conversation: "C1", message: "1760349600.000100" };
-    const given = { recipients: ["U_BOB"], perRecipient: 1, left: 9, skipped: [], awards: [{ kudos: 1 }] };
+    const given = { recipients: [{ user: "U_BOB", kudos: 1 }], left: 9, skipped: [] };
     await t.run((ctx) => ctx.db.insert("members", { workspace: "T1", user: "U_ALICE", kind: "member" }));
 
     await t.run((ctx) => replyPrivately(ctx, ref, undefined, "U_ALICE", { kind: "given", outcome: given, base: 10 }));

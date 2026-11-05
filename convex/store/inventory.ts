@@ -23,7 +23,7 @@ export type InventoryHome = { owned: CatalogueItem[]; customShown: StoreItem[]; 
 
 export const ownedKudosEmojiHook: ParseHook = {
   name: "owned kudos emoji",
-  kudosEmoji: (ctx, { giver }) => (giver === undefined ? Promise.resolve([]) : kudosEmojiOwnedBy(ctx, giver)),
+  kudosEmoji: async (ctx, { giver }) => (giver === undefined ? [] : (await kudosEmojiOwnedBy(ctx, giver)).map((name) => ({ name }))),
 };
 
 export const inventoryOf = internalQuery({

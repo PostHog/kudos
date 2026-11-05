@@ -570,7 +570,7 @@ async function whileTurnedOff(t: Backend, user: string, kind: MessageKind, write
 }
 
 function aGivenReply({ skipped = [] }: { skipped?: SkippedMention[] }): Reply {
-  return { kind: "given", outcome: { recipients: ["U_BOB"], perRecipient: 1, left: 9, skipped, awards: [{ kudos: 1 }] }, base: 10 };
+  return { kind: "given", outcome: { recipients: [{ user: "U_BOB", kudos: 1 }], left: 9, skipped }, base: 10 };
 }
 
 function skippedMention(user: string, reason: SkipReason): SkippedMention {
