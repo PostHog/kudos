@@ -247,7 +247,6 @@ describe("a gateway failure sends no nudge and fails no other Slack handling", (
   test.each<[string, GatewayAnswer]>([
     ["an error status", () => new Response("upstream down", { status: 503 })],
     ["a network failure", () => Promise.reject(new TypeError("fetch failed"))],
-    ["a timeout", () => Promise.reject(new DOMException("The operation timed out.", "TimeoutError"))],
     ["a refusal", () => Response.json({ model: "a-model-0.1", answers: { thanks: { type: "refusal" } } })],
     ["a malformed answer", () => Response.json({ model: "a-model-0.1", answers: { thanks: { type: "noul", noul: "yes" } } })],
     ["a body that isn't JSON", () => new Response("<html>", { status: 200 })],
@@ -263,6 +262,18 @@ describe("a gateway failure sends no nudge and fails no other Slack handling", (
     expect(response.status).toBe(200);
     expect(slack.callsTo("chat.postEphemeral")).toEqual([]);
     expect(gateway.requests).toHaveLength(1);
+  });
+
+  test("a gateway that never answers is given up on within Slack's 3 seconds, and Slack still gets its 200", { timeout: 3000 }, async () => {
+    gateway.answering(({ signal }) => new Promise((_, reject) => signal?.addEventListener("abort", () => reject(signal.reason))));
+    const t = await workspace();
+
+    const response = await post(t, thanksBob, { user: maintainer.user });
+    await settle(t);
+
+    expect(response.status).toBe(200);
+    expect(gateway.requests[0]!.signal?.reason).toMatchObject({ name: "TimeoutError" });
+    expect(slack.callsTo("chat.postEphemeral")).toEqual([]);
   });
 
   test("a failing gateway leaves a kudos given right after it untouched", async () => {
