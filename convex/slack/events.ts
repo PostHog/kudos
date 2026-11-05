@@ -11,6 +11,7 @@ import { isMessage, mayAffectKudos, messageEventOf, type EventCallback } from ".
 import { isReactionAdded, hugReactionOf } from "./reactions";
 import { isLinkShared, linkSharingOf } from "./linkPreviews";
 import { readSignedBody } from "./signature";
+import { nudgeIfThankYou } from "./thankYouNudge";
 
 type Envelope = { type: "url_verification"; challenge: string } | EventCallback | { type: "app_rate_limited" };
 
@@ -52,8 +53,8 @@ async function receiveSlackEvent(ctx: ActionCtx, request: Request) {
     if (reaction !== null && (await ctx.runQuery(internal.slack.reactions.mayReactWith, { workspace: reaction.workspace, giver: reaction.giver, emoji: reaction.emoji }))) await ctx.runMutation(internal.slack.receipts.receiveReaction, { eventId: envelope.event_id, reaction });
   } else if (envelope.type === "event_callback") {
     const event = messageEventOf(envelope);
-    if (isMessage(envelope.event) && !mayAffectKudos(event)) return new Response(null, { status: 200 });
-    await ctx.runMutation(internal.slack.receipts.receive, { workspace: envelope.team_id, eventId: envelope.event_id, event });
+    if (!isMessage(envelope.event) || mayAffectKudos(event)) await ctx.runMutation(internal.slack.receipts.receive, { workspace: envelope.team_id, eventId: envelope.event_id, event });
+    await nudgeIfThankYou(ctx, event);
   }
   return new Response(null, { status: 200 });
 }

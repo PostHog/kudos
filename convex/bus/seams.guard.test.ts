@@ -14,7 +14,7 @@ const tablesOf: Record<string, string[]> = {
   bus: ["replays"],
   companyProfiles: ["companyProfiles", "companyTeams", "companyFaces", "companyProfileLinks"],
   engine: ["kudosMessages", "kudosTexts", "wordDeletionRequests", "spotlightDraws", "awards", "kudosTotals", "allowanceSpending"],
-  feedback: ["welcomeNudges", "indicators", "privateReplies", "oneReplies", "publicReplies", "tierNotices", "tierSummaries", "homes", "homeSelections", "sentNotices", "grantReplies", "celebratedLevels"],
+  feedback: ["welcomeNudges", "indicators", "privateReplies", "oneReplies", "publicReplies", "tierNotices", "tierSummaries", "homes", "homeSelections", "sentNotices", "grantReplies", "celebratedLevels", "thankYouNudges"],
   groups: ["userGroupDepartures", "groupCountingChanges", "memberGroups", "groupSettings", "primaryGroupHistory", "attributions"],
   hugs: ["hugWeeks", "hugWeekMessages", "hugCounts", "hugs", "hugPeople", "hugsReceived"],
   leaderboard: ["countedKudosGiven", "countedRecognitions", "givenByDay", "attributedTotals", "attributedGroupTotals", "countedAttributions", "givenTotals", "hugRunningTotals", "mondayPostSettings", "mondayPostClaims", "featuredNewGivers", "weekThankers", "leaderboardSettings"],
