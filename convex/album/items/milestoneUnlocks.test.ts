@@ -9,6 +9,7 @@ import type { Doc, Id } from "../../_generated/dataModel";
 import type { AlbumAnswer, AlbumRead, TurnAnswer } from "../../website/album";
 import type { Denial } from "../../website/memberQuery";
 import type { MemberId } from "../../workspace/directory";
+import { milestoneCatalogue } from "../milestoneCatalogue";
 
 const tuesday = new Date("2026-10-13T10:00:00Z");
 const minuteMs = 60_000;
@@ -116,6 +117,73 @@ describe("LP14 LP19a: each milestone tier unlocks once, in the turn that brings 
     expect(tierOf(album, firstThankYou)).toEqual(expect.objectContaining({ earnedAt: thanked }));
     expect(tierOf(album, firstThankYou)).not.toHaveProperty("unlockedAt");
     expect(emojiOf(album, firstThankYou)).toMatchObject({ earned: true, seen: false });
+  });
+});
+
+describe("LP19a: a medal unlocked by a turn pays XP by its metal", { timeout: 60_000 }, () => {
+  test("while milestone-xp is on, a turn answers each tier it unlocks with its XP, 100 for bronze, and pays it once after the turn, a replay paying nothing", async () => {
+    await switchWebsite(t, postHog, true, ...itemsOn, "milestone-xp");
+    await thanks(alice, bob);
+    const asAlice = await signedIn(alice);
+    const before = (await albumOf(asAlice)).level.xp;
+
+    const turned = await turnTheItem(asAlice, "sticker");
+    await settle(t);
+    const paid = (await albumOf(asAlice)).level.xp;
+    const again = await turn(asAlice, await itemOf(alice, "sticker"));
+    await settle(t);
+
+    expect(turned.unlocked.milestones.map(({ tier, xp }) => [tier, xp])).toEqual(turned.unlocked.milestones.map(() => ["bronze", 100]));
+    expect(turned.unlocked.milestones).toContainEqual({ ...firstFace, xp: 100 });
+    expect(paid - before, "the pack bonus and every bronze medal").toBe((turned.applied?.xp ?? 0) + 100 * turned.unlocked.milestones.length);
+    expect(again).toMatchObject({ unlocked: { milestones: [] } });
+    expect((await albumOf(asAlice)).level.xp, "after the replay").toBe(paid);
+  });
+
+  test("a turn that unlocks silver, gold and diamond pays 250, 500 and 1000, each recorded once under the tier's reward key", async () => {
+    await switchWebsite(t, postHog, true, ...itemsOn, "milestone-xp");
+    const member = await memberOf(alice);
+    const medals = [
+      { milestone: "people", tier: "silver" },
+      { milestone: "teams", tier: "gold" },
+      { milestone: "hoggies", tier: "diamond" },
+    ] as const;
+    await t.run(async (ctx) => {
+      for (const medal of medals) await ctx.db.insert("milestoneTiers", { member, ...medal, at: Date.now(), catalogue: milestoneCatalogue.version });
+    });
+    await thanks(alice, bob);
+    const asAlice = await signedIn(alice);
+    const before = (await albumOf(asAlice)).level.xp;
+
+    const turned = await turnTheItem(asAlice, "sticker");
+    const payments = await t.run(async (ctx) => (await ctx.db.system.query("_scheduled_functions").collect()).filter(({ name }) => name.includes("payMedalsUnlocked")).length);
+    await settle(t);
+    await turn(asAlice, await itemOf(alice, "sticker"));
+    await settle(t);
+
+    expect(payments, "one payment for all of the turn's medals, so they never contend").toBe(1);
+    for (const [medal, xp] of [[medals[0], 250], [medals[1], 500], [medals[2], 1000]] as const) expect(turned.unlocked.milestones).toContainEqual({ ...medal, xp });
+    const owed = turned.unlocked.milestones.reduce((sum, { xp = 0 }) => sum + xp, 0);
+    expect((await albumOf(asAlice)).level.xp - before, "the pack bonus and every medal, once").toBe((turned.applied?.xp ?? 0) + owed);
+    const rewards = await t.run((ctx) => ctx.db.query("rewardRecords").collect());
+    expect(rewards.filter(({ key }) => medals.some(({ milestone, tier }) => key === `milestone:${milestone}:${tier}`)).map(({ key, xp }) => [key, xp])).toEqual([
+      ["milestone:people:silver", 250],
+      ["milestone:teams:gold", 500],
+      ["milestone:hoggies:diamond", 1000],
+    ]);
+  });
+
+  test("while milestone-xp is off, a turn unlocks its tiers as before and pays no medal XP", async () => {
+    await thanks(alice, bob);
+    const asAlice = await signedIn(alice);
+    const before = (await albumOf(asAlice)).level.xp;
+
+    const turned = await turnTheItem(asAlice, "sticker");
+    await settle(t);
+
+    expect(turned.unlocked.milestones).toContainEqual(firstFace);
+    expect(turned.unlocked.milestones.filter((tier) => "xp" in tier)).toEqual([]);
+    expect((await albumOf(asAlice)).level.xp - before).toBe(turned.applied?.xp ?? 0);
   });
 });
 

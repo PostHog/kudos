@@ -2,7 +2,6 @@ import type { Doc, Id } from "../../_generated/dataModel";
 import { storedRangeOf } from "../hoggies/rarityCaps";
 import type { MutationCtx, QueryCtx } from "../../_generated/server";
 import { hypeFaceOf, unlockHypeEmojiOf, type HypeEmoji } from "../earnedEmojis";
-import type { ReachedTier } from "../milestones";
 import { isTrayKey, openThePackOnceAllTurned, trayItemKeyed } from "../opening";
 import { crateKeyOf } from "../packs";
 import { markTrayStickerPutIn, placeFromTheTray, putStickerIn } from "../putIn";
@@ -21,6 +20,7 @@ import type { MemberId } from "../../workspace/directory";
 import { achievementHoggiesShownTo, isAnAchievement } from "./achievementFlag";
 import { stickerWaitsFor } from "./ledger";
 import { unlockMilestoneTiers } from "./milestoneUnlocks";
+import type { UnlockedTier } from "../milestoneXp";
 
 export type TurnedFace = { kind: "hoggie"; drop: Drop } | { kind: "sticker"; person: MemberId; isNew: boolean };
 
@@ -28,7 +28,7 @@ export type LandingPage = { kind: "hoggies" } | { kind: "team"; team: string } |
 
 export type UnlockedHype = HypeEmoji & { from: string };
 
-export type Unlocked = { teamStickers: TeamSticker[]; hype: UnlockedHype | null; milestones: ReachedTier[] };
+export type Unlocked = { teamStickers: TeamSticker[]; hype: UnlockedHype | null; milestones: UnlockedTier[] };
 
 export type Turned = { face: TurnedFace; applied: AppliedReward | null; page: LandingPage; unlocked: Unlocked; again: boolean };
 

@@ -2,17 +2,18 @@ import type { MutationCtx, QueryCtx } from "../../_generated/server";
 import { markEmojiSeen, seenAtOf, tierEmojiIdOf, tierUnlockedAt } from "../earnedEmojis";
 import { recordMilestonesOf, tiersEarnedBy, type MilestoneAnswer, type ReachedTier } from "../milestones";
 import type { MilestoneId } from "../milestoneCatalogue";
+import { payTheMedals, type UnlockedTier } from "../milestoneXp";
 import type { PageOwner } from "../teamPages";
 import type { MemberId } from "../../workspace/directory";
 import { hiddenItemsShownTo } from "./flag";
 
 type AnsweredTier = MilestoneAnswer["tiers"][number];
 
-export async function unlockMilestoneTiers(ctx: MutationCtx, owner: PageOwner, at: number): Promise<ReachedTier[]> {
+export async function unlockMilestoneTiers(ctx: MutationCtx, owner: PageOwner, at: number): Promise<UnlockedTier[]> {
   await recordMilestonesOf(ctx, owner, at);
   const unlocked: ReachedTier[] = [];
   for (const tier of await tiersEarnedBy(ctx, owner.member)) if (await markEmojiSeen(ctx, owner.member, tierEmojiIdOf(tier), at)) unlocked.push(tier);
-  return unlocked;
+  return payTheMedals(ctx, owner, unlocked, at);
 }
 
 export async function tiersTurnedBy(ctx: QueryCtx, member: MemberId): Promise<ReachedTier[]> {

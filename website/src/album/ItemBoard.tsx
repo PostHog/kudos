@@ -1,5 +1,5 @@
 import { useEffect, useRef, type CSSProperties, type KeyboardEvent, type ReactNode, type RefObject } from "react";
-import type { ReachedTier } from "../../../convex/album/milestones";
+import type { UnlockedTier } from "../../../convex/album/milestoneXp";
 import { hoggieNamed } from "../../../convex/album/hoggies/catalogue";
 import type { ItemBoard as Board, BoardReason, LoopLesson } from "../../../convex/website/album";
 import { LadderEmblem } from "../book/LadderEmblem";
@@ -111,7 +111,7 @@ function LandedWords({ landing: { face, applied, unlocked } }: { landing: Landin
   );
 }
 
-function MedalsLine({ album, tiers }: { album: Album; tiers: ReachedTier[] }) {
+function MedalsLine({ album, tiers }: { album: Album; tiers: UnlockedTier[] }) {
   return (
     <p role="note" aria-label="Medals unlocked" className="ib-medals">
       {tiers.map((tier) => (
@@ -121,12 +121,13 @@ function MedalsLine({ album, tiers }: { album: Album; tiers: ReachedTier[] }) {
   );
 }
 
-function MedalUnlocked({ album, tier }: { album: Album; tier: ReachedTier }) {
+function MedalUnlocked({ album, tier }: { album: Album; tier: UnlockedTier }) {
   const emoji = medalEmojiOf(album, tier);
   return (
     <span className="ib-medal">
       <LadderEmblem ladder={emblemOf(tier.milestone)} best={tier.tier} size={28} />
       {medalWordsOf(tier)}
+      {tier.xp !== undefined && <span className="ib-medal-xp-word">{` · +${tier.xp} XP`}</span>}
       {emoji !== null && <img className="ph-no-capture" src={emoji.picture} alt={`:${emoji.name}:`} width={24} height={24} />}
       <NewLabel />
     </span>
