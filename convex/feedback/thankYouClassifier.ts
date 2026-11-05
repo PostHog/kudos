@@ -17,14 +17,12 @@ export async function isThankYou(message: string): Promise<boolean> {
   const key = process.env.AI_GATEWAY_KEY;
   const model = process.env.AI_GATEWAY_MODEL;
   if (!url || !key || !model) return false;
-  const aborted = new AbortController();
-  const timer = setTimeout(() => aborted.abort(), timeoutMs);
   try {
     const response = await fetch(url, {
       method: "POST",
       headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json", "X-PostHog-Privacy-Mode": "true" },
       body: JSON.stringify({ model, state: { message }, questions: { [question]: { type: "noul", instructions, criteria } } }),
-      signal: aborted.signal,
+      signal: AbortSignal.timeout(timeoutMs),
     });
     if (!response.ok) {
       console.warn("thank_you_nudge.gateway_refused", { status: response.status });
@@ -36,8 +34,6 @@ export async function isThankYou(message: string): Promise<boolean> {
   } catch (error) {
     console.warn("thank_you_nudge.gateway_failed", { error: error instanceof Error ? error.name : typeof error });
     return false;
-  } finally {
-    clearTimeout(timer);
   }
 }
 

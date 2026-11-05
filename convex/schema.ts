@@ -869,8 +869,6 @@ export default defineSchema({
     workspace: v.string(),
     conversation: v.string(),
     message: v.string(),
-    author: v.id("members"),
-    at: v.number(),
   }).index("by_message", ["workspace", "conversation", "message"]),
   cardPictures: defineTable({
     key: v.string(),

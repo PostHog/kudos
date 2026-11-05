@@ -56,7 +56,7 @@ export const claim = internalMutation({
       .withIndex("by_message", (q) => q.eq("workspace", ref.workspace).eq("conversation", ref.conversation).eq("message", ref.message))
       .unique();
     if (earlier !== null) return false;
-    await ctx.db.insert("thankYouNudges", { ...ref, author: known.member, at: Date.now() });
+    await ctx.db.insert("thankYouNudges", ref);
     await exposed(ctx, thankYouNudgeFlag, known.member, true);
     return true;
   },
