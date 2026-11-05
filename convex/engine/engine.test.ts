@@ -142,7 +142,7 @@ describe("R9 R10: skipped mentions", () => {
     expect(observation).toMatchObject({
       outcome: {
         kind: "given",
-        recipients: ["U_BOB"],
+        recipients: [{ user: "U_BOB", kudos: 1 }],
         skipped: [
           { mention: person("U_DAVE"), reason: "not-a-member" },
           { mention: { kind: "group", group: "S1" }, reason: "group-or-broadcast" },

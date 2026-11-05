@@ -11,7 +11,7 @@ import { insertAwards, type Award } from "./awards";
 import { keepSpotlightUpToDate } from "./spotlight";
 import { deletionRequested, forgetDeleted, forgetWords, forgetWordsOfGiven, hasKudosText, keepFetchedWords, keepWords, removeWords } from "./kudosText";
 import { countableOf, type Annotations, type ChatUserId, type FetchedMessage, type Mention, type MessageDeleted, type MessageEvent, type MessageRef } from "./messageEvent";
-import { annotationsOf, fingerprintOf, kudosEmojiClosestAfter, kudosMessageOf, type KudosMessage, type ParseContext } from "../parser/parser";
+import { annotationsOf, fingerprintOf, kudosEmojiClosestAfter, kudosFor, kudosMessageOf, mostKudosIn, type KudosMessage, type ParseContext } from "../parser/parser";
 
 export type Outcome =
   | ({ kind: "given"; awards: Award[]; kudosEmoji: string } & Given)
@@ -295,11 +295,11 @@ function indicatorOf(outcome: Outcome): Indicator {
 }
 
 async function decide(ctx: MutationCtx, row: KudosMessageRow, giver: Member, kudos: KudosMessage, baseAllowance: number): Promise<Outcome> {
-  const { recipients, skipped } = await sortMentions(ctx, row.workspace, kudos.mentions, giver.member);
+  const { recipients, skipped } = await sortMentions(ctx, row.workspace, kudos, giver.member);
   const day = allowanceDay(row.spendsAt, giver.timeZone);
   const allowance = await dailyAllowance(ctx, giver.member, day, baseAllowance);
-  const { perRecipient } = kudos;
-  const cost = recipients.length * perRecipient;
+  const perRecipient = recipients.length === 0 ? mostKudosIn(kudos) : Math.max(...recipients.map(({ kudos }) => kudos));
+  const cost = recipients.reduce((sum, { kudos }) => sum + kudos, 0);
   const attempt = attemptFacts(row, giver, skipped, day);
 
   if (recipients.length === 0) {
@@ -311,8 +311,8 @@ async function decide(ctx: MutationCtx, row: KudosMessageRow, giver: Member, kud
     return { kind: "over-allowance", cost, recipients: recipients.length, perRecipient, left: allowance.left };
   }
 
-  const awards = recipients.map(({ member }) => ({ giver: giver.member, recipient: member, kudos: perRecipient }));
-  const kudosEmoji = kudosEmojiClosestAfter(kudos, firstMentionOf(kudos.mentions, recipients[0]!));
+  const awards = recipients.map(({ member, kudos }) => ({ giver: giver.member, recipient: member, kudos }));
+  const kudosEmoji = kudosEmojiClosestAfter(kudos, recipients[0]!.user);
   const left = allowance.left - cost;
   await allowance.spend(cost);
   await publish(ctx, {
@@ -325,7 +325,7 @@ async function decide(ctx: MutationCtx, row: KudosMessageRow, giver: Member, kud
     annotations: row.annotations,
     allowance: { dailyOpening: allowance.opening, dailyLeft: left },
   });
-  return { kind: "given", awards, kudosEmoji, recipients: recipients.map(({ user }) => user), perRecipient, left, skipped };
+  return { kind: "given", awards, kudosEmoji, recipients: recipients.map(({ user, kudos }) => ({ user, kudos })), left, skipped };
 }
 
 type AttemptFacts = Pick<AttemptFailedEvent, "workspace" | "message" | "giver" | "skippedMentions" | "retry" | "inThread" | "day" | "at">;
@@ -348,30 +348,28 @@ async function publishFailure(ctx: MutationCtx, attempt: AttemptFacts, failure: 
   await publish(ctx, { type: "attemptFailed", ...attempt, ...failure });
 }
 
-type Recipient = { member: MemberId; user: ChatUserId };
+type Recipient = { member: MemberId; user: ChatUserId; kudos: number };
 
-async function sortMentions(ctx: QueryCtx, workspace: string, mentions: Mention[], giver: MemberId) {
+async function sortMentions(ctx: QueryCtx, workspace: string, kudos: KudosMessage, giver: MemberId) {
   const recipients: Recipient[] = [];
   const skipped: SkippedMention[] = [];
-  for (const mention of uniqueMentions(mentions)) {
-    const sorted = await recipientOrSkipReason(ctx, workspace, mention, giver);
+  for (const mention of uniqueMentions(kudos.mentions)) {
+    const sorted = await recipientOrSkipReason(ctx, workspace, mention, giver, kudos);
     if (typeof sorted === "string") skipped.push({ mention, reason: sorted });
     else recipients.push(sorted);
   }
   return { recipients, skipped };
 }
 
-async function recipientOrSkipReason(ctx: QueryCtx, workspace: string, mention: Mention, giver: MemberId): Promise<Recipient | SkipReason> {
+async function recipientOrSkipReason(ctx: QueryCtx, workspace: string, mention: Mention, giver: MemberId, message: KudosMessage): Promise<Recipient | SkipReason> {
   if (mention.kind !== "person") return "group-or-broadcast";
   const facts = await lookup(ctx, workspace, mention.user);
   if (facts?.kind === "bot") return "bot";
   if (facts?.kind !== "member") return "not-a-member";
   if (facts.member === giver) return "self";
-  return { member: facts.member, user: mention.user };
-}
-
-function firstMentionOf(mentions: Mention[], { user }: Recipient) {
-  return mentions.findIndex((mention) => mention.kind === "person" && mention.user === user);
+  const kudos = kudosFor(message, mention.user);
+  if (kudos === 0) return "someone-elses-hype-emoji";
+  return { member: facts.member, user: mention.user, kudos };
 }
 
 function uniqueMentions(mentions: Mention[]) {

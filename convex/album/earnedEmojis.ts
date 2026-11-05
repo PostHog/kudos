@@ -403,15 +403,15 @@ async function seenBy(ctx: QueryCtx, member: MemberId): Promise<Set<string>> {
 }
 
 export async function holdsEarnedEmojiNamed(ctx: QueryCtx, workspace: string, member: MemberId, toned: string): Promise<boolean> {
-  return (await earnedEmojiNamesAmong(ctx, workspace, member, [toned], () => true)).length > 0;
+  return (await earnedEmojisAmong(ctx, workspace, member, [toned], () => true)).length > 0;
 }
 
-export async function earnedEmojiNamesAmong(ctx: QueryCtx, workspace: string, member: MemberId, names: string[], counts: (emoji: string) => boolean | Promise<boolean>): Promise<string[]> {
-  const earned = new Set<string>();
+export async function earnedEmojisAmong(ctx: QueryCtx, workspace: string, member: MemberId, names: string[], counts: (emoji: string) => boolean | Promise<boolean>): Promise<{ name: string; emoji: string }[]> {
+  const earned = new Map<string, string>();
   for (const { name, emoji, dropped } of await namedEmojisAmong(ctx, workspace, member, names)) {
-    if (!earned.has(name) && (await counts(emoji)) && (dropped || (await isEarnedBy(ctx, member, emoji)))) earned.add(name);
+    if (!earned.has(name) && (await counts(emoji)) && (dropped || (await isEarnedBy(ctx, member, emoji)))) earned.set(name, emoji);
   }
-  return [...earned];
+  return [...earned].map(([name, emoji]) => ({ name, emoji }));
 }
 
 type NamedEmoji = { name: string; emoji: string; dropped: boolean };
