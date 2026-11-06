@@ -23,6 +23,7 @@ Quests: owns each member's quests on the Monday path (spec/monday-quests.md, ADR
   because: Convex refuses a mutation that schedules more than 1000 functions, so a sweep over every member must page (#101, P78), and a draw is deterministic and stored once per member and week (P80), so a sweep that ran again would only spend work; a member who starts their quests under `two-quests` costs the sweep about 45 index ranges, so a page of 100 passed Convex's 4096 and failed every hour, leaving every member on and after that page without a start or a draw (#892)
   refuted: the sweep scheduled a draw for every member who opened Quests, even one whose week was already drawn -> the second run scheduled 105 draws again (2026-10-13)
   refuted: the sweep scheduled a draw for every member on the Monday path, whatever their draws and their week's draw said -> the run scheduled 110 draws, one for each member who hadn't finished onboarding too (2026-10-30)
+  refuted: the sweep paged 100 members again -> the first sweep mutation over 100 welcomed members starting their quests under two-quests read past Convex's 4096 index ranges and was refused (2026-11-06)
   kinds: state
   checklist: revalidated-permission dismissed: no permission is involved; each scheduled draw reads the slice predicate itself
   checklist: separation-of-duties dismissed: no approval policy applies
