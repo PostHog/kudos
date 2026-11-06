@@ -5,6 +5,7 @@ import { signedRequest, signingSecret } from "../../testing/signedSlack";
 import { post, settle, testBackend, type Backend } from "../../testing/slackBackend";
 import { emoji, mention, messageEvent, section, slashCommand, text } from "../../testing/slackMessages";
 import { internal } from "../_generated/api";
+import schema from "../schema";
 import { exceptionOfJobError } from "./exceptions";
 
 const now = new Date("2026-10-13T10:00:00Z");
@@ -34,6 +35,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+const schemaTables = new Set(Object.keys(schema.tables));
 const distinctive = ["Marmalade", "Zephyrine", "quokka", "artichokeparty", "U0ZEPHYRINE", "C0MARMALADE", "T0QUOKKAWS"];
 
 describe("O22 O23: an action that throws", () => {
@@ -155,9 +157,16 @@ describe("O10 O23: only a reportable error sends its message", () => {
     ["a read limit with words after its sentence", "Uncaught Error: Too many reads in a single function execution (limit: 4096) Marmalade Zephyrine quokka U0ZEPHYRINE", "Too many reads in a single function execution (limit: 4096)"],
     ["a write limit with words after its sentence", "Uncaught Error: Too many writes in a single function execution (limit: 16000). artichokeparty C0MARMALADE", "Too many writes in a single function execution (limit: 16000)"],
   ])("a failed job's %s sends only Convex's words", (_, error, words) => {
-    const { value } = exceptionOfJobError(error);
+    const { value } = exceptionOfJobError(error, schemaTables);
     expect(value).toBe(words);
     for (const word of distinctive) expect(value).not.toContain(word);
+  });
+
+  test.each<[string, string]>([
+    ["a unique() refusal naming a table the schema doesn't have", "Uncaught Error: unique() query returned more than one result from table U0ZEPHYRINE:\n [Marmalade]"],
+    ["a limit naming something Convex doesn't count", "Uncaught Error: Too many marmalade zephyrine in a single function execution (limit: 4096)"],
+  ])("a failed job's error that only looks like Convex's, %s, sends unexpected error", (_, error) => {
+    expect(exceptionOfJobError(error, schemaTables).value).toBe("unexpected error");
   });
 });
 

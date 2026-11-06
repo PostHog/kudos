@@ -83,12 +83,13 @@ Analytics: the only module that knows PostHog. It projects each kudosGiven domai
   checklist: keyed-ordering dismissed: PostHog orders exception events by their timestamp, the failure's time
   checklist: acknowledgment-barrier dismissed: the boundary's recording mutation commits before it rethrows, so a failed HTTP route answers Slack only after its exception is recorded; nothing acknowledges an exception to its source
   checklist: retry-classification dismissed: expected outcomes never throw (O21): the delivery path classifies every Slack answer and the drain every PostHog answer, so neither reaches a boundary
-- only a reportable error sends its message: Only a reportable error's message leaves the deployment for PostHog; every other error, including malformed JSON, a Convex argument validation error and a dependency error, is sent as unexpected error with its type name and none of its text. The one exception is a failed job's Error whose first line is Convex's own unique() refusal or one of its transaction limits: the sweep sends only Convex's words, which name a table or a limit, and nothing after them.
+- only a reportable error sends its message: Only a reportable error's message leaves the deployment for PostHog; every other error, including malformed JSON, a Convex argument validation error and a dependency error, is sent as unexpected error with its type name and none of its text. The one exception is a failed job's Error whose first line is Convex's own unique() refusal on a table the schema declares, or its read or write limit: the sweep sends only Convex's words, which name that table or the limit, and nothing after them; the same sentence naming any other table or count is withheld.
   over: every PostHog request body the drain sends after a signed events request with malformed JSON, a signed events request whose arguments fail Convex's validation, and a /hedgehug whose Slack call throws a dependency error, each full of distinctive words, an emoji name and Slack-shaped IDs
   via: O10 O23: only a reportable error sends its message
   because: an error message can embed the input that caused it (O10, O23); a JSON parse error quotes the body and a validation error prints the arguments, which hold a kudos message's content and Slack IDs. A failed job's withheld error fingerprints alike in PostHog, so every job that hit a Convex refusal read as one issue with no cause (#892); Convex writes those first lines itself, with only a table name or a number
   refuted: exceptionOf sent every Error's message, not only a ReportableError's -> all 3 cases failed on their assertion that the value is unexpected error (2026-10-13)
   refuted: the job-error reporter sent the whole first line of any message a Convex refusal pattern matched, not only Convex's words -> the 3 failed-job cases went red on their assertion that only Convex's words are sent (2026-11-06)
+  refuted: the job-error reporter sent a unique() refusal for any table name, not only the schema's -> the case naming a table the schema doesn't have went red on its assertion that it sends unexpected error (2026-11-06)
   kinds: message
   checklist: destination-confinement dismissed: an exception event goes only through the outbox to the configured POSTHOG_HOST's batch endpoint
   checklist: message-authenticity dismissed: the classification reads the error object the boundary caught or the error string Convex stored for a failed job, never outside input that claims to be a reportable error
@@ -163,7 +164,7 @@ Analytics: the only module that knows PostHog. It projects each kudosGiven domai
   checklist: revalidated-permission dismissed: an analytics ID grants nothing; it only names the member to PostHog
   checklist: separation-of-duties dismissed: no approval policy applies to reading a member's analytics ID
   checklist: legal-state-succession dismissed: reading an analytics ID changes no state; a member with none is given one once, and a member with one is never given another
-  checklist: supersession-safety dismissed: an extra stored ID is never read, so it never replaces the oldest
+  checklist: supersession-safety dismissed: a second stored ID is never read, so it never replaces the oldest
   checklist: worker-fencing dismissed: no worker owns an analytics ID; it is read and recorded inside the mutation that needs it
   checklist: commit-ordered-effects dismissed: reading an analytics ID has no external effect
   checklist: resumption-coverage dismissed: nothing resumes; every read answers from the rows stored

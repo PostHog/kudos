@@ -48,16 +48,19 @@ export function withholdingWords<Ctx, Args extends unknown[], Output>(handler: (
   };
 }
 
-const convexsOwnRefusals = [/^unique\(\) query returned more than one result from table [A-Za-z_]\w*(?=:$)/, /^Too many [a-z ]+ in a single function execution \(limit: \d+\)/];
+const uniqueRefusal = /^unique\(\) query returned more than one result from table ([A-Za-z_]\w*):$/;
+const transactionLimit = /^Too many (?:reads|writes) in a single function execution \(limit: \d+\)/;
 
-export function exceptionOfJobError(error: string | undefined): Exception {
+export function exceptionOfJobError(error: string | undefined, tables: ReadonlySet<string>): Exception {
   const [, type = "Error", message = ""] = uncaughtError.exec(error?.split("\n")[0] ?? "") ?? [];
   if (type === ReportableError.name) return { type, value: message, frames: [] };
-  return { type, value: (type === "Error" && convexsOwnRefusal(message)) || unexpectedError, frames: [] };
+  return { type, value: (type === "Error" && convexsOwnRefusal(message, tables)) || unexpectedError, frames: [] };
 }
 
-function convexsOwnRefusal(message: string) {
-  return convexsOwnRefusals.map((refusal) => refusal.exec(message)?.[0]).find((words) => words !== undefined);
+function convexsOwnRefusal(message: string, tables: ReadonlySet<string>) {
+  const [, table] = uniqueRefusal.exec(message) ?? [];
+  if (table !== undefined) return tables.has(table) ? message.slice(0, -1) : undefined;
+  return transactionLimit.exec(message)?.[0];
 }
 
 export function typeOf(error: unknown) {

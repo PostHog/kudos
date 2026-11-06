@@ -5,6 +5,7 @@ import { settle, testBackend, type Backend } from "../../testing/slackBackend";
 import { internal } from "../_generated/api";
 import type { MutationCtx } from "../_generated/server";
 import type { KudosGivenEvent } from "../bus/events";
+import schema from "../schema";
 import { carriesReportedMarker, exceptionOfJobError } from "./exceptions";
 
 const now = new Date("2026-10-13T10:00:00Z");
@@ -168,7 +169,7 @@ describe("O23: what the sweep reads from Convex's error string", () => {
     ["a unique() refusal whose table is followed by more words is withheld", "Uncaught Error: unique() query returned more than one result from table welcomes: Marmalade", { type: "Error", value: "unexpected error" }],
     ["Convex's words thrown by another type are withheld", "Uncaught SyntaxError: Too many reads in a single function execution (limit: 4096)", { type: "SyntaxError", value: "unexpected error" }],
   ])("%s", (_, error, expected) => {
-    expect(exceptionOfJobError(error)).toEqual({ ...expected, frames: [] });
+    expect(exceptionOfJobError(error, new Set(Object.keys(schema.tables)))).toEqual({ ...expected, frames: [] });
   });
 });
 
