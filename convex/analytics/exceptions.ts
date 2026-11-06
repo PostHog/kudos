@@ -48,9 +48,16 @@ export function withholdingWords<Ctx, Args extends unknown[], Output>(handler: (
   };
 }
 
+const convexsOwnRefusals = [/^unique\(\) query returned more than one result from table [A-Za-z_]\w*(?=:$)/, /^Too many [a-z ]+ in a single function execution \(limit: \d+\)/];
+
 export function exceptionOfJobError(error: string | undefined): Exception {
   const [, type = "Error", message = ""] = uncaughtError.exec(error?.split("\n")[0] ?? "") ?? [];
-  return { type, value: type === ReportableError.name ? message : unexpectedError, frames: [] };
+  if (type === ReportableError.name) return { type, value: message, frames: [] };
+  return { type, value: (type === "Error" && convexsOwnRefusal(message)) || unexpectedError, frames: [] };
+}
+
+function convexsOwnRefusal(message: string) {
+  return convexsOwnRefusals.map((refusal) => refusal.exec(message)?.[0]).find((words) => words !== undefined);
 }
 
 export function typeOf(error: unknown) {

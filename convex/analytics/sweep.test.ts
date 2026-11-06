@@ -161,6 +161,12 @@ describe("O23: what the sweep reads from Convex's error string", () => {
     ["any other error sends unexpected error and its type", "Uncaught SyntaxError: Unexpected token 'M', \"Marmalade U0ZEPHYRINE\" is not valid JSON", { type: "SyntaxError", value: "unexpected error" }],
     ["a validation error that names a ReportableError in its input still sends nothing of it", "ArgumentValidationError: Value does not match validator.\nUncaught ReportableError: Marmalade", { type: "Error", value: "unexpected error" }],
     ["no error string sends unexpected error", undefined, { type: "Error", value: "unexpected error" }],
+    ["Convex's unique() refusal sends its first line, which names only the table", "Uncaught Error: unique() query returned more than one result from table welcomes:\n [n17qrff987ddxmmc2k850qtavd8hp56g, n17za9t3vrwk63kwb7pv7vn7dd8hq3rj, ...]\n    at async handler (../convex/quests/start.ts:33:11)\n", { type: "Error", value: "unique() query returned more than one result from table welcomes" }],
+    ["Convex's read limit sends the limit it hit", "Uncaught Error: Too many reads in a single function execution (limit: 4096). Consider using smaller limits in your queries, paginating your queries, or using indexed queries with a selective index range expressions.\n    at async handler (../convex/quests/newWeek.ts:43:11)\n", { type: "Error", value: "Too many reads in a single function execution (limit: 4096)" }],
+    ["Convex's write limit sends the limit it hit", "Uncaught Error: Too many writes in a single function execution (limit: 16000)\n    at async handler (../convex/quests/newWeek.ts:50:11)\n", { type: "Error", value: "Too many writes in a single function execution (limit: 16000)" }],
+    ["words after a Convex limit's sentence are never sent", "Uncaught Error: Too many reads in a single function execution (limit: 4096) Marmalade U0ZEPHYRINE", { type: "Error", value: "Too many reads in a single function execution (limit: 4096)" }],
+    ["a unique() refusal whose table is followed by more words is withheld", "Uncaught Error: unique() query returned more than one result from table welcomes: Marmalade", { type: "Error", value: "unexpected error" }],
+    ["Convex's words thrown by another type are withheld", "Uncaught SyntaxError: Too many reads in a single function execution (limit: 4096)", { type: "SyntaxError", value: "unexpected error" }],
   ])("%s", (_, error, expected) => {
     expect(exceptionOfJobError(error)).toEqual({ ...expected, frames: [] });
   });

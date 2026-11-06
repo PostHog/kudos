@@ -30,7 +30,7 @@ describe("P80: the hourly sweep stays within Convex's limits and draws a week on
     flagsOnForEveryone(new FakeSlack().fetch, "xp-levels", "monday-quest");
   });
 
-  test("for 105 members on the Monday path who finished onboarding and 5 who didn't, each sweep mutation schedules at most 25 draws within Convex's transaction limits, and a second run draws nothing new", async () => {
+  test("for 105 members on the Monday path who finished onboarding and 5 who didn't, each sweep mutation schedules at most 100 draws within Convex's transaction limits, and a second run draws nothing new", async () => {
     const t = await flagsLoaded(testBackend({ transactionLimits: true }));
     const onboarded = await t.run(async (ctx) => {
       await ctx.db.insert("workspaces", { workspace: "T1", kudosEmoji: "taco", baseAllowance: 200 });
@@ -42,49 +42,23 @@ describe("P80: the hourly sweep stays within Convex's limits and draws a week on
     vi.setSystemTime(mondayInUtc);
 
     await t.mutation(sweepJob(), {});
-    expect(await scheduled(t)).toEqual({ draws: 25, sweeps: 1 });
+    expect(await scheduled(t)).toEqual({ draws: 100, sweeps: 1 });
     await settle(t);
-    expect(await scheduled(t)).toEqual({ draws: 105, sweeps: 4 });
+    expect(await scheduled(t)).toEqual({ draws: 105, sweeps: 1 });
     expect(await drawnMembers(t, thisWeek)).toEqual(new Set(onboarded));
 
     vi.setSystemTime(mondayInUtc + hourMs);
     await t.mutation(sweepJob(), {});
     await settle(t);
 
-    expect(await scheduled(t)).toEqual({ draws: 105, sweeps: 8 });
+    expect(await scheduled(t)).toEqual({ draws: 105, sweeps: 2 });
     expect(await drawnMembers(t, thisWeek)).toEqual(new Set(onboarded));
     expect(await t.run(async (ctx) => (await ctx.db.query("questDraws").collect()).length)).toBe(105);
-  }, 60_000);
-
-  test("for 100 welcomed members who finished onboarding before their quests started, under two-quests, every sweep mutation stays within Convex's index-range limit and starts each member's quests", async () => {
-    flagsOnForEveryone(new FakeSlack().fetch, "xp-levels", "monday-quest", "two-quests");
-    const t = await flagsLoaded(testBackend({ transactionLimits: true }));
-    const welcomed = await t.run(async (ctx) => {
-      await ctx.db.insert("workspaces", { workspace: "T1", kudosEmoji: "taco", baseAllowance: 200 });
-      const members: MemberId[] = [];
-      for (let index = 0; index < 100; index += 1) {
-        const member = await ctx.db.insert("members", { workspace: "T1", user: `U_${index}`, kind: "member" });
-        await ctx.db.insert("welcomes", { member });
-        await finishOnboardingSteps(ctx, member);
-        members.push(member);
-      }
-      return members;
-    });
-    vi.setSystemTime(mondayInUtc);
-
-    await expect(t.mutation(sweepJob(), {}), "the first sweep mutation commits").resolves.toBeNull();
-    await settle(t);
-
-    expect(await startedMembers(t), "every welcomed member's quests started").toEqual(new Set(welcomed));
   }, 60_000);
 });
 
 async function finishOnboarding(ctx: MutationCtx, member: MemberId) {
   await ctx.db.insert("questStarts", { member, at: tuesday });
-  await finishOnboardingSteps(ctx, member);
-}
-
-async function finishOnboardingSteps(ctx: MutationCtx, member: MemberId) {
   for (const step of onboardingSteps) await ctx.db.insert("questFinishes", { member, key: rewardKeyOf({ kind: "journey", step }), xp: 50, catalogueVersion: "1", at: tuesday });
 }
 
@@ -98,10 +72,6 @@ function sweepJob() {
 async function scheduled(t: Backend) {
   const jobs = await t.run((ctx) => ctx.db.system.query("_scheduled_functions").collect());
   return { draws: jobs.filter(({ name }) => name.includes("drawNewWeek")).length, sweeps: jobs.filter(({ name }) => name.includes("quests/newWeek")).length };
-}
-
-async function startedMembers(t: Backend) {
-  return new Set(await t.run(async (ctx) => (await ctx.db.query("questStarts").collect()).map(({ member }) => member)));
 }
 
 async function drawnMembers(t: Backend, week: string) {

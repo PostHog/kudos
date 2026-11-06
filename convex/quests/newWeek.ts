@@ -9,7 +9,7 @@ import { questStartOf, startQuests } from "./start";
 import { awaitsASideDraw } from "./sides";
 import { awaitsThisWeeksDraw } from "./weekly";
 
-const membersPerSweep = 25;
+const membersPerSweep = 100;
 
 export const sweep = internalMutation({
   args: { cursor: v.optional(v.string()) },

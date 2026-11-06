@@ -5,6 +5,7 @@ import { signedRequest, signingSecret } from "../../testing/signedSlack";
 import { post, settle, testBackend, type Backend } from "../../testing/slackBackend";
 import { emoji, mention, messageEvent, section, slashCommand, text } from "../../testing/slackMessages";
 import { internal } from "../_generated/api";
+import { exceptionOfJobError } from "./exceptions";
 
 const now = new Date("2026-10-13T10:00:00Z");
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -147,6 +148,16 @@ describe("O10 O23: only a reportable error sends its message", () => {
     expect(exceptionEntry(exception!)).toMatchObject({ type, value: "unexpected error" });
     const bodies = postHog.requests.map((request) => request.body).join("\n");
     for (const value of distinctive) expect(bodies).not.toContain(value);
+  });
+
+  test.each<[string, string, string]>([
+    ["a unique() refusal", "Uncaught Error: unique() query returned more than one result from table welcomes:\n [Marmalade, U0ZEPHYRINE]\n    at async handler (../convex/quokka.ts:1:1)", "unique() query returned more than one result from table welcomes"],
+    ["a read limit with words after its sentence", "Uncaught Error: Too many reads in a single function execution (limit: 4096) Marmalade Zephyrine quokka U0ZEPHYRINE", "Too many reads in a single function execution (limit: 4096)"],
+    ["a write limit with words after its sentence", "Uncaught Error: Too many writes in a single function execution (limit: 16000). artichokeparty C0MARMALADE", "Too many writes in a single function execution (limit: 16000)"],
+  ])("a failed job's %s sends only Convex's words", (_, error, words) => {
+    const { value } = exceptionOfJobError(error);
+    expect(value).toBe(words);
+    for (const word of distinctive) expect(value).not.toContain(word);
   });
 });
 
