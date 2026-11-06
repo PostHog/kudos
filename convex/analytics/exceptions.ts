@@ -49,7 +49,7 @@ export function withholdingWords<Ctx, Args extends unknown[], Output>(handler: (
 }
 
 const uniqueRefusal = /^unique\(\) query returned more than one result from table ([A-Za-z_]\w*):$/;
-const transactionLimit = /^Too many (?:reads|writes) in a single function execution \(limit: \d+\)/;
+const transactionLimit = /^Too many (?:reads|writes|documents read|bytes read|bytes written) in a single function execution \(limit: \d+(?: bytes)?\)/;
 
 export function exceptionOfJobError(error: string | undefined, tables: ReadonlySet<string>): Exception {
   const [, type = "Error", message = ""] = uncaughtError.exec(error?.split("\n")[0] ?? "") ?? [];
