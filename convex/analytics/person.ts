@@ -271,7 +271,7 @@ function identityOf(ctx: QueryCtx, member: MemberId) {
   return ctx.db
     .query("analyticsIds")
     .withIndex("by_member", (q) => q.eq("member", member))
-    .unique();
+    .first();
 }
 
 function neverRecorded(ctx: QueryCtx) {

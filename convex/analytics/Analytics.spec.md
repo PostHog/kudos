@@ -154,3 +154,16 @@ Analytics: the only module that knows PostHog. It projects each kudosGiven domai
   checklist: worker-fencing dismissed: no worker owns a flag; the component's refresh loop replaces the cached definitions in one mutation
   checklist: commit-ordered-effects dismissed: reading a flag has no external effect; its exposure is an outbox row written in the reading mutation
   checklist: resumption-coverage dismissed: nothing resumes; a cold cache answers safe defaults until the component's refresh lands
+- a member's analytics ID is the oldest one stored: Every read of a member's analytics ID, by a flag decision before or after writing, a recorded event, a query and the browser's identity, answers the oldest row stored for the member and never throws, and a member who has one is never given another.
+  over: a member with two stored analytics IDs on either side of a flag's rollout, read by a member decision before writing and its keep, a member decision and its exposure, the existing ID, the ID a recording would use, and a query's flag decision
+  via: a member's analytics ID is the oldest one stored
+  because: the sandbox's hourly quest sweep failed every run since 2026-10-25 because one hand-seeded member had two analytics IDs, so each flag decision for them threw and failed the member's whole page (#892); the oldest ID is the one PostHog has known the member by longest
+  refuted: the lookup read the newest stored analytics ID -> the test failed on its assertion that the decisions and the exposure use the oldest ID (2026-11-06)
+  kinds: state
+  checklist: revalidated-permission dismissed: an analytics ID grants nothing; it only names the member to PostHog
+  checklist: separation-of-duties dismissed: no approval policy applies to reading a member's analytics ID
+  checklist: legal-state-succession dismissed: reading an analytics ID changes no state; a member with none is given one once, and a member with one is never given another
+  checklist: supersession-safety dismissed: an extra stored ID is never read, so it never replaces the oldest
+  checklist: worker-fencing dismissed: no worker owns an analytics ID; it is read and recorded inside the mutation that needs it
+  checklist: commit-ordered-effects dismissed: reading an analytics ID has no external effect
+  checklist: resumption-coverage dismissed: nothing resumes; every read answers from the rows stored
