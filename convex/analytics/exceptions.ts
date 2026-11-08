@@ -48,9 +48,19 @@ export function withholdingWords<Ctx, Args extends unknown[], Output>(handler: (
   };
 }
 
-export function exceptionOfJobError(error: string | undefined): Exception {
+const uniqueRefusal = /^unique\(\) query returned more than one result from table ([A-Za-z_]\w*):$/;
+const transactionLimit = /^Too many (?:reads|writes|documents read|bytes read|bytes written) in a single function execution \(limit: \d+(?: bytes)?\)/;
+
+export function exceptionOfJobError(error: string | undefined, tables: ReadonlySet<string>): Exception {
   const [, type = "Error", message = ""] = uncaughtError.exec(error?.split("\n")[0] ?? "") ?? [];
-  return { type, value: type === ReportableError.name ? message : unexpectedError, frames: [] };
+  if (type === ReportableError.name) return { type, value: message, frames: [] };
+  return { type, value: (type === "Error" && convexsOwnRefusal(message, tables)) || unexpectedError, frames: [] };
+}
+
+function convexsOwnRefusal(message: string, tables: ReadonlySet<string>) {
+  const [, table] = uniqueRefusal.exec(message) ?? [];
+  if (table !== undefined) return tables.has(table) ? message.slice(0, -1) : undefined;
+  return transactionLimit.exec(message)?.[0];
 }
 
 export function typeOf(error: unknown) {

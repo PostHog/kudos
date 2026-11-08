@@ -5,7 +5,8 @@ import { settle, testBackend, type Backend } from "../../testing/slackBackend";
 import { internal } from "../_generated/api";
 import type { MemberId } from "../workspace/directory";
 import { workspaceKeyOf } from "./outbox";
-import { exposed, flagSeamCheck, memberDecision, workspaceDecision, type Flag } from "./flags";
+import { exposed, flagSeamCheck, memberDecision, memberDecisionBeforeWriting, workspaceDecision, type Flag } from "./flags";
+import { analyticsIdOf as storedAnalyticsIdOf, existingAnalyticsId } from "./person";
 
 const now = new Date("2026-10-13T10:00:00Z");
 
@@ -331,5 +332,33 @@ describe("O36: exposure", () => {
     await t.run((ctx) => exposed(ctx, boardFlag, alice, true));
     await settle(t);
     expect(postHog.productEvents().map((event) => event.event)).toEqual(["$feature_flag_called"]);
+  });
+});
+
+describe("a member's analytics ID is the oldest one stored", () => {
+  test("a member's analytics ID is the oldest one stored", async () => {
+    const t = testBackend();
+    const [inside, outside] = await sortedByRolloutHash(flagSeamCheck.key, ["11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"]);
+    const alice = await aMember(t);
+    await t.run(async (ctx) => {
+      await ctx.db.insert("analyticsIds", { member: alice, analyticsId: inside.id });
+      await ctx.db.insert("analyticsIds", { member: alice, analyticsId: outside.id });
+    });
+    const between = ((inside.hash + outside.hash) / 2) * 100;
+    await definitionsFromPostHog(t, { key: flagSeamCheck.key, filters: { groups: [{ properties: [], rollout_percentage: between }] } });
+
+    const read = await t.run(async (ctx) => {
+      const decision = await memberDecisionBeforeWriting(ctx, flagSeamCheck, alice);
+      await decision.keep();
+      const decided = await memberDecision(ctx, flagSeamCheck, alice);
+      await exposed(ctx, flagSeamCheck, alice, decided);
+      return { beforeWriting: decision.value, decided, existing: await existingAnalyticsId(ctx, alice), recorded: await storedAnalyticsIdOf(ctx, alice) };
+    });
+    await settle(t);
+
+    expect(read).toEqual({ beforeWriting: true, decided: true, existing: inside.id, recorded: inside.id });
+    expect(await t.query(internal.analytics.flags.seamCheck, { member: alice }), "a query decides on the oldest ID").toBe(true);
+    expect(postHog.productEvents().map((event) => event.distinct_id)).toEqual([inside.id]);
+    expect(await t.run(async (ctx) => (await ctx.db.query("analyticsIds").collect()).length), "no third ID is recorded").toBe(2);
   });
 });

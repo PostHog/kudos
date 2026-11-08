@@ -1,6 +1,7 @@
 import type { DocumentByName, SystemDataModel } from "convex/server";
 import { internalMutation, type MutationCtx } from "../_generated/server";
 import { functionPathOf } from "./boundary";
+import schema from "../schema";
 import { carriesReportedMarker, exceptionOfJobError } from "./exceptions";
 import { recordException } from "./outbox";
 
@@ -77,12 +78,14 @@ async function watch(ctx: MutationCtx, job: Job) {
   if (watched === null) await ctx.db.insert("watchedJobs", { job: job._id });
 }
 
+const schemaTables: ReadonlySet<string> = new Set(Object.keys(schema.tables));
+
 async function reportIfFailed(ctx: MutationCtx, job: Job) {
   if (job.state.kind !== "failed") return;
   const error: string | undefined = job.state.error;
   if (job.name.startsWith(analyticsModule) || carriesReportedMarker(error) || (await wasReported(ctx, job))) return;
   await ctx.db.insert("reportedJobs", { job: job._id });
-  await recordException(ctx, { path: functionPathOf(job.name), kind: "mutation" }, exceptionOfJobError(error), job.completedTime ?? Date.now());
+  await recordException(ctx, { path: functionPathOf(job.name), kind: "mutation" }, exceptionOfJobError(error, schemaTables), job.completedTime ?? Date.now());
 }
 
 async function wasReported(ctx: MutationCtx, job: Job) {
