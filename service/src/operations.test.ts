@@ -201,7 +201,7 @@ describe("the transaction", () => {
     }
   });
 
-  test("a handler can't end or start the runner's transaction, through Drizzle's own transaction or a raw statement", async () => {
+  test("a handler can't end or start the runner's transaction: Drizzle's own transaction, a raw statement, or one behind a comment or another statement", async () => {
     const { operations } = setUp();
     const escapes: Array<(tx: Database) => Promise<unknown>> = [
       (tx) => tx._.session.transaction((inner) => inner.insert(counters).values({ id: "inner", n: 1 })),
@@ -215,14 +215,22 @@ describe("the transaction", () => {
       (tx) => tx.execute(sql.raw("SELECT 1; COMMIT")),
       (tx) => tx.execute(sql.raw("select 'it''s'; commit")),
       (tx) => tx.execute(sql.raw("select $q$ $$ $q$; commit")),
+      (tx) => tx.execute(sql.raw("-- trace\rCOMMIT")),
+      (tx) => tx.execute(sql.raw("SELECT E'abc'\n'\\''; COMMIT")),
+      (tx) => tx.execute(sql.raw("SELECT 1 AS é$$; COMMIT")),
+      (tx) => tx.execute(sql.raw("start /* a */ transaction")),
+      (tx) => tx.execute(sql.raw("rollback /* not to a savepoint */")),
     ];
 
-    for (const escape of escapes) {
+    for (const [index, escape] of escapes.entries()) {
       const run = operations.mutation("escape", async ({ tx }) => {
         await tx.insert(counters).values({ id: "outer", n: 1 });
         await escape(tx as unknown as Database);
+        throw new Error("the handler fails after it");
       });
-      await expect(run).rejects.toSatisfy(causedBy("TransactionOwnedError"));
+      // Refused by the runner, or by Postgres, which takes one statement per text from it.
+      await expect(run, `escape ${index}`).rejects.not.toThrow("the handler fails after it");
+      expect((await pool.query("select * from counters")).rows, `escape ${index}: nothing it wrote stays`).toEqual([]);
     }
     const savepoint = await operations.mutation("savepoint", async ({ tx }) => {
       await tx.execute(sql`savepoint mine`);
@@ -232,8 +240,12 @@ describe("the transaction", () => {
     });
     expect(savepoint, "a savepoint stays the handler's").toBe("kept");
     const lookalikes = await operations.mutation("lookalikes", async ({ tx }) => {
+      await tx.execute(sql`savepoint mine`);
       await tx.execute(sql.raw("do $$ begin perform 1; end $$"));
       await tx.execute(sql.raw("select 'x; commit' as quoted, $body$; end$body$ as dollar /* ; commit */"));
+      await tx.execute(sql.raw("SELECT E'abc'\n'\\'; commit' AS value"));
+      await tx.execute(sql.raw("SELECT $é$; commit; rollback$é$ AS value"));
+      await tx.execute(sql.raw("rollback /* to */ to savepoint mine"));
       return (await tx.execute<{ commit: number }>(sql.raw(`select 1 as "commit" -- ; rollback`))).rows;
     });
     expect(lookalikes, "commit inside a string, a body, a name or a comment is no statement").toEqual([{ commit: 1 }]);
