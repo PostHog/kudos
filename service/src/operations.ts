@@ -194,14 +194,15 @@ function refuseNesting(name: string): void {
 /**
  * What a statement's first words make it: one that begins or ends a transaction (`begin`, `start transaction`,
  * `commit`, `end`, `abort`, `rollback`, `prepare transaction`, `commit prepared`), a rollback to a savepoint, or any
- * other. Only whitespace and comments can come before a statement's first word, and Postgres allows comments between
- * its words, so those are all this reads past.
+ * other. Only whitespace, comments and empty statements (`;`) can come before a statement's first word, and Postgres
+ * allows comments between its words, so those are all this reads past.
  */
 function statementKind(text: string): "transaction" | "rollback to savepoint" | "other" {
   const words: string[] = [];
   let i = 0;
   while (words.length < 3 && i < text.length) {
-    if (/[ \t\n\r\f\v]/.test(text[i]!)) i += 1;
+    if (/[ \t\n\r\f\v;]/.test(text[i]!) && words.length === 0) i += 1; // Postgres skips empty statements before it
+    else if (/[ \t\n\r\f\v]/.test(text[i]!)) i += 1;
     else if (text.startsWith("--", i)) while (i < text.length && text[i] !== "\n" && text[i] !== "\r") i += 1;
     else if (text.startsWith("/*", i)) {
       let depth = 0;
