@@ -19,6 +19,8 @@ export type Target = {
   // A target on the hosting platform, as the promotion gate runs (see journeys tagged @sandbox): its real edge in front,
   // real Slack behind, and no fakes, so it names no KUDOS_FAKES_URL and runs only journeys that need none.
   hosted?: boolean;
+  // Where a hosted edge sends a visitor who hasn't signed in: the start of its sign-in URL.
+  edgeSignInUrl?: string;
 };
 
 export const targetKinds = ["oracle", "rewrite"] as const;
@@ -40,6 +42,7 @@ const names = {
   timeUrl: "KUDOS_TIME_URL",
   testSecret: "KUDOS_TEST_SECRET",
   hosted: "KUDOS_HOSTED",
+  edgeSignInUrl: "KUDOS_EDGE_SIGN_IN_URL",
 } as const satisfies Record<keyof Target, string>;
 
 export function targetLines(target: Target) {
@@ -75,5 +78,6 @@ export function targetOf(file = process.env.E2E_TARGET): Target {
     timeUrl: variables[names.timeUrl] || `${appUrl}/testing/time`,
     testSecret: variables[names.testSecret] || undefined,
     hosted,
+    edgeSignInUrl: variables[names.edgeSignInUrl] || undefined,
   };
 }

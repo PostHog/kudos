@@ -72,8 +72,8 @@ export type ProductionBranch = {
   /** The commit `production` points at, or undefined when the branch doesn't exist. */
   production: () => Promise<string | undefined>;
   isAncestor: IsAncestor;
-  /** Moves `production` to the commit without force, so the remote refuses anything but a fast-forward too. */
-  push: (sha: string) => Promise<void>;
+  /** Moves `production` from `from` to `sha`, only while the remote still has it at `from`. */
+  push: (sha: string, from: string) => Promise<void>;
 };
 
 /** Moves `production` forward to exactly `sha`, only while the promotion switch is on, and never back or sideways. */
@@ -83,6 +83,6 @@ export async function fastForward({ sha, enabled, git }: { sha: string; enabled:
   if (production === undefined) throw new Error("there is no production branch: a person creates it at the cutover, and the promotion only moves it forward");
   if (production === sha) return "current";
   if (!(await git.isAncestor(production, sha))) throw new Error(`production is at ${production}, which ${sha} doesn't follow, so it is not moved`);
-  await git.push(sha);
+  await git.push(sha, production);
   return "moved";
 }

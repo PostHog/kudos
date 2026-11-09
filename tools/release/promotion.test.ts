@@ -82,7 +82,7 @@ describe("waiting for the sandbox to serve the commit", () => {
 describe("fast-forwarding production", () => {
   function git(production: string | undefined) {
     const pushed: string[] = [];
-    return { pushed, production: async () => production, isAncestor, push: async (to: string) => void pushed.push(to) };
+    return { pushed, production: async () => production, isAncestor, push: async (to: string, from: string) => void pushed.push(`${from}..${to}`) };
   }
 
   test("does nothing while the promotion switch is off", async () => {
@@ -96,7 +96,7 @@ describe("fast-forwarding production", () => {
     const remote = git(older);
 
     await expect(fastForward({ sha, enabled: true, git: remote })).resolves.toBe("moved");
-    expect(remote.pushed).toEqual([sha]);
+    expect(remote.pushed, "a push only while production is still where it was read").toEqual([`${older}..${sha}`]);
   });
 
   test("leaves production alone when it already is the commit", async () => {

@@ -15,14 +15,25 @@ on:
 permissions:
   contents: read
 
-# One promotion at a time; a newer commit's run waits, then the newest one wins.
+# One promotion at a time, and every waiting run keeps its turn, so a rerun of an older commit never pushes a newer
+# commit's run out of the queue. A run on another ref skips every job, so it queues apart.
 concurrency:
-  group: promote-production
+  group: promote-production-${{ github.ref }}
   cancel-in-progress: false
+  queue: max
+
+# The checks a commit passes before it is promoted: CI's on main, and the sandbox's deploy. This workflow's own jobs
+# carry names of their own, so none of them is ever read as one of these.
+env:
+  REQUIRED_CHECKS: |
+    gate
+    e2e-rewrite
+    hosthog/deploy (hedgehug-sandbox)
 
 jobs:
   # Waits for the commit's checks, the sandbox's deploy among them, then for the sandbox to serve exactly this commit.
   sandbox:
+    name: "promotion: wait for the sandbox"
     if: ${{ github.ref == 'refs/heads/main' && (vars.HEDGEHUG_PROMOTION == 'sandbox' || vars.HEDGEHUG_PROMOTION == 'production') }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -49,10 +60,6 @@ jobs:
           SHA: ${{ github.sha }}
           GITHUB_TOKEN: ${{ github.token }}
           DEADLINE_MS: "3600000"
-          REQUIRED_CHECKS: |
-            gate
-            e2e-rewrite
-            hosthog/deploy (hedgehug-sandbox)
 
       - name: Wait for the sandbox to serve exactly this commit
         id: serves
@@ -64,6 +71,7 @@ jobs:
 
   # The journeys tagged @sandbox against the sandbox: no Slack fake, no clock to move, no sign-in.
   gate:
+    name: "promotion: journeys on the sandbox"
     needs: sandbox
     if: ${{ needs.sandbox.outputs.outcome == 'ready' }}
     runs-on: ubuntu-latest
@@ -90,10 +98,11 @@ jobs:
       - name: Run the journeys tagged @sandbox against the sandbox
         run: |
           target="$RUNNER_TEMP/sandbox.env"
-          printf '%s\n' KUDOS_TARGET_KIND=rewrite "KUDOS_APP_URL=$APP_URL" "KUDOS_SLACK_SIGNING_SECRET=$SIGNING_SECRET" "KUDOS_SLACK_WORKSPACE=$WORKSPACE" "KUDOS_SLACK_APP_ID=$APP_ID" KUDOS_SIGN_IN=edge-header KUDOS_HOSTED=true > "$target"
+          printf '%s\n' KUDOS_TARGET_KIND=rewrite "KUDOS_APP_URL=$APP_URL" "KUDOS_SLACK_SIGNING_SECRET=$SIGNING_SECRET" "KUDOS_SLACK_WORKSPACE=$WORKSPACE" "KUDOS_SLACK_APP_ID=$APP_ID" KUDOS_SIGN_IN=edge-header KUDOS_HOSTED=true "KUDOS_EDGE_SIGN_IN_URL=$SIGN_IN_URL" > "$target"
           E2E_TARGET="$target" pnpm exec e2e run --config e2e/e2e.config.ts --tag @sandbox
         env:
           APP_URL: ${{ vars.HEDGEHUG_SANDBOX_URL }}
+          SIGN_IN_URL: ${{ vars.HEDGEHUG_SANDBOX_SIGN_IN_URL }}
           WORKSPACE: ${{ vars.HEDGEHUG_SANDBOX_WORKSPACE }}
           APP_ID: ${{ vars.HEDGEHUG_SANDBOX_APP_ID }}
           SIGNING_SECRET: ${{ secrets.HEDGEHUG_SANDBOX_SIGNING_SECRET }}
@@ -107,14 +116,19 @@ jobs:
           APP_URL: ${{ vars.HEDGEHUG_SANDBOX_URL }}
           DEADLINE_MS: "0"
 
-  # Moves production forward to exactly this commit, never back or sideways, and never creates the branch.
+  # Moves production forward to exactly this commit, never back or sideways, and never creates the branch. It reads
+  # the checks and the sandbox again just before, so a rerun of this job alone, maybe days on, still pushes only a
+  # commit whose checks pass and which the sandbox still serves.
   promote:
+    name: "promotion: move production"
     needs: gate
     if: ${{ needs.gate.outputs.outcome == 'ready' && vars.HEDGEHUG_PROMOTION == 'production' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       contents: write
+      checks: read
+      statuses: read
     outputs:
       production: ${{ steps.forward.outputs.production }}
     steps:
@@ -127,17 +141,35 @@ jobs:
         with:
           node-version: "24"
 
+      - name: Read the commit's checks again
+        run: node tools/release/promote.ts checks
+        env:
+          SHA: ${{ github.sha }}
+          GITHUB_TOKEN: ${{ github.token }}
+          DEADLINE_MS: "0"
+
+      - name: Check the sandbox still serves this commit
+        id: still
+        run: node tools/release/promote.ts serves
+        env:
+          SHA: ${{ github.sha }}
+          APP_URL: ${{ vars.HEDGEHUG_SANDBOX_URL }}
+          DEADLINE_MS: "0"
+
       - name: Fast-forward production to this commit
         id: forward
+        if: ${{ steps.still.outputs.outcome == 'ready' }}
         run: node tools/release/promote.ts fast-forward
         env:
           SHA: ${{ github.sha }}
           HEDGEHUG_PROMOTION: ${{ vars.HEDGEHUG_PROMOTION }}
 
-  # Once production serves the commit, the journeys tagged @sandbox that write nothing run against it.
+  # Once production serves the commit, the journeys tagged @sandbox that write nothing run against it, also when an
+  # earlier attempt already moved production and this one found it current.
   production:
+    name: "promotion: journeys on production"
     needs: promote
-    if: ${{ needs.promote.outputs.production == 'moved' }}
+    if: ${{ needs.promote.outputs.production == 'moved' || needs.promote.outputs.production == 'current' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -171,10 +203,11 @@ jobs:
         if: ${{ steps.serves.outputs.outcome == 'ready' }}
         run: |
           target="$RUNNER_TEMP/production.env"
-          printf '%s\n' KUDOS_TARGET_KIND=rewrite "KUDOS_APP_URL=$APP_URL" "KUDOS_SLACK_SIGNING_SECRET=$SIGNING_SECRET" "KUDOS_SLACK_WORKSPACE=$WORKSPACE" "KUDOS_SLACK_APP_ID=$APP_ID" KUDOS_SIGN_IN=edge-header KUDOS_HOSTED=true > "$target"
+          printf '%s\n' KUDOS_TARGET_KIND=rewrite "KUDOS_APP_URL=$APP_URL" "KUDOS_SLACK_SIGNING_SECRET=$SIGNING_SECRET" "KUDOS_SLACK_WORKSPACE=$WORKSPACE" "KUDOS_SLACK_APP_ID=$APP_ID" KUDOS_SIGN_IN=edge-header KUDOS_HOSTED=true "KUDOS_EDGE_SIGN_IN_URL=$SIGN_IN_URL" > "$target"
           E2E_TARGET="$target" pnpm exec e2e run --config e2e/e2e.config.ts --tag @sandbox --exclude-tag @writes
         env:
           APP_URL: ${{ vars.HEDGEHUG_PRODUCTION_URL }}
+          SIGN_IN_URL: ${{ vars.HEDGEHUG_PRODUCTION_SIGN_IN_URL }}
           WORKSPACE: ${{ vars.HEDGEHUG_PRODUCTION_WORKSPACE }}
           APP_ID: ${{ vars.HEDGEHUG_PRODUCTION_APP_ID }}
           SIGNING_SECRET: ${{ secrets.HEDGEHUG_PRODUCTION_SIGNING_SECRET }}

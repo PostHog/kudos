@@ -95,19 +95,22 @@ describe("the promotion's steps", () => {
     expect(await run("serves", repo.checkout, { SHA: repo.first, APP_URL: appUrl, DEADLINE_MS: "0" })).toMatchObject({ code: 0, stdout: "outcome=superseded\n" });
   });
 
-  test("checks reads the commit's check runs and statuses from GitHub's API", async () => {
+  test("checks reads every page of the commit's check runs and statuses from GitHub's API, taking each name's latest run", async () => {
     const repo = repository();
     const seen: string[] = [];
+    // A full first page of other checks, the required one and an older failed run of it on the second, so only a
+    // reader that turns the page and takes the latest run sees it pass.
+    const others = Array.from({ length: 100 }, (_, index) => ({ id: 10 + index, name: `other ${index}`, status: "completed", conclusion: "success" }));
     const api = await serve((path) => {
       seen.push(path);
-      return path.includes("/check-runs")
-        ? { check_runs: [{ id: 1, name: "gate", status: "completed", conclusion: "failure" }, { id: 2, name: "gate", status: "completed", conclusion: "success" }] }
-        : { statuses: [{ context: "hosthog/deploy (hedgehug-sandbox)", state: "success" }] };
+      const page = Number(new URL(path, "http://api").searchParams.get("page"));
+      if (path.includes("/check-runs")) return { total_count: 102, check_runs: page === 1 ? others : page === 2 ? [{ id: 2, name: "gate", status: "completed", conclusion: "success" }, { id: 1, name: "gate", status: "completed", conclusion: "failure" }] : [] };
+      return { total_count: 1, statuses: page === 1 ? [{ context: "hosthog/deploy (hedgehug-sandbox)", state: "success" }] : [] };
     });
     const env = { SHA: repo.second, GITHUB_API_URL: api, GITHUB_REPOSITORY: "owner/repo", GITHUB_TOKEN: "t", DEADLINE_MS: "0" };
 
     expect(await run("checks", repo.checkout, { ...env, REQUIRED_CHECKS: "gate\nhosthog/deploy (hedgehug-sandbox)\n" })).toMatchObject({ code: 0 });
-    expect(seen).toContain(`/repos/owner/repo/commits/${repo.second}/check-runs?per_page=100`);
+    expect(seen).toContain(`/repos/owner/repo/commits/${repo.second}/check-runs?per_page=100&page=2`);
     const missing = await run("checks", repo.checkout, { ...env, REQUIRED_CHECKS: "gate\ne2e-rewrite" });
     expect(missing.code).toBe(1);
     expect(missing.stderr).toContain("e2e-rewrite did not pass within 0 s");

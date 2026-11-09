@@ -5,13 +5,15 @@ import { parse } from "yaml";
 import { runStep } from "./workflowStep";
 
 type Step = { id?: string; name?: string; if?: string; run?: string; uses?: string; with?: Record<string, unknown>; env?: Record<string, string> };
-type Job = { if?: string; needs?: string; permissions?: Record<string, string>; outputs?: Record<string, string>; steps: Step[] };
-type Workflow = { on: unknown; permissions: unknown; concurrency: { group: string; "cancel-in-progress": boolean }; jobs: Record<string, Job> };
+type Job = { name?: string; if?: string; needs?: string; permissions?: Record<string, string>; outputs?: Record<string, string>; steps: Step[] };
+type Workflow = { on: unknown; permissions: unknown; env: { REQUIRED_CHECKS: string }; concurrency: { group: string; "cancel-in-progress": boolean; queue?: string }; jobs: Record<string, Job> };
 
 const source = readFileSync(new URL("./promote-production.yml", import.meta.url), "utf8");
 const workflow = parse(source) as Workflow;
 const { sandbox, gate, promote, production } = workflow.jobs as Record<"sandbox" | "gate" | "promote" | "production", Job>;
 const stepRunning = (job: Job, command: string) => job.steps.find((step) => step.run?.includes(command));
+const stepsRunning = (job: Job, command: string) => job.steps.filter((step) => step.run?.includes(command));
+const required = workflow.env.REQUIRED_CHECKS.trim().split("\n");
 
 describe("promoting a commit of main to production", () => {
   test("runs for each push to main, or by hand, never for a pull request", () => {
@@ -19,8 +21,15 @@ describe("promoting a commit of main to production", () => {
     expect(sandbox.if).toContain("github.ref == 'refs/heads/main'");
   });
 
-  test("one promotion at a time, and a newer commit's run waits rather than cutting the running one off", () => {
-    expect(workflow.concurrency).toEqual({ group: "promote-production", "cancel-in-progress": false });
+  test("one promotion at a time per ref, and every waiting run keeps its turn, so a rerun of an older commit never drops a newer commit's run", () => {
+    expect(workflow.concurrency).toEqual({ group: "promote-production-${{ github.ref }}", "cancel-in-progress": false, queue: "max" });
+  });
+
+  test("names its own jobs apart from the checks it waits for, so a promotion job is never read as CI's", () => {
+    for (const [id, job] of Object.entries(workflow.jobs)) {
+      expect(job.name, id).toMatch(/^promotion: /);
+      expect(required, id).not.toContain(job.name);
+    }
   });
 
   test("is off until HEDGEHUG_PROMOTION is sandbox or production: the first job asks it and every later one needs it", () => {
@@ -33,9 +42,18 @@ describe("promoting a commit of main to production", () => {
     expect(stepRunning(promote, "promote.ts fast-forward")?.env?.HEDGEHUG_PROMOTION).toBe("${{ vars.HEDGEHUG_PROMOTION }}");
   });
 
+  test("reads the checks and the sandbox again right before the push, so a rerun of the push alone can't move production on an old gate", () => {
+    const [checks, still, forward] = [stepRunning(promote, "promote.ts checks")!, stepRunning(promote, "promote.ts serves")!, stepRunning(promote, "promote.ts fast-forward")!];
+    expect(checks.env).toMatchObject({ DEADLINE_MS: "0", GITHUB_TOKEN: "${{ github.token }}" });
+    expect(still.env).toMatchObject({ APP_URL: "${{ vars.HEDGEHUG_SANDBOX_URL }}", DEADLINE_MS: "0" });
+    expect(forward.if).toBe(`\${{ steps.${still.id}.outputs.outcome == 'ready' }}`);
+    expect(promote.steps.indexOf(forward)).toBeGreaterThan(Math.max(promote.steps.indexOf(checks), promote.steps.indexOf(still)));
+    expect(stepsRunning(promote, "promote.ts")).toHaveLength(3);
+  });
+
   test("waits for the commit's CI and the sandbox's deploy, then for the sandbox to serve exactly the commit", () => {
     const checks = stepRunning(sandbox, "promote.ts checks");
-    expect(checks?.env?.REQUIRED_CHECKS?.trim().split("\n")).toEqual(["gate", "e2e-rewrite", "hosthog/deploy (hedgehug-sandbox)"]);
+    expect(required).toEqual(["gate", "e2e-rewrite", "hosthog/deploy (hedgehug-sandbox)"]);
     const serves = stepRunning(sandbox, "promote.ts serves");
     expect(sandbox.steps.indexOf(serves!)).toBeGreaterThan(sandbox.steps.indexOf(checks!));
     expect(serves?.env?.APP_URL).toBe("${{ vars.HEDGEHUG_SANDBOX_URL }}");
@@ -51,8 +69,8 @@ describe("promoting a commit of main to production", () => {
     expect(gate.outputs?.outcome).toBe(`\${{ steps.${still?.id}.outputs.outcome }}`);
   });
 
-  test("after production moved, waits for it to serve the commit and runs only the journeys tagged @sandbox that write nothing", () => {
-    expect(production.if).toBe("${{ needs.promote.outputs.production == 'moved' }}");
+  test("after production moved, or an earlier attempt moved it, waits for it to serve the commit and runs only the journeys tagged @sandbox that write nothing", () => {
+    expect(production.if).toBe("${{ needs.promote.outputs.production == 'moved' || needs.promote.outputs.production == 'current' }}");
     const serves = stepRunning(production, "promote.ts serves");
     expect(serves?.env?.APP_URL).toBe("${{ vars.HEDGEHUG_PRODUCTION_URL }}");
     const journeys = stepRunning(production, "e2e run");
@@ -73,6 +91,7 @@ describe("promoting a commit of main to production", () => {
     expect(workflow.permissions).toEqual({ contents: "read" });
     for (const [name, job] of Object.entries(workflow.jobs)) {
       expect(job.permissions?.contents ?? "read", name).toBe(name === "promote" ? "write" : "read");
+      expect(Object.entries(job.permissions ?? {}).filter(([scope, level]) => scope !== "contents" && level !== "read"), name).toEqual([]);
       const checkout = job.steps.find((step) => step.uses?.startsWith("actions/checkout@"));
       expect(checkout?.with?.["persist-credentials"], name).toBe(name === "promote" ? undefined : false);
     }
@@ -95,7 +114,7 @@ describe("promoting a commit of main to production", () => {
     ["production", production],
   ])("the %s journeys run on a target with no fakes, no clock and no sign-in, from the app's variables", (_, job) => {
     const step = stepRunning(job, "e2e run")!;
-    const env = { APP_URL: "https://app.example", WORKSPACE: "T0", APP_ID: "A0", SIGNING_SECRET: "s3cret", RUNNER_TEMP: process.env.TMPDIR ?? "/tmp" };
+    const env = { APP_URL: "https://app.example", WORKSPACE: "T0", APP_ID: "A0", SIGNING_SECRET: "s3cret", SIGN_IN_URL: "https://sso.example/start", RUNNER_TEMP: process.env.TMPDIR ?? "/tmp" };
     const script = step.run!.replace(/E2E_TARGET=.*$/m, 'cat "$target" > "$GITHUB_OUTPUT"');
 
     const { status, output } = runStep(script, { env });
@@ -109,6 +128,8 @@ describe("promoting a commit of main to production", () => {
       "KUDOS_SLACK_APP_ID=A0",
       "KUDOS_SIGN_IN=edge-header",
       "KUDOS_HOSTED=true",
+      "KUDOS_EDGE_SIGN_IN_URL=https://sso.example/start",
     ]);
+    expect(step.env?.SIGN_IN_URL).toBe(`\${{ vars.HEDGEHUG_${job === gate ? "SANDBOX" : "PRODUCTION"}_SIGN_IN_URL }}`);
   });
 });
