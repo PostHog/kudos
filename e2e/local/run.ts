@@ -45,6 +45,10 @@ try {
     }),
   });
   cleanups.push(backend.stop);
+  // The flags component loads definitions only when its supervising cron first runs, minutes after a deploy, so the
+  // app would read every flag as off until then. Load them now, before the first journey.
+  const loaded = await backend.run("lib:refreshFlagDefinitions", { component: "posthog" });
+  if (!loaded.includes('"updated"')) throw new Error(`the app didn't load the fakes' flag definitions: ${loaded}`);
 
   const directory = await mkdtemp(join(tmpdir(), "kudos-e2e-target-"));
   cleanups.push(() => rm(directory, { recursive: true, force: true }));

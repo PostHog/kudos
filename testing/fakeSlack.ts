@@ -255,6 +255,7 @@ export class FakeSlack {
     if (method === "conversations.leave") return this.leave(field("channel"));
     if (method === "chat.unfurl") return unfurlAnswerTo(args);
     if (method === "conversations.info") return this.channelInfo(field("channel"));
+    if (method === "conversations.open") return { ok: true, channel: { id: directMessageWith(field("users")) } };
     if (method === "auth.test") return { ok: true, url: this.workspaceUrl, team: "Kudos Test", team_id: "T1", user: "kudos", user_id: "U_KUDOS_BOT", bot_id: "B_KUDOS" };
     return { ok: false, error: "unknown_method" };
   }
@@ -396,4 +397,9 @@ function isPrivate(channel: SlackChannel) {
 function describedChannel(id: string, channel: SlackChannel) {
   const isShared = channel.kind === "shared" || channel.kind === "private-shared";
   return { id, name: channel.name, is_channel: true, is_private: isPrivate(channel), is_archived: channel.kind === "archived", is_ext_shared: isShared, is_pending_ext_shared: channel.kind === "pending-shared", is_member: channel.joined === true };
+}
+
+// The DM conversation conversations.open gives the app for a member, one per member as Slack keeps it.
+export function directMessageWith(user: string) {
+  return `D${user}`;
 }
