@@ -103,9 +103,50 @@ describe("updating a Slack app's manifest", () => {
   });
 });
 
+describe("what Slack's export may hold that the repository's manifest doesn't", () => {
+  test("a slash command Slack hands back with its keys in another order, or with a field of its own, is the same command", async () => {
+    const rendered = renderManifest("sandbox", newHost);
+    const held = { ...rendered, features: { ...rendered.features, slash_commands: rendered.features.slash_commands.map((command) => ({ ...Object.fromEntries(Object.entries(command).reverse()), usage_hint: "" })) } };
+    const { api, calls } = slackHolding(held);
+
+    await expect(updateManifest({ api, manifest: renderManifest("sandbox", newHost), apply: true, answersSlack: answers([]) })).resolves.toMatchObject({ outcome: "current", changes: [] });
+    expect(calls).toEqual(["export"]);
+  });
+
+  test("never drops user events or a scope of any kind, which an update would remove since it replaces the whole manifest", async () => {
+    const held = renderManifest("sandbox", oldHost) as Manifest & { settings: { event_subscriptions: Record<string, unknown> }; oauth_config: { scopes: Record<string, unknown> } };
+    held.settings.event_subscriptions.user_events = ["reaction_added"];
+    held.oauth_config.scopes.bot_optional = ["files:read"];
+    const { api, calls } = slackHolding(held);
+
+    await expect(updateManifest({ api, manifest: renderManifest("sandbox", newHost), apply: true, answersSlack: answers([]) })).rejects.toThrow("it would remove oauth_config.scopes.bot_optional files:read, settings.event_subscriptions.user_events reaction_added");
+    expect(calls).toEqual(["export"]);
+  });
+
+  test("a manifest that only leaves a field out is a change, never already applied: a protected list fails, anything else is reported as removed", async () => {
+    const dropsScopes = renderManifest("sandbox", newHost) as Manifest & { oauth_config: Record<string, unknown> };
+    delete (dropsScopes.oauth_config as { scopes: Record<string, unknown> }).scopes.user;
+    await expect(updateManifest({ api: slackHolding(renderManifest("sandbox", newHost)).api, manifest: dropsScopes, apply: true, answersSlack: answers([]) })).rejects.toThrow("it would remove oauth_config.scopes.user openid, oauth_config.scopes.user profile");
+
+    const dropsRedirects = renderManifest("sandbox", newHost) as Manifest & { oauth_config: Record<string, unknown> };
+    delete dropsRedirects.oauth_config.redirect_urls;
+    const result = await updateManifest({ api: slackHolding(renderManifest("sandbox", newHost)).api, manifest: dropsRedirects, apply: false, answersSlack: answers([]) });
+    expect(result).toMatchObject({ outcome: "planned", changes: [{ path: "oauth_config.redirect_urls", from: [`${newHost}/api/auth/callback/slack`], to: undefined }] });
+  });
+
+  test("names the scopes a change adds, which are what a workspace admin approves by reinstalling", async () => {
+    const wants = renderManifest("sandbox", newHost);
+    wants.oauth_config.scopes.bot.push("files:read");
+
+    await expect(updateManifest({ api: slackHolding(renderManifest("sandbox", newHost), { permissionsUpdated: true }).api, manifest: wants, apply: true, answersSlack: answers([]) })).resolves.toMatchObject({ outcome: "updated", permissionsUpdated: true, scopesAdded: ["oauth_config.scopes.bot files:read"] });
+    await expect(updateManifest({ api: slackHolding(renderManifest("sandbox", oldHost), { permissionsUpdated: true }).api, manifest: renderManifest("sandbox", newHost), apply: true, answersSlack: answers([]) })).resolves.toMatchObject({ permissionsUpdated: true, scopesAdded: [] });
+  });
+});
+
 describe("comparing manifests", () => {
-  test("reads only what the rendered manifest sets, so fields Slack adds don't count", () => {
-    expect(changesBetween({ a: { b: 1, extra: true }, _metadata: {} }, { a: { b: 1 } })).toEqual([]);
+  test("counts what Slack holds and the manifest leaves out, but not the empty defaults Slack fills in", () => {
+    expect(changesBetween({ a: { b: 1, flag: false, hint: "", list: [] }, _metadata: { major_version: 1 } }, { a: { b: 1 } })).toEqual([]);
+    expect(changesBetween({ a: { b: 1, extra: true } }, { a: { b: 1 } })).toEqual([{ path: "a.extra", from: true, to: undefined }]);
     expect(changesBetween({ a: { b: 1 } }, { a: { b: 2 } })).toEqual([{ path: "a.b", from: 1, to: 2 }]);
     expect(changesBetween({}, { a: { b: [1] } })).toEqual([{ path: "a.b", from: undefined, to: [1] }]);
   });

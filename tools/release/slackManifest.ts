@@ -55,11 +55,14 @@ function fail(message: string): never {
 
 try {
   const manifest = renderManifest(app === "production" ? "real" : "sandbox", need("APP_URL"));
-  const { outcome, changes, permissionsUpdated } = await updateManifest({ api, manifest, apply: process.env.APPLY === "true", answersSlack });
+  const { outcome, changes, scopesAdded, permissionsUpdated } = await updateManifest({ api, manifest, apply: process.env.APPLY === "true", answersSlack });
   const said = { current: "already holds this manifest", planned: "would change (not sent: APPLY is not true)", updated: "changed" }[outcome];
   report([`The ${app} Slack app ${said}.`, ...changes.map(({ path, from, to }) => `- ${path}: ${JSON.stringify(from)} → ${JSON.stringify(to)}`)]);
-  if (permissionsUpdated) console.log(`::warning::Slack says the ${app} app's permissions changed: a workspace admin reinstalls it before the new scopes work`);
-  if (changes.some(({ path }) => path === "settings.event_subscriptions.request_url")) console.log(`::notice::The events URL moved; check Slack's Event Subscriptions page for the ${app} app and the app's request log for the first event`);
+  const sent = outcome === "updated";
+  // A new scope is what a reinstall approves; Slack's own flag also rises on changes that need none, such as a moved redirect URL.
+  if (scopesAdded.length > 0) console.log(`::warning::The ${app} app ${sent ? "now asks" : "would ask"} for ${scopesAdded.join(", ")}: a workspace admin reinstalls it before that works`);
+  else if (permissionsUpdated) console.log(`::notice::Slack marked the ${app} app's permissions as updated, with no scope added; no reinstall is needed for this change`);
+  if (changes.some(({ path }) => path === "settings.event_subscriptions.request_url")) console.log(sent ? `::notice::The events URL moved; check Slack's Event Subscriptions page for the ${app} app and the app's request log for the first event` : `::notice::Once applied, the events URL moves; then check Slack's Event Subscriptions page for the ${app} app and the app's request log for the first event`);
 } catch (failure) {
   fail(failure instanceof Error ? failure.message : String(failure));
 }

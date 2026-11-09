@@ -50,7 +50,7 @@ const appAnswering = () =>
   });
 
 // Slack's manifest API for one app, holding `held`, recording each call's method and arguments.
-async function slackHolding(held: unknown) {
+async function slackHolding(held: unknown, { permissionsUpdated = false } = {}) {
   const calls: { method: string; args: Record<string, string>; authorization: string | undefined }[] = [];
   let current = held;
   const url = await listen((path, body, headers) => {
@@ -60,7 +60,7 @@ async function slackHolding(held: unknown) {
     if (args.app_id !== "A_SANDBOX") return { json: { ok: false, error: "app_not_found" } };
     if (method === "apps.manifest.export") return { json: { ok: true, manifest: current } };
     if (method === "apps.manifest.validate") return { json: { ok: true } };
-    if (method === "apps.manifest.update") return (current = JSON.parse(args.manifest!)), { json: { ok: true, app_id: args.app_id, permissions_updated: false } };
+    if (method === "apps.manifest.update") return (current = JSON.parse(args.manifest!)), { json: { ok: true, app_id: args.app_id, permissions_updated: permissionsUpdated } };
     return { json: { ok: false, error: "unknown_method" } };
   });
   return { url, calls };
@@ -97,7 +97,25 @@ describe("the manifest step", () => {
 
     expect(code).toBe(0);
     expect(stdout).toContain("The sandbox Slack app would change (not sent: APPLY is not true).");
+    expect(stdout, "nothing moved yet").toContain("::notice::Once applied, the events URL moves");
+    expect(stdout).not.toContain("The events URL moved");
     expect(slack.calls.map(({ method }) => method)).not.toContain("apps.manifest.update");
+  });
+
+  test("asks for a reinstall only when the manifest adds a scope, and reports Slack's own permissions flag apart", async () => {
+    const appUrl = await appAnswering();
+    const held = renderManifest("sandbox", appUrl);
+    const fewer = { ...held, oauth_config: { ...held.oauth_config, scopes: { ...held.oauth_config.scopes, bot: held.oauth_config.scopes.bot.slice(1) } } };
+    const env = { APP: "sandbox", APP_URL: appUrl, APP_ID: "A_SANDBOX", SLACK_SERVICE_TOKEN: token, SIGNING_SECRET: signingSecret, APPLY: "true" };
+
+    const added = await run({ ...env, SLACK_API_URL: (await slackHolding(fewer, { permissionsUpdated: true })).url });
+    expect(added.code).toBe(0);
+    expect(added.stdout).toContain(`::warning::The sandbox app now asks for oauth_config.scopes.bot ${held.oauth_config.scopes.bot[0]}: a workspace admin reinstalls it before that works`);
+
+    const moved = await run({ ...env, SLACK_API_URL: (await slackHolding(renderManifest("sandbox", "https://old-host.example"), { permissionsUpdated: true })).url });
+    expect(moved.code).toBe(0);
+    expect(moved.stdout).not.toContain("::warning::");
+    expect(moved.stdout).toContain("::notice::Slack marked the sandbox app's permissions as updated, with no scope added");
   });
 
   test("sends nothing when the app doesn't answer Slack's URL check with its signing secret", async () => {
