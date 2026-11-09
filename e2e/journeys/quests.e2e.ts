@@ -2,6 +2,9 @@ import { expect, test } from "../test.ts";
 import { emoji, mention, text } from "../slack.ts";
 import { untilNext } from "../time.ts";
 
+// Each clock step may take the seam's 25 s budget, and this journey takes several, so it outlasts the suite's minute.
+const clockedJourneyMs = 180_000;
+
 const hourMs = 60 * 60 * 1000;
 
 // The quest lines of a giver's reply: what follows the receipt, without the album's item lines.
@@ -20,7 +23,7 @@ const drawnQuestDone = new RegExp(
   ].join("|")}) · \\+20 XP and an unidentified Hoggie$`,
 );
 
-test("onboarding quests and then a quest drawn each week show their progress in the giver's reply", { tags: ["@time"] }, async ({ slack, time }) => {
+test("onboarding quests and then a quest drawn each week show their progress in the giver's reply", { tags: ["@time"], timeout: clockedJourneyMs }, async ({ slack, time }) => {
   const [giver, first, second] = [await slack.member(), await slack.member(), await slack.member()];
   const replies = async () => (await slack.ephemeralsTo(giver)).map((reply) => String(reply.text));
   const give = async (...to: string[]) => {

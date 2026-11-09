@@ -3,12 +3,15 @@ import { expect, test } from "../test.ts";
 import { emoji, mention, text, type Slack } from "../slack.ts";
 import { untilNext } from "../time.ts";
 
+// Each clock step may take the seam's 25 s budget, and this journey takes several, so it outlasts the suite's minute.
+const clockedJourneyMs = 180_000;
+
 const dayMs = 24 * 60 * 60 * 1000;
 const minuteMs = 60 * 1000;
 
 const lastHome = async (slack: Slack, member: string) => (await slack.homesOf(member)).at(-1);
 
-test("the Monday post names last week's most-hugged kudos in the announcement channel at 9:00 on Monday", { tags: ["@time"] }, async ({ slack, time }) => {
+test("the Monday post names last week's most-hugged kudos in the announcement channel at 9:00 on Monday", { tags: ["@time"], timeout: clockedJourneyMs }, async ({ slack, time }) => {
   const admin = await slack.member({ is_admin: true });
   const announcements = await slack.channel();
   const adminText = async () => textOf((await lastHome(slack, admin))!);

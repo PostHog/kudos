@@ -3,6 +3,9 @@ import { expect, test } from "../test.ts";
 import { emoji, mention, text, type Shown, type Slack } from "../slack.ts";
 import { untilNext } from "../time.ts";
 
+// Each clock step may take the seam's 25 s budget, and this journey takes several, so it outlasts the suite's minute.
+const clockedJourneyMs = 180_000;
+
 const hourMs = 60 * 60 * 1000;
 const minuteMs = 60 * 1000;
 
@@ -15,7 +18,7 @@ const read = (dm: Shown | undefined) => dm && { opening: dm.text.split("\n").sli
 
 const stoppedNote = "🔕 *Done, no more Monday quests from me.* Your hugs recap still comes on Mondays. Changed your mind? One press brings them back.";
 
-test("the Monday direct message recaps a member's hugs and quests at 9:00 on their Monday, and its button stops and resumes the quests", { tags: ["@time"] }, async ({ slack, time }) => {
+test("the Monday direct message recaps a member's hugs and quests at 9:00 on their Monday, and its button stops and resumes the quests", { tags: ["@time"], timeout: clockedJourneyMs }, async ({ slack, time }) => {
   const [member, teammate, author] = [await slack.member(), await slack.member(), await slack.member()];
   // A first kudos starts the member's quests, and a hug gives the week a recap.
   await slack.post(member, [text("thanks "), mention(teammate), text(" "), emoji("taco")]);
