@@ -78,6 +78,9 @@ export async function startEdge(serviceUrl: string): Promise<Edge> {
       if (member !== undefined && !isPublic(target.path)) headers["x-auth-request-email"] = member;
       const upstream = forward({ hostname: service.hostname, port: service.port, method: request.method, path: target.forwarded, headers }, (answer) => {
         response.writeHead(answer.statusCode ?? 502, answer.headers);
+        // A service that breaks off its answer breaks off the client's, which would otherwise wait for the rest.
+        answer.on("aborted", () => response.destroy());
+        answer.on("error", () => response.destroy());
         answer.pipe(response);
       });
       upstream.on("error", (failure) => (response.headersSent ? response.destroy(failure) : response.writeHead(502).end()));

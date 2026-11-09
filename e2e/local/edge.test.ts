@@ -144,6 +144,26 @@ describe("the edge stand-in in front of the rewrite", () => {
   });
 });
 
+describe("the edge stand-in when the service fails mid-answer", () => {
+  test("cuts the client's answer short too, rather than leaving it waiting", async () => {
+    const failing = createServer((_, response) => {
+      response.writeHead(200, { "content-length": "1000" });
+      response.write("part of it");
+      setTimeout(() => response.socket?.destroy(), 50);
+    });
+    await new Promise<void>((resolve) => failing.listen(0, "127.0.0.1", resolve));
+    const front = await startEdge(`http://127.0.0.1:${(failing.address() as AddressInfo).port}`);
+    try {
+      const outcome = fetch(`${front.url}/me`).then((answer) => answer.text()).then(() => "whole", () => "cut short");
+
+      await expect(Promise.race([outcome, new Promise((resolve) => setTimeout(() => resolve("still waiting"), 2_000))])).resolves.toBe("cut short");
+    } finally {
+      await front.stop();
+      await new Promise((resolve) => failing.close(resolve));
+    }
+  });
+});
+
 // Sends `target` exactly as written, which `fetch` would normalize first.
 function rawAnswer(target: string, cookie?: string): Promise<{ status: number; body: string }> {
   return new Promise((resolve, reject) => {
