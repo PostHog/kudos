@@ -4,7 +4,7 @@ import type { Clock } from "../clock.ts";
 import { isCronId } from "../jobs/crons.ts";
 import type { Settled, Worker } from "../jobs/worker.ts";
 import type { LoadControl } from "../load/control.ts";
-import type { Log } from "../log.ts";
+import { errorFields, type Log } from "../log.ts";
 
 /**
  * Where the database is on its way to serving: `no-database` until a `DATABASE_URL` is set (the host's first boot),
@@ -33,18 +33,38 @@ export interface AppOptions {
   timeBudgetMs?: number;
   /** The data load: its hold and, while its token is set, its `/admin/load` routes. */
   load?: Pick<LoadControl, "held" | "routes">;
+  /** Slack's front door, mounted at `/slack`. Without it, Slack's routes answer only `HEDGEHUG_OFF`'s 200. */
+  slack?: Hono;
+  /** The domains' website routes, mounted at the root behind the gate, after the app's own paths. */
+  routes?: Hono[];
 }
 
 const slackPaths = /^\/slack(\/|$)/;
 const loadPaths = /^\/admin\/load(\/|$)/;
 
-export function createApp({ commit, readiness, off, log, clock, testSecret, worker, timeBudgetMs = 25_000, load }: AppOptions): Hono {
+export function createApp({ commit, readiness, off, log, clock, testSecret, worker, timeBudgetMs = 25_000, load, slack, routes = [] }: AppOptions): Hono {
   const app = new Hono();
 
   // One line per request: method, path without its query, status and duration. Never a header or a body.
+  // Every failure ends here, Errors too (the error hook below hands them on): a 500 with none of the failed response's
+  // headers, logged by the error's kind alone.
   app.use(async (c, next) => {
     const started = performance.now();
-    await next();
+    const path = c.req.path;
+    try {
+      await next();
+      const { body, status, statusText, headers } = c.res;
+      if (body) {
+        const quiet = failingQuietly(body, (error) => log.error("response body failed", { path, ...errorFields(error) }));
+        c.res = undefined;
+        c.res = new Response(quiet, { status, statusText, headers });
+      }
+    } catch (error) {
+      log.error("request failed", { path, ...errorFields(error) });
+      // Hono's setter keeps the old response's headers; without it first, a success's length or encoding would stay.
+      c.res = undefined;
+      c.res = new Response("Internal Server Error", { status: 500 });
+    }
     log.info("request", {
       method: c.req.method,
       path: c.req.path,
@@ -61,7 +81,8 @@ export function createApp({ commit, readiness, off, log, clock, testSecret, work
     // A load's hold wins over HEDGEHUG_OFF, before the migrations too: Slack hears 503 and retries rather than an
     // acknowledgement. Only the admin path passes it, once the migrations are done.
     if (load?.held() && !(migrated && load.routes && loadPaths.test(c.req.path))) return unavailable();
-    if (off) return slackPaths.test(c.req.path) ? c.body(null, 200) : unavailable();
+    // Off, the front door answers Slack: 401 to a request Slack didn't sign, the challenge, and 200 to the rest.
+    if (off) return !slackPaths.test(c.req.path) ? unavailable() : slack ? next() : c.body(null, 200);
     if (!migrated) return unavailable();
     return next();
   });
@@ -69,6 +90,18 @@ export function createApp({ commit, readiness, off, log, clock, testSecret, work
   if (load?.routes) app.route("/admin/load", load.routes);
 
   if (testSecret) mountTestingTime(app, testSecret, clock, worker, timeBudgetMs);
+
+  if (slack) app.route("/slack", slack);
+  // The app's own paths: a domain's route never answers them, whatever the front door, the seam or the load mounted.
+  for (const reserved of ["/healthz", "/slack", "/slack/*", "/testing/*", "/admin/load", "/admin/load/*"]) app.all(reserved, (c) => c.notFound());
+  for (const domainRoutes of routes) app.route("/", domainRoutes);
+
+  // A failure answers 500; the log names the path and the error's class and code, never its message, which may quote
+  // SQL parameters or a member's words. Hono's default would print the whole error: this hands it to the request log,
+  // which answers it.
+  app.onError((error) => {
+    throw error;
+  });
 
   return app;
 }
@@ -116,6 +149,34 @@ function mountTestingTime(app: Hono, secret: string, clock: Clock, worker: AppOp
     }
     const answer = { now: clock.now(), ran: settled.ran };
     return settled.done ? c.json(answer) : c.json({ ...answer, error: `jobs were still due or running after ${budgetMs} ms` }, 504);
+  });
+}
+
+/**
+ * The body as it streams, except that a failure mid-stream is logged by `onError` and ends the stream with an error
+ * of ours: the server prints what ends a response, and the original may quote SQL parameters or a member's words.
+ */
+function failingQuietly(body: ReadableStream<Uint8Array>, onError: (error: unknown) => void): ReadableStream<Uint8Array> {
+  const reader = body.getReader();
+  // A client that stops reading cancels the stream: what the pending read then does is no failure of the body's.
+  let cancelled = false;
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const { done, value } = await reader.read();
+        if (cancelled) return;
+        if (done) controller.close();
+        else controller.enqueue(value);
+      } catch (error) {
+        if (cancelled) return;
+        onError(error);
+        controller.error(new Error("The response's body failed"));
+      }
+    },
+    cancel(reason) {
+      cancelled = true;
+      return reader.cancel(reason);
+    },
   });
 }
 

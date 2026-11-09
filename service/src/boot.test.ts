@@ -1,12 +1,15 @@
+import { createHmac } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { createServer, connect, type Server, type Socket } from "node:net";
 import { fileURLToPath } from "node:url";
+import { Hono } from "hono";
 import pg from "pg";
-import { describe, expect, inject, onTestFinished, test } from "vitest";
+import { describe, expect, inject, onTestFinished, test, vi } from "vitest";
 import { boot } from "./boot.ts";
 import { z } from "zod";
 import { runMigrations } from "./db/migrate.ts";
-import { actionJob, jobRegistry, mutationJob } from "./jobs/define.ts";
+import { actionJob, mutationJob } from "./jobs/define.ts";
+import { createRegistry } from "./registration.ts";
 import { errorFields, type Log, type LogFields } from "./log.ts";
 import { useTestDatabase, withSearchPath } from "../testing/database.ts";
 import { startServiceProcess, type ServiceProcess } from "../testing/serviceProcess.ts";
@@ -64,6 +67,21 @@ describe("booting", () => {
     expect(service.lines().map((line) => line.message), "no worker, so no job and no cron runs").not.toContain("worker started");
   });
 
+  test("the service's front door answers Slack's URL check, off or on, and refuses an unsigned event", async () => {
+    const challenge = JSON.stringify({ type: "url_verification", challenge: "boot-challenge" });
+    const timestamp = Math.floor(Date.now() / 1000).toString();
+    const signature = `v0=${createHmac("sha256", "boot-secret").update(`v0:${timestamp}:${challenge}`).digest("hex")}`;
+    const signed = { method: "POST", headers: { "x-slack-request-timestamp": timestamp, "x-slack-signature": signature }, body: challenge };
+    for (const off of ["0", "1"]) {
+      const service = await start({ DATABASE_URL: database.url, SLACK_SIGNING_SECRET: "boot-secret", HEDGEHUG_OFF: off });
+      await service.waitFor((line) => line.message === "migrations done");
+
+      expect(await (await fetch(`${service.url}/slack/events`, signed)).json(), `HEDGEHUG_OFF=${off}`).toEqual({ challenge: "boot-challenge" });
+      expect((await fetch(`${service.url}/slack/events`, { method: "POST", body: challenge })).status, `unsigned, HEDGEHUG_OFF=${off}`).toBe(401);
+      service.signal("SIGKILL");
+    }
+  });
+
   test("/testing/time exists only with HEDGEHUG_TEST_SECRET", async () => {
     const advance = (service: ServiceProcess) =>
       fetch(`${service.url}/testing/time`, { method: "POST", headers: { "x-hedgehug-test-secret": "s3cret" }, body: JSON.stringify({ advance: 1_000 }) });
@@ -94,7 +112,7 @@ describe("the worker in the service", () => {
     const service = await boot({
       env: { PORT: "0", DATABASE_URL: database.url, HEDGEHUG_TEST_SECRET: "s3cret" },
       log: captureLog().log,
-      registry: jobRegistry([record]),
+      registry: createRegistry({ test: { jobs: [record] } }),
       pollMs: 3_600_000, // only /testing/time runs jobs here, so what it answers is all that ran
     });
     onTestFinished(() => service.stop());
@@ -109,6 +127,57 @@ describe("the worker in the service", () => {
     expect(await (await time({ runCron: "website.clock.tick" })).json()).toMatchObject({ ran: ["website.clock.tick"] });
   });
 
+  test("a domain's website routes run on the service's operations and clock", async () => {
+    const registry = createRegistry({
+      website: { routes: ({ operations, clock }) => new Hono().get("/api/now", async (c) => c.json({ now: clock.now(), queried: await operations.query("website.test.now", async ({ now }) => now) })) },
+    });
+    const service = await boot({ env: { PORT: "0", DATABASE_URL: database.url, HEDGEHUG_TEST_SECRET: "s3cret" }, log: captureLog().log, registry, pollMs: 3_600_000 });
+    onTestFinished(() => service.stop());
+    await service.migrated;
+    const now = async () => (await (await fetch(`http://127.0.0.1:${service.port}/api/now`)).json()) as { now: number; queried: number };
+
+    const before = await now();
+    await fetch(`http://127.0.0.1:${service.port}/testing/time`, { method: "POST", headers: { "x-hedgehug-test-secret": "s3cret" }, body: JSON.stringify({ advance: 3_600_000 }) });
+    const after = await now();
+
+    expect(after.now - before.now).toBeGreaterThanOrEqual(3_600_000);
+    expect(after.queried - before.queried).toBeGreaterThanOrEqual(3_600_000);
+  });
+
+  test("a response body that fails mid-stream prints nothing of its error through the server", async () => {
+    const registry = createRegistry({
+      website: {
+        routes: () =>
+          new Hono().get("/api/export", () => {
+            let sent = false;
+            const body = new ReadableStream<Uint8Array>({
+              pull(controller) {
+                if (sent) throw new TypeError("select failed for thanks for the release notes");
+                sent = true;
+                controller.enqueue(new TextEncoder().encode("first,"));
+              },
+            });
+            return new Response(body);
+          }),
+      },
+    });
+    const printed: unknown[] = [];
+    const console = vi.spyOn(globalThis.console, "error").mockImplementation((...args) => void printed.push(...args));
+    onTestFinished(() => console.mockRestore());
+    const { log, lines } = captureLog();
+    const service = await boot({ env: { PORT: "0", DATABASE_URL: database.url }, log, registry, pollMs: 3_600_000 });
+    onTestFinished(() => service.stop());
+    await service.migrated;
+
+    const read = await fetch(`http://127.0.0.1:${service.port}/api/export`).then((answer) => answer.text()).then(() => "read", (error: unknown) => String(error));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    expect(read).not.toContain("thanks");
+    expect(printed.map((value) => (value instanceof Error ? `${value.message} ${value.stack}` : String(value))).join("\n")).not.toContain("thanks");
+    expect(JSON.stringify(lines)).not.toContain("thanks");
+    expect(lines).toContainEqual({ message: "response body failed", path: "/api/export", error: "TypeError" });
+  });
+
   test("while a load holds, no cron is written and no due job runs", async () => {
     let runs = 0;
     const counted = mutationJob("website.clock.tick", z.object({}), async () => {
@@ -118,7 +187,7 @@ describe("the worker in the service", () => {
     const service = await boot({
       env: { PORT: "0", DATABASE_URL: database.url, HEDGEHUG_ADMIN_TOKEN: "a-load-token" },
       log: captureLog().log,
-      registry: jobRegistry([counted]),
+      registry: createRegistry({ test: { jobs: [counted] } }),
       pollMs: 20,
     });
     onTestFinished(() => service.stop());
@@ -152,7 +221,7 @@ describe("the worker in the service", () => {
       await run.query("still connected", async () => {});
     });
     const { log, lines } = captureLog();
-    const service = await boot({ env: { PORT: "0", DATABASE_URL: database.url }, log, registry: jobRegistry([send]), jobGraceMs: 5_000, pollMs: 20 });
+    const service = await boot({ env: { PORT: "0", DATABASE_URL: database.url }, log, registry: createRegistry({ test: { jobs: [send] } }), jobGraceMs: 5_000, pollMs: 20 });
     await service.migrated;
     await service.operations!.mutation("schedule", ({ jobs }) => jobs.enqueue(send, {}));
     await arrived;

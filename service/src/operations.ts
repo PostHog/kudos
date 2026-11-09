@@ -10,6 +10,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import pg from "pg";
+import { publish, type DomainEvent, type Subscribers } from "./bus/publish.ts";
 import type { Clock } from "./clock.ts";
 import { createScheduler, type Scheduler } from "./jobs/schedule.ts";
 import { errorFields, type Log } from "./log.ts";
@@ -35,6 +36,8 @@ export interface MutationContext extends QueryContext {
   newRow(): NewRow;
   /** Schedules and cancels jobs in this transaction: they commit or roll back with it. */
   jobs: Scheduler;
+  /** Publishes a domain event on the bus: one job per subscriber, in this transaction. */
+  publish(event: DomainEvent): Promise<void>;
 }
 
 export interface ActionContext {
@@ -57,6 +60,8 @@ export interface OperationsOptions {
   maxAttempts?: number;
   /** The wait before attempt `attempt + 1`: exponential with jitter, so conflicting retries spread out. */
   retryDelayMs?: (attempt: number) => number;
+  /** The bus's subscribers, which `publish` schedules. */
+  subscribers?: Subscribers;
 }
 
 // Postgres's serialization failure and deadlock: the transaction did nothing, and running it again may succeed.
@@ -69,7 +74,7 @@ const retryable = new Set(["40001", "40P01"]);
 // left behind keeps the store after the operation ends; `open` turns false then, and nothing is refused.
 const running = new AsyncLocalStorage<{ name: string; open: boolean }>();
 
-export function createOperations({ pool, clock, log, maxAttempts = 10, retryDelayMs = jitteredBackoff }: OperationsOptions): Operations {
+export function createOperations({ pool, clock, log, maxAttempts = 10, retryDelayMs = jitteredBackoff, subscribers = new Map() }: OperationsOptions): Operations {
   let lastCreationTime = Number.NEGATIVE_INFINITY;
   const newRow = (now: number): NewRow => {
     // Rows inserted in one operation keep their order; the step is the smallest that still changes a float64 near now.
@@ -156,7 +161,8 @@ export function createOperations({ pool, clock, log, maxAttempts = 10, retryDela
         try {
           return await inTransaction(name, "BEGIN ISOLATION LEVEL SERIALIZABLE", (tx) => {
             const stamp = () => newRow(now);
-            return handler({ tx, now, newRow: stamp, jobs: createScheduler(tx, now, stamp) });
+            const jobs = createScheduler(tx, now, stamp);
+            return handler({ tx, now, newRow: stamp, jobs, publish: (event) => publish(jobs, subscribers, event) });
           });
         } catch (error) {
           const fields = errorFields(error);
