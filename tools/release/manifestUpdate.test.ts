@@ -144,9 +144,17 @@ describe("what Slack's export may hold that the repository's manifest doesn't", 
 });
 
 describe("comparing manifests", () => {
-  test("counts what Slack holds and the manifest leaves out, but not the empty defaults Slack fills in", () => {
-    expect(changesBetween({ a: { b: 1, flag: false, hint: "", list: [] }, _metadata: { major_version: 1 } }, { a: { b: 1 } })).toEqual([]);
+  test("counts what Slack holds and the manifest leaves out, but not the empty defaults Slack fills in where it fills them", () => {
+    const held = { settings: { is_hosted: false }, features: { slash_commands: [{ command: "/a", usage_hint: "" }] }, _metadata: { major_version: 1 } };
+    expect(changesBetween(held, { settings: {}, features: { slash_commands: [{ command: "/a" }] } })).toEqual([]);
     expect(changesBetween({ a: { b: 1, extra: true } }, { a: { b: 1 } })).toEqual([{ path: "a.extra", from: true, to: undefined }]);
+    // Anywhere else an empty value may be meant, as a schema's `additionalProperties: false`, so dropping it is a change.
+    expect(changesBetween({ a: { b: 1, flag: false, hint: "" } }, { a: { b: 1 } })).toEqual([
+      { path: "a.flag", from: false, to: undefined },
+      { path: "a.hint", from: "", to: undefined },
+    ]);
+    expect(changesBetween({ settings: { is_hosted: true } }, { settings: {} })).toEqual([{ path: "settings.is_hosted", from: true, to: undefined }]);
+    expect(changesBetween({ features: { slash_commands: [{ command: "/a", extra: false }] } }, { features: { slash_commands: [{ command: "/a" }] } })).toHaveLength(1);
     expect(changesBetween({ a: { b: 1 } }, { a: { b: 2 } })).toEqual([{ path: "a.b", from: 1, to: 2 }]);
     expect(changesBetween({}, { a: { b: [1] } })).toEqual([{ path: "a.b", from: undefined, to: [1] }]);
   });

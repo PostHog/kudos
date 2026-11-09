@@ -59,9 +59,10 @@ try {
   const said = { current: "already holds this manifest", planned: "would change (not sent: APPLY is not true)", updated: "changed" }[outcome];
   report([`The ${app} Slack app ${said}.`, ...changes.map(({ path, from, to }) => `- ${path}: ${JSON.stringify(from)} → ${JSON.stringify(to)}`)]);
   const sent = outcome === "updated";
-  // A new scope is what a reinstall approves; Slack's own flag also rises on changes that need none, such as a moved redirect URL.
+  // A new scope is what a reinstall approves. Slack's own flag rises on other changes too, some needing a reinstall (as
+  // org-wide deployment) and some not (as a moved redirect URL), so it is reported as Slack's, without a verdict.
   if (scopesAdded.length > 0) console.log(`::warning::The ${app} app ${sent ? "now asks" : "would ask"} for ${scopesAdded.join(", ")}: a workspace admin reinstalls it before that works`);
-  else if (permissionsUpdated) console.log(`::notice::Slack marked the ${app} app's permissions as updated, with no scope added; no reinstall is needed for this change`);
+  else if (permissionsUpdated) console.log(`::notice::Slack marked the ${app} app's permissions as updated, though the manifest adds no scope: check its install page for a reinstall`);
   if (changes.some(({ path }) => path === "settings.event_subscriptions.request_url") && sent) {
     // The URL check before the update shows the app answers with its secret, not that Slack delivers to it: event
     // subscriptions may be off, or the app may need a reinstall. Nothing reports the first event yet, so the run says so.

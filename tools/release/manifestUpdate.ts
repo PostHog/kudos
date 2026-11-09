@@ -15,22 +15,34 @@ export type Change = { path: string; from: unknown; to: unknown };
 
 const isObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 
-// What Slack fills in for a field a manifest leaves out, so holding it is the same as not holding the field.
-const empty = (value: unknown): boolean => value === undefined || value === null || value === false || value === "" || (Array.isArray(value) && value.length === 0) || (isObject(value) && Object.values(value).every(empty));
+// Where Slack's export fills in an empty default for a field a manifest leaves out (`*` is any key or list entry).
+// Holding the empty value there is the same as not holding the field. Anywhere else an empty value may be meant, as a
+// schema's `additionalProperties: false`, so dropping it counts; a default Slack adds that isn't listed here makes the
+// read-back differ, which fails the run loudly rather than hiding a removal.
+const defaults = ["settings.is_hosted", "features.slash_commands.*.usage_hint", "features.slash_commands.*.should_escape", "features.app_home.*", "features.bot_user.always_online", "settings.org_deploy_enabled", "settings.socket_mode_enabled", "settings.token_rotation_enabled"].map((pattern) => pattern.split("."));
 
-// Whether `held` is what `wanted` sets, whatever its key order and whatever empty defaults Slack adds beside it.
-function holds(held: unknown, wanted: unknown): boolean {
-  if (isObject(wanted)) return isObject(held) && Object.entries(wanted).every(([key, value]) => holds(held[key], value)) && Object.entries(held).every(([key, value]) => key in wanted || empty(value));
-  if (Array.isArray(wanted)) return Array.isArray(held) && sameList(held, wanted);
+const empty = (value: unknown): boolean => value === undefined || value === null || value === false || value === "" || (Array.isArray(value) && value.length === 0);
+
+function padding(path: string, value: unknown) {
+  const keys = path.split(".");
+  return empty(value) && defaults.some((pattern) => pattern.length === keys.length && pattern.every((key, index) => key === "*" || key === keys[index]));
+}
+
+const under = (prefix: string, key: string) => (prefix === "" ? key : `${prefix}.${key}`);
+
+// Whether `held` at `path` is what `wanted` sets, whatever its key order and whatever empty defaults Slack adds beside it.
+function holds(held: unknown, wanted: unknown, path: string): boolean {
+  if (isObject(wanted)) return isObject(held) && Object.entries(wanted).every(([key, value]) => holds(held[key], value, under(path, key))) && Object.entries(held).every(([key, value]) => key in wanted || padding(under(path, key), value));
+  if (Array.isArray(wanted)) return Array.isArray(held) && sameList(held, wanted, path);
   return held === wanted;
 }
 
 // Slack may hand a list back in another order: a list is the same when each wanted entry pairs with its own held one.
-function sameList(held: unknown[], wanted: unknown[]) {
+function sameList(held: unknown[], wanted: unknown[], path: string) {
   if (held.length !== wanted.length) return false;
   const left = [...held];
   return wanted.every((entry) => {
-    const index = left.findIndex((candidate) => holds(candidate, entry));
+    const index = left.findIndex((candidate) => holds(candidate, entry, under(path, "*")));
     return index >= 0 && left.splice(index, 1).length === 1;
   });
 }
@@ -40,16 +52,17 @@ const slacks = new Set(["_metadata"]);
 
 /**
  * Where `next` differs from `current`: what it sets differently, and what Slack holds that it leaves out, which an
- * update removes since it replaces the whole manifest. The empty defaults Slack fills in, and its `_metadata`, don't count.
+ * update removes since it replaces the whole manifest. The empty defaults Slack fills in where it fills them, and its
+ * `_metadata`, don't count.
  */
 export function changesBetween(current: unknown, next: Manifest, prefix = ""): Change[] {
-  const path = (key: string) => (prefix === "" ? key : `${prefix}.${key}`);
+  const path = (key: string) => under(prefix, key);
   const set = Object.entries(next).flatMap(([key, to]) => {
     const from = isObject(current) ? current[key] : undefined;
     if (isObject(to)) return changesBetween(from, to, path(key));
-    return holds(from, to) ? [] : [{ path: path(key), from, to }];
+    return holds(from, to, path(key)) ? [] : [{ path: path(key), from, to }];
   });
-  const left = isObject(current) ? Object.entries(current).filter(([key, from]) => !(key in next) && !empty(from) && !(prefix === "" && slacks.has(key))) : [];
+  const left = isObject(current) ? Object.entries(current).filter(([key, from]) => !(key in next) && !padding(path(key), from) && !(prefix === "" && slacks.has(key))) : [];
   return [...set, ...left.map(([key, from]) => ({ path: path(key), from, to: undefined }))];
 }
 

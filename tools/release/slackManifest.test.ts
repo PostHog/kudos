@@ -128,7 +128,8 @@ describe("the manifest step", () => {
     const moved = await run({ ...env, SLACK_API_URL: (await slackHolding(renderManifest("sandbox", "https://old-host.example"), { permissionsUpdated: true })).url });
     expect(moved.code).toBe(0);
     expect(moved.stdout).not.toContain("::warning::");
-    expect(moved.stdout).toContain("::notice::Slack marked the sandbox app's permissions as updated, with no scope added");
+    expect(moved.stdout).toContain("::notice::Slack marked the sandbox app's permissions as updated, though the manifest adds no scope: check its install page for a reinstall");
+    expect(moved.stdout).not.toContain("no reinstall is needed");
   });
 
   test("sends nothing when the app doesn't answer Slack's URL check with its signing secret", async () => {
