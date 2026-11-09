@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import { createClock } from "../clock.ts";
 import { jsonLog } from "../log.ts";
 import { createApp, type Migrations } from "./app.ts";
 
@@ -10,7 +11,7 @@ function appWith({ migrations = "done" as Migrations, off = false } = {}) {
     lines.push(JSON.parse(line) as Record<string, unknown>);
   });
   let state = migrations;
-  const app = createApp({ commit: "0123abc", readiness: { migrations: () => state }, off, log });
+  const app = createApp({ commit: "0123abc", readiness: { migrations: () => state }, off, log, clock: createClock() });
   return { app, lines, raw, migrate: (next: Migrations) => (state = next) };
 }
 
@@ -87,6 +88,18 @@ describe("request logs", () => {
     const everything = raw.join("");
     for (const secret of ["query-secret-value", "header-secret-value", "signature-secret-value", "body-secret-value"]) {
       expect(everything, `the log holds no ${secret}`).not.toContain(secret);
+    }
+  });
+});
+
+describe("while the load holds", () => {
+  test("every route but /healthz answers 503, Slack's too, even with HEDGEHUG_OFF", async () => {
+    for (const off of [false, true]) {
+      const app = createApp({ commit: "0123abc", readiness: { migrations: () => "done" }, load: { held: () => true }, off, log: jsonLog(() => {}), clock: createClock() });
+
+      expect((await app.request("/healthz")).status, `health, off ${off}`).toBe(200);
+      expect((await app.request("/slack/events", { method: "POST", body: "{}" })).status, `Slack, off ${off}`).toBe(503);
+      expect((await app.request("/")).status, `the website, off ${off}`).toBe(503);
     }
   });
 });

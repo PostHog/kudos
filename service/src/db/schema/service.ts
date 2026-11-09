@@ -1,5 +1,5 @@
 // The service's own tables, beside the ones generated from convex/schema.ts.
-import { doublePrecision, pgTable, primaryKey } from "drizzle-orm/pg-core";
+import { doublePrecision, index, pgTable, primaryKey } from "drizzle-orm/pg-core";
 import { bytes, creationTime, f64, id, str, value } from "../columns.ts";
 
 /**
@@ -31,4 +31,32 @@ export const files = pgTable("files", {
   size: f64().notNull(),
   contentType: str(),
   bytes: bytes().notNull(),
+});
+
+/**
+ * Every job, pending or done: the one job history, which the failed-job sweep and the bus's replay read. `args` is in
+ * the codec's stored encoding; `deadline` is set on an action job when it starts running.
+ */
+export const jobs = pgTable(
+  "jobs",
+  {
+    _id: id(),
+    _creationTime: creationTime(),
+    /** The handler's name: the former Convex function's path, dotted. */
+    name: str().notNull(),
+    args: value().notNull(),
+    runAt: f64().notNull(),
+    kind: str().$type<"mutation" | "action">().notNull(),
+    state: str().$type<"pending" | "running" | "success" | "failed" | "canceled">().notNull(),
+    error: str(),
+    completedAt: f64(),
+    deadline: f64(),
+  },
+  (t) => [index("jobs_by_state_and_runAt").on(t.state, t.runAt, t._creationTime, t._id)],
+);
+
+/** Each cron's next run; the copy that moves it forward fires the cron. */
+export const crons = pgTable("crons", {
+  id: str().primaryKey(),
+  nextRun: f64().notNull(),
 });
