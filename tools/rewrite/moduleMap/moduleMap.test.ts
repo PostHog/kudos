@@ -245,17 +245,19 @@ describe("the equivalence check", () => {
 });
 
 describe("the skeleton generator", () => {
-  const modules = ["convex/skeleton/awards.ts", "convex/skeleton/caller.ts", "convex/skeleton/tangled.ts"];
+  const modules = ["convex/skeleton/awards.ts", "convex/skeleton/caller.ts", "convex/skeleton/tangled.ts", "convex/skeleton/edges.ts", "convex/skeleton/refused.ts", "convex/skeleton/inline.ts"];
   const program = ts.createProgram(modules.map(onDisk), compilerOptions);
   const sourceFiles = modules.map((module) => program.getSourceFile(onDisk(module))!);
   const reached = reachedByName(sourceFiles);
   const skeleton = (index: number) => skeletonModule(program, sourceFiles[index]!, modules[index]!, reached, exists);
   const awards = landed(skeleton(0));
+  const edges = landed(skeleton(3));
 
   test("finds every function reached by name: run in place by an action, or later by the scheduler, a cron or the bus", () => {
     expect(Object.fromEntries([...reached].map(([path, how]) => [path, [...how]]))).toEqual({
       "skeleton.awards.notifyAll": ["job"],
       "skeleton.awards.sweepAwards": ["job"],
+      "skeleton.edges.byValidator": ["job"],
       "skeleton.awards.memberOf": ["run"],
       "skeleton.awards.recordAward": ["run"],
     });
@@ -336,9 +338,69 @@ export const notifyAllJob = actionJob("skeleton.awards.notifyAll", notifyAllArgs
     });
   });
 
+  test("knows Convex's names by what they refer to, a context behind a union, and lands what statements and lists export", () => {
+    expect(edges.text).toBe(`// The module map's skeleton of convex/skeleton/edges.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
+// notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
+import { z } from "zod";
+import type { Id } from "../db/columns.ts";
+import type { Page } from "../db/page.ts";
+import type { Doc } from "../db/schema/index.ts";
+import type { MutationContext, QueryContext } from "../operations.ts";
+import { notPorted } from "../notPorted.ts";
+import { mutationJob } from "../jobs/define.ts";
+
+type AnyCtx = QueryContext | MutationContext;
+
+export async function countAny(ctx: AnyCtx): Promise<number> {
+  throw notPorted("skeleton.edges.countAny");
+}
+
+export const firstName: (ctx: QueryContext) => Promise<string> = async (ctx): Promise<string> => {
+  throw notPorted("skeleton.edges.firstName");
+};
+
+export async function stamped(ctx: QueryContext, member: Id<"members">): Promise<{ _id: Id<"members">; _creationTime: number; extra: string }> {
+  throw notPorted("skeleton.edges.stamped");
+}
+
+export type Drafts = Page<Omit<Doc<"members">, "_id" | "_creationTime">>;
+
+const names = new Map<string, number>();
+names.set("first", 1);
+
+const half = (n: number) => n / 2;
+export { half, names };
+
+export const byValidatorArgs = z.strictObject({ note: z.string() });
+export async function byValidator(ctx: MutationContext, args: z.infer<typeof byValidatorArgs>): Promise<null> {
+  throw notPorted("skeleton.edges.byValidator");
+}
+export const byValidatorJob = mutationJob("skeleton.edges.byValidator", byValidatorArgs, byValidator);
+`);
+    expect(edges.omitted).toEqual([]);
+  });
+
+  test("refuses what it can't stub without changing what other modules see, and any way of reaching Convex in what it writes", () => {
+    expect(skeleton(4)).toEqual({
+      refusals: [
+        "convex/skeleton/refused.ts:14: exports viaList by a list; export the declaration itself",
+        "convex/skeleton/refused.ts:16: declares one, two in one statement over a context; declare each on its own",
+        "convex/skeleton/refused.ts:19: a top-level statement over a context or Convex's machinery",
+        "convex/skeleton/refused.ts: declares or imports QueryContext, a name the skeleton writes for the service's own",
+      ],
+    });
+    expect(skeleton(5)).toEqual({
+      refusals: [
+        "convex/skeleton/inline.ts: its skeleton imports convex/server, which no skeleton may",
+        "convex/skeleton/inline.ts: its skeleton imports ../_generated/api, which no skeleton may",
+        "convex/skeleton/inline.ts: its skeleton line 7: import(), which no skeleton may",
+      ],
+    });
+  });
+
   describe("its output in the service", () => {
     const serviceModules = ["values.ts", "notPorted.ts", "operations.ts", "jobs/define.ts", "db/columns.ts", "db/schema/index.ts", "db/page.ts"];
-    const scratch = scratchService(serviceModules, [awards]);
+    const scratch = scratchService(serviceModules, [awards, edges]);
 
     test("typechecks under the service's compiler options", () => {
       expect(scratch.diagnostics()).toEqual([]);
@@ -360,6 +422,13 @@ export const notifyAllJob = actionJob("skeleton.awards.notifyAll", notifyAllArgs
       expect(module.sweepAwardsJob.args.safeParse({ after: 1 }).success).toBe(false);
       expect(module.memberOfJob).toBeUndefined(); // a query runs in place, never later
       expect(module.recordAwardJob).toBeUndefined(); // only run in place
+
+      const edgesModule = await import(scratch.path(edges.servicePath));
+      expect(edgesModule.half(4)).toBe(2);
+      expect(edgesModule.names.get("first")).toBe(1); // its top-level statement ran
+      await expect(edgesModule.firstName({})).rejects.toThrow(new NotPortedError("skeleton.edges.firstName"));
+      expect(edgesModule.byValidatorJob.args.safeParse({ note: "x" }).success).toBe(true);
+      expect(edgesModule.byValidatorJob.args.safeParse({ note: "x", extra: 1 }).success).toBe(false);
     });
   });
 });

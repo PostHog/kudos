@@ -12,9 +12,10 @@
 //   class over a context) is left out, and listed.
 // Names stay the Convex paths, dotted. Nothing it writes imports Convex.
 import ts from "typescript5";
-import { convexPackage, type Landed } from "./copy.ts";
-import { validatorEdits, type Edit } from "./codemod.ts";
-import { applyEdits, convexRoot, resolveConvexImport, servicePathOf, serviceRoot, specifierFrom } from "./imports.ts";
+import { specifiers } from "./closure.ts";
+import { validatorClassOf, validatorEdits, type Edit } from "./codemod.ts";
+import { convexPackage, dynamicImports, type Landed } from "./copy.ts";
+import { applyEdits, convexRoot, parse, resolveConvexImport, servicePathOf, serviceRoot, specifierFrom } from "./imports.ts";
 
 export type Reach = "run" | "job";
 /** Every registered function reached by name, by dotted path, and how. */
@@ -111,15 +112,30 @@ export function skeletonModule(program: ts.Program, sourceFile: ts.SourceFile, c
   const line = (node: ts.Node) => `${convexPath}:${sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1}`;
 
   // Imports: which local names come from Convex's machinery, which from elsewhere.
-  const machineryNames = new Map<string, string>();
+  // Machinery is known by symbol, so an alias (`QueryCtx as Q`) is still Convex's and a local of the same name isn't.
+  const machinerySymbols = new Map<ts.Symbol, string>();
   const imports: ts.ImportDeclaration[] = [];
   for (const statement of sourceFile.statements) {
     if (!ts.isImportDeclaration(statement)) continue;
     const specifier = (statement.moduleSpecifier as ts.StringLiteral).text;
     if (machinery.test(specifier) || (convexPackage.test(specifier) && specifier !== "convex/values")) {
-      for (const element of importedNames(statement)) machineryNames.set(element.local, element.imported);
+      for (const { node, imported } of importedIdentifiers(statement)) machinerySymbols.set(checker.getSymbolAtLocation(node)!, imported);
     } else imports.push(statement);
   }
+  /** The name Convex exports what an identifier refers to under, when it is Convex's machinery. */
+  const machineryOf = (node: ts.Identifier): string | undefined => {
+    const symbol = ts.isShorthandPropertyAssignment(node.parent) ? checker.getShorthandAssignmentValueSymbol(node.parent) : checker.getSymbolAtLocation(node);
+    return symbol ? machinerySymbols.get(symbol) : undefined;
+  };
+  /** A Convex type a signature names that the service has no counterpart for. */
+  const foreignIn = (nodes: readonly ts.Node[]) => {
+    let found: string | undefined;
+    for (const node of nodes) walk(node, (child) => {
+      const imported = ts.isIdentifier(child) ? machineryOf(child) : undefined;
+      if (imported && !(imported in serverTypes)) found ??= imported;
+    });
+    return found;
+  };
 
   // Top-level declarations and what they refer to.
   const declarations: Declaration[] = [];
@@ -143,9 +159,10 @@ export function skeletonModule(program: ts.Program, sourceFile: ts.SourceFile, c
       // A function over a context, even one typed only by where it stands (a hook's `claims: async (ctx) => …`).
       if (!isType && !inType && ts.isFunctionLike(node) && node.parameters.some((parameter) => isContext(checker.getTypeAtLocation(parameter)))) declaration.convex = true;
       if (!ts.isIdentifier(node) || isPropertyName(node)) return;
-      if (machineryNames.has(node.text) && !inType) declaration.machinery = true;
-      if (machineryNames.has(node.text) && !(inType && node.text in serverTypes)) declaration.convex = true;
-      if (machineryNames.has(node.text) && inType && !isType && /Ctx$/.test(machineryNames.get(node.text)!)) declaration.convex = true;
+      const imported = machineryOf(node);
+      if (imported && !inType) declaration.machinery = true;
+      if (imported && !(inType && imported in serverTypes)) declaration.convex = true;
+      if (imported && inType && !isType && /Ctx$/.test(imported)) declaration.convex = true;
       if (topLevel(node)) declaration.uses.add(node.text);
     });
     declarations.push(declaration);
@@ -159,7 +176,7 @@ export function skeletonModule(program: ts.Program, sourceFile: ts.SourceFile, c
     const { statement } = declaration;
     if (!declaration.isType && editRefusals.some(({ start }) => start >= statement.getStart(sourceFile) && start < statement.getEnd())) declaration.convex = true;
     // A registration is over a context, whether its builder is Convex's or a wrapper of this app's (`memberQuery`).
-    if (registrationOf(statement)) declaration.convex = true;
+    if (registrationOf(statement, machineryOf)) declaration.convex = true;
   }
   // A value that refers to a value over a context needs one too.
   for (let changed = true; changed; ) {
@@ -170,7 +187,8 @@ export function skeletonModule(program: ts.Program, sourceFile: ts.SourceFile, c
     }
   }
 
-  edits.push(...serverTypeEdits(sourceFile, machineryNames, (node, message) => editRefusals.push({ start: node.getStart(sourceFile), message: `${line(node)}: ${message}` })));
+  const typeEdits = serverTypeEdits(sourceFile, machineryOf, (node, message) => editRefusals.push({ start: node.getStart(sourceFile), message: `${line(node)}: ${message}` }));
+  edits.push(...typeEdits);
   const ranges: Array<[number, number]> = [];
   const textOf = (start: number, end: number) => {
     ranges.push([start, end]);
@@ -190,6 +208,8 @@ export function skeletonModule(program: ts.Program, sourceFile: ts.SourceFile, c
   // What lands: every export that needs no context, every stub, and what they refer to.
   const pieces = new Map<Declaration, string>();
   const needed = new Set<Declaration>();
+  /** Names the stubs write: the service's contexts and the stub and job helpers. */
+  const generated = new Set<string>();
   const need = (names: Iterable<string>) => {
     for (const name of names) {
       const declaration = byName.get(name);
@@ -214,40 +234,64 @@ export function skeletonModule(program: ts.Program, sourceFile: ts.SourceFile, c
       needed.add(declaration);
       continue;
     }
-    if (!declaration.exported && !ts.isExportDeclaration(statement) && !ts.isExportAssignment(statement)) continue;
+    if (ts.isExportDeclaration(statement) && statement.exportClause && ts.isNamedExports(statement.exportClause)) {
+      // `export { f }`: what it names lands with it, unless it is over a context, which only its own export can stub.
+      const locals = statement.exportClause.elements.map((element) => (element.propertyName ?? element.name).text);
+      const overContext = locals.filter((local) => byName.get(local)?.convex);
+      if (overContext.length > 0) refusals.push(`${line(statement)}: exports ${overContext.join(", ")} by a list; export the declaration itself`);
+      need(locals.filter((local) => !overContext.includes(local)));
+      needed.add(declaration);
+      continue;
+    }
+    if (declaration.names.length === 0 && !ts.isExportAssignment(statement)) {
+      // A top-level statement with effects, such as filling a table, runs where its module lands.
+      if (declaration.convex || declaration.machinery) refusals.push(`${line(statement)}: a top-level statement over a context or Convex's machinery`);
+      else {
+        need(declaration.uses);
+        needed.add(declaration);
+      }
+      continue;
+    }
+    if (!declaration.exported && !ts.isExportAssignment(statement)) continue;
+    if (declaration.convex && ts.isVariableStatement(statement) && statement.declarationList.declarations.length > 1) {
+      refusals.push(`${line(statement)}: declares ${declaration.names.join(", ")} in one statement over a context; declare each on its own`);
+      continue;
+    }
     if (!declaration.convex) {
       need(declaration.names.length > 0 ? declaration.names : declaration.uses);
       needed.add(declaration);
       continue;
     }
     const fn = functionOf(statement);
-    const foreign = fn && [...fn.parameters, ...(fn.type ? [fn.type] : [])].flatMap((node) => [...usesIn(node)]).find((name) => machineryNames.has(name) && !(machineryNames.get(name)! in serverTypes));
+    const annotation = ts.isVariableStatement(statement) ? statement.declarationList.declarations[0]!.type : undefined;
+    const foreign = fn && foreignIn([...fn.parameters, ...(fn.type ? [fn.type] : []), ...(annotation ? [annotation] : [])]);
     if (fn && foreign) {
-      omitted.push(`${declaration.names[0]}: takes or returns Convex's ${machineryNames.get(foreign)}`);
+      omitted.push(`${declaration.names[0]}: takes or returns Convex's ${foreign}`);
       continue;
     }
     if (fn) {
       try {
         pieces.set(declaration, helperStub(fn, statement, dottedPath(convexPath, declaration.names[0]!)));
-        need([...fn.parameters, ...(fn.typeParameters ?? []), ...(fn.type ? [fn.type] : [])].flatMap((node) => [...usesIn(node)]));
+        need([...fn.parameters, ...(fn.typeParameters ?? []), ...(fn.type ? [fn.type] : []), ...(annotation ? [annotation] : [])].flatMap((node) => [...usesIn(node)]));
       } catch (error) {
         omitted.push(`${declaration.names[0]}: ${(error as Error).message}`);
       }
       continue;
     }
-    const registration = registrationOf(statement);
+    const registration = registrationOf(statement, machineryOf);
     const name = declaration.names[0]!;
     const path = dottedPath(convexPath, name);
     if (!registration) {
       // A value over a context, such as a parse hook: it keeps its type, and throws on use until its stack ports it.
       const variable = ts.isVariableStatement(statement) && statement.declarationList.declarations.length === 1 ? statement.declarationList.declarations[0]! : undefined;
-      const foreignType = variable?.type && [...usesIn(variable.type)].find((used) => machineryNames.has(used) && !(machineryNames.get(used)! in serverTypes));
+      const foreignType = variable?.type && foreignIn([variable.type]);
       if (ts.isClassDeclaration(statement)) omitted.push(`${name}: a class over a context, which its stack ports whole`);
       else if (!variable || !ts.isIdentifier(variable.name) || foreignType || declaration.machinery) omitted.push(`${name}: Convex's machinery, not a function or value over a context`);
       else {
         try {
           const type = variable.type ? textOf(variable.type.getStart(sourceFile), variable.type.getEnd()) : printed.print(checker.getTypeAtLocation(variable.name));
           pieces.set(declaration, `${textOf(statement.getFullStart(), statement.getStart(sourceFile))}export const ${name}: ${type} = notPortedValue("${path}");`);
+          generated.add("notPortedValue");
           if (variable.type) need(usesIn(variable.type));
         } catch (error) {
           omitted.push(`${name}: ${(error as Error).message}`);
@@ -273,28 +317,55 @@ export function skeletonModule(program: ts.Program, sourceFile: ts.SourceFile, c
     .map((declaration) => pieces.get(declaration) ?? textOf(declaration.statement.getFullStart(), declaration.statement.getEnd()))
     .join("")
     .replace(/^\s*\n/, "");
-  refusals.push(...editRefusals.filter(({ start }) => ranges.some(([from, to]) => start >= from && start < to)).map(({ message }) => message));
+  const landedAt = (start: number) => ranges.some(([from, to]) => start >= from && start < to);
+  refusals.push(...editRefusals.filter(({ start }) => landedAt(start)).map(({ message }) => message));
+  // A name the skeleton writes for the service must mean the service's: a local of the same name would take it over.
+  const written = new Set([...typeEdits.filter(({ start }) => landedAt(start)).map(({ text: written }) => /^[A-Za-z]+/.exec(written)?.[0] ?? ""), ...generated]);
+  for (const name of written) if (taken.has(name)) refusals.push(`${convexPath}: declares or imports ${name}, a name the skeleton writes for the service's own`);
   if (refusals.length > 0) return { refusals };
 
   const header = `// The module map's skeleton of ${convexPath}, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw\n// notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.\n`;
   const importText = importsFor(body, printed.imports);
   if (typeof importText !== "string") return importText;
-  return { servicePath, text: `${header}${[importText, body].filter(Boolean).map((part) => `${part}\n`).join("\n")}`, omitted: [...new Set(omitted)] };
+  const output = `${header}${[importText, body].filter(Boolean).map((part) => `${part}\n`).join("\n")}`;
+  // Nothing it writes reaches Convex, whatever the form of import; `import.meta` reaches no module, so it may stay.
+  const writtenFile = parse(servicePath, output);
+  const reachesConvex = [
+    ...specifiers(writtenFile).filter(({ specifier }) => convexPackage.test(specifier) || machinery.test(specifier) || /(^|\/)_generated\//.test(specifier)).map(({ specifier }) => `imports ${specifier}`),
+    ...dynamicImports(writtenFile).filter((what) => !what.endsWith(": import.meta")),
+  ];
+  if (reachesConvex.length > 0) return { refusals: reachesConvex.map((what) => `${convexPath}: its skeleton ${what}, which no skeleton may`) };
+  return { servicePath, text: output, omitted: [...new Set(omitted)] };
 
   function helperStub(fn: ts.SignatureDeclaration & { body?: ts.Node }, statement: ts.Statement, path: string): string {
     if (!fn.body) throw new Error("no body to replace");
-    const close = text.indexOf(")", fn.parameters.end);
-    const head = fn.type
-      ? textOf(statement.getFullStart(), fn.body.getStart(sourceFile))
-      : `${textOf(statement.getFullStart(), close + 1)}: ${printed.returnOf(fn)}${textOf(close + 1, fn.body.getStart(sourceFile))}`;
+    let head: string;
+    if (fn.type) head = textOf(statement.getFullStart(), fn.body.getStart(sourceFile));
+    else {
+      // The return type goes after the parameters' own closing parenthesis; `ctx => …` gains parentheses first.
+      const close = fn.getChildren(sourceFile).find((child) => child.kind === ts.SyntaxKind.CloseParenToken);
+      const returns = printed.returnOf(fn);
+      if (close) head = `${textOf(statement.getFullStart(), close.getEnd())}: ${returns}${textOf(close.getEnd(), fn.body.getStart(sourceFile))}`;
+      else {
+        const parameter = fn.parameters[0]!;
+        const start = parameter.getStart(sourceFile);
+        head = `${textOf(statement.getFullStart(), start)}(${textOf(start, parameter.getEnd())}): ${returns}${textOf(parameter.getEnd(), fn.body.getStart(sourceFile))}`;
+      }
+    }
+    generated.add("notPorted");
     return `${head}{\n  throw notPorted("${path}");\n}${textOf(fn.body.getEnd(), statement.getEnd())}`;
   }
 
   function registeredStub(name: string, path: string, { kind, args, handler }: Registration, reach: ReadonlySet<Reach>): string {
     const argsName = fresh(`${name}Args`);
     const returns = printed.unwrapPromise(printed.returnOfType(checker.getTypeAtLocation(handler)));
+    // Args are a map of fields, or already a validator (`v.object(…)`), which the codemod made a schema of.
+    const argsText = args ? textOf(args.getStart(sourceFile), args.getEnd()) : "{}";
+    const schema = args && validatorClassOf(checker.getTypeAtLocation(args)) ? argsText : `z.strictObject(${argsText})`;
+    generated.add("notPorted").add(contexts[kind]);
+    if (reach.has("job") && kind !== "query") generated.add(`${kind}Job`);
     const lines = [
-      `\n\nexport const ${argsName} = z.strictObject(${args ? textOf(args.getStart(sourceFile), args.getEnd()) : "{}"});`,
+      `\n\nexport const ${argsName} = ${schema};`,
       `export async function ${name}(ctx: ${contexts[kind]}, args: z.infer<typeof ${argsName}>): Promise<${returns}> {\n  throw notPorted("${path}");\n}`,
     ];
     if (reach.has("job") && kind !== "query") lines.push(`export const ${fresh(`${name}Job`)} = ${kind}Job("${path}", ${argsName}, ${name});`);
@@ -356,12 +427,15 @@ interface Registration {
   handler: ts.Expression;
 }
 
-/** `export const name = internalMutation({ args, handler })`, or a builder given the handler alone. */
-function registrationOf(statement: ts.Statement): Registration | undefined {
+/**
+ * `export const name = internalMutation({ args, handler })`, or a builder given the handler alone; a builder imported
+ * from Convex is known by the name Convex exports it under, the app's own (`memberQuery`) by its name.
+ */
+function registrationOf(statement: ts.Statement, machineryOf: (node: ts.Identifier) => string | undefined): Registration | undefined {
   if (!ts.isVariableStatement(statement)) return undefined;
   const initializer = statement.declarationList.declarations[0]?.initializer;
   if (!initializer || !ts.isCallExpression(initializer) || !ts.isIdentifier(initializer.expression)) return undefined;
-  const kind = builders[initializer.expression.text];
+  const kind = builders[machineryOf(initializer.expression) ?? initializer.expression.text];
   const definition = initializer.arguments[0];
   if (!kind || !definition) return undefined;
   if (!ts.isObjectLiteralExpression(definition)) return { kind, handler: definition };
@@ -373,6 +447,7 @@ function registrationOf(statement: ts.Statement): Registration | undefined {
 
 /** Convex's query, mutation or action context, however a module names it. */
 function isContext(type: ts.Type): boolean {
+  if (type.isUnionOrIntersection()) return type.types.some(isContext);
   const context = /^(Generic)?(Query|Mutation|Action)Ctx$/;
   return context.test(type.aliasSymbol?.name ?? "") || context.test(type.getSymbol()?.name ?? "");
 }
@@ -385,11 +460,11 @@ function functionOf(statement: ts.Statement): (ts.SignatureDeclaration & { body?
 }
 
 /** Edits naming Convex's context and paging types as the service does; any other Convex type is refused. */
-function serverTypeEdits(sourceFile: ts.SourceFile, machineryNames: ReadonlyMap<string, string>, refuse: (node: ts.Node, message: string) => void): Edit[] {
+function serverTypeEdits(sourceFile: ts.SourceFile, machineryOf: (node: ts.Identifier) => string | undefined, refuse: (node: ts.Node, message: string) => void): Edit[] {
   const edits: Edit[] = [];
   const visit = (node: ts.Node): void => {
-    if (ts.isTypeReferenceNode(node) && ts.isIdentifier(node.typeName) && machineryNames.has(node.typeName.text)) {
-      const imported = machineryNames.get(node.typeName.text)!;
+    const imported = ts.isTypeReferenceNode(node) && ts.isIdentifier(node.typeName) ? machineryOf(node.typeName) : undefined;
+    if (ts.isTypeReferenceNode(node) && imported) {
       const convert = serverTypes[imported];
       if (!convert) {
         refuse(node, `names Convex's ${imported}, which the service has no counterpart for`);
@@ -404,7 +479,7 @@ function serverTypeEdits(sourceFile: ts.SourceFile, machineryNames: ReadonlyMap<
         const first = template.indexOf(markers[0]!);
         edits.push({ start: node.getStart(sourceFile), end: args.pos, text: template.slice(0, first) });
         edits.push({ start: args.end, end: node.getEnd(), text: template.slice(first + markers[0]!.length) });
-        ts.forEachChild(args[0]!, visit);
+        visit(args[0]!);
       }
       return;
     }
@@ -486,7 +561,10 @@ function typePrinter(checker: ts.TypeChecker, servicePath: string, localNames: R
     }
     if (flags & ts.TypeFlags.Object) {
       const id = type.getProperty("_id");
-      if (id && type.getProperty("_creationTime")) {
+      // A document of a table: its system fields are Convex's and its other fields the schema's, none the app's own.
+      const declaredIn = (property: ts.Symbol) => property.declarations?.map((declaration) => declaration.getSourceFile().fileName) ?? [];
+      const document = type.getProperties().every((property) => declaredIn(property).every((file) => file.includes("/node_modules/convex/") || file.endsWith(`/${convexRoot}/schema.ts`)));
+      if (id && type.getProperty("_creationTime") && document) {
         const idType = checker.getTypeOfSymbol(id);
         const table = idType.aliasTypeArguments?.[0];
         if (table?.isStringLiteral()) return `${want("db/schema/index.ts", "Doc")}<${JSON.stringify(table.value)}>`;
@@ -542,6 +620,17 @@ function importedNames(statement: ts.ImportDeclaration): Array<{ local: string; 
   const named = clause.namedBindings;
   if (named && ts.isNamespaceImport(named)) found.push({ local: named.name.text, imported: "*", text: `* as ${named.name.text}` });
   if (named && ts.isNamedImports(named)) for (const element of named.elements) found.push({ local: element.name.text, imported: (element.propertyName ?? element.name).text, text: element.getText() });
+  return found;
+}
+
+function importedIdentifiers(statement: ts.ImportDeclaration): Array<{ node: ts.Identifier; imported: string }> {
+  const clause = statement.importClause;
+  if (!clause) return [];
+  const found: Array<{ node: ts.Identifier; imported: string }> = [];
+  if (clause.name) found.push({ node: clause.name, imported: "default" });
+  const named = clause.namedBindings;
+  if (named && ts.isNamespaceImport(named)) found.push({ node: named.name, imported: "*" });
+  if (named && ts.isNamedImports(named)) for (const element of named.elements) found.push({ node: element.name, imported: (element.propertyName ?? element.name).text });
   return found;
 }
 

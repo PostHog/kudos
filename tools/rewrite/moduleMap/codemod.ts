@@ -207,7 +207,7 @@ export function validatorEdits(checker: ts.TypeChecker, sourceFile: ts.SourceFil
  * The Convex validator class a value's type is, such as `VUnion`, or `Validator` for a value that may be any of
  * several classes (`GenericValidator`), whose members the codemod renames none of.
  */
-function validatorClassOf(type: ts.Type): string | undefined {
+export function validatorClassOf(type: ts.Type): string | undefined {
   const name = convexClass(type);
   if (name) return name;
   if (!type.isUnion()) return undefined;
