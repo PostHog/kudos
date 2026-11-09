@@ -1,6 +1,7 @@
 import { test as base } from "@e2e-dev/web";
 import { Slack, type SlackCall } from "./slack.ts";
 import { targetOf } from "./target.ts";
+import { appTime, type AppTime } from "./time.ts";
 
 import { expect } from "e2e";
 
@@ -30,8 +31,24 @@ export function receipt(reply: SlackCall) {
   return [headline, ...rest.filter((line) => /kudos left today$|last kudos for today|^I skipped /.test(line))].join("\n");
 }
 
-export const test = base.extend<{ slack: Slack }>({
+const withSlack = base.extend<{ slack: Slack }>({
   slack: async ({}, use) => {
     await use(new Slack(targetOf()));
+  },
+});
+
+export const test = withSlack.extend<{ time: AppTime }>({
+  // Each step tells Slack the app's new time, since Slack's clock is the app's.
+  time: async ({ slack }, use) => {
+    const { timeUrl, testSecret } = targetOf();
+    if (testSecret === undefined) throw new Error("the target sets no KUDOS_TEST_SECRET, so the app's clock can't move: run journeys tagged @time only against a target with a time seam");
+    const seam = appTime(timeUrl!, testSecret);
+    const followed = (step: () => Promise<number>) => step().then((now) => (slack.followClock(now), now));
+    await use({
+      now: () => followed(() => seam.now()),
+      advance: (ms) => followed(() => seam.advance(ms)),
+      runCron: (id) => followed(() => seam.runCron(id)),
+      settle: () => followed(() => seam.settle()),
+    });
   },
 });

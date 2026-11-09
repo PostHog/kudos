@@ -23,7 +23,7 @@ export type SlackUserGroup = {
   users: string[];
 };
 
-export type UserGroupOptions = { handle?: string; name?: string; users?: string[]; disabled?: boolean; autoType?: "admin" | "owner" };
+export type UserGroupOptions = { handle?: string; name?: string; users?: string[]; disabled?: boolean; autoType?: "admin" | "owner"; teamId?: string };
 
 export type SlackChannel = { name: string; kind?: "public" | "private" | "archived" | "shared" | "pending-shared" | "private-shared"; joined?: boolean };
 
@@ -78,8 +78,8 @@ export class FakeSlack {
     return this;
   }
 
-  withUserGroup(id: string, { handle = id.toLowerCase(), name = handle, users = [], disabled = false, autoType }: UserGroupOptions = {}) {
-    this.userGroups.set(id, { id, team_id: "T1", handle, name, date_delete: disabled ? 1760349600 : 0, auto_type: autoType ?? null, users });
+  withUserGroup(id: string, { handle = id.toLowerCase(), name = handle, users = [], disabled = false, autoType, teamId = "T1" }: UserGroupOptions = {}) {
+    this.userGroups.set(id, { id, team_id: teamId, handle, name, date_delete: disabled ? 1760349600 : 0, auto_type: autoType ?? null, users });
     return this;
   }
 
