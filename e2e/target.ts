@@ -2,12 +2,15 @@ import { readFileSync } from "node:fs";
 import { parseEnv } from "node:util";
 
 export type Target = {
+  // Which app the target runs: today's app, the oracle every journey passes against, or the rewrite, which passes the
+  // journeys on its supported list (rewrite/supported.txt). A journey only one of them can pass skips on the other.
+  kind: TargetKind;
   appUrl: string;
   signingSecret: string;
   workspace: string;
   appId: string;
   fakesUrl: string;
-  // How a member signs in to the website. Today's app signs in with Slack; it is the only way so far.
+  // How a member signs in to the website: today's app with Slack, the rewrite through the edge in front of it.
   signIn: SignInMechanism;
   // The app's time seam (see time.ts) and the test-only secret it asks for. A target without a secret has no clock to
   // move, so its journeys tagged @time can't run.
@@ -15,11 +18,16 @@ export type Target = {
   testSecret?: string;
 };
 
-export const signInMechanisms = ["slack-openid"] as const;
+export const targetKinds = ["oracle", "rewrite"] as const;
+
+export type TargetKind = (typeof targetKinds)[number];
+
+export const signInMechanisms = ["slack-openid", "edge-header"] as const;
 
 export type SignInMechanism = (typeof signInMechanisms)[number];
 
 const names = {
+  kind: "KUDOS_TARGET_KIND",
   appUrl: "KUDOS_APP_URL",
   signingSecret: "KUDOS_SLACK_SIGNING_SECRET",
   workspace: "KUDOS_SLACK_WORKSPACE",
@@ -46,9 +54,12 @@ export function targetOf(file = process.env.E2E_TARGET): Target {
     return value;
   };
   const appUrl = read("appUrl");
+  const kind = variables[names.kind] ?? "oracle";
+  if (!(targetKinds as readonly string[]).includes(kind)) throw new Error(`the target file ${file} sets ${names.kind}=${kind}, but a target runs only ${targetKinds.join(" or ")}`);
   const signIn = variables[names.signIn] ?? "slack-openid";
   if (!(signInMechanisms as readonly string[]).includes(signIn)) throw new Error(`the target file ${file} sets ${names.signIn}=${signIn}, but journeys sign in only by ${signInMechanisms.join(", ")}`);
   return {
+    kind: kind as TargetKind,
     appUrl,
     signingSecret: read("signingSecret"),
     workspace: read("workspace"),

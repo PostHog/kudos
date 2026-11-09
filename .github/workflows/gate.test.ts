@@ -5,7 +5,7 @@ import { parse } from "yaml";
 import { runStep } from "./workflowStep";
 
 type Step = { run?: string; uses?: string; with?: Record<string, unknown>; env?: Record<string, string> };
-type Job = { steps?: Step[]; uses?: string; strategy?: { matrix: { shard: number[] } } };
+type Job = { steps?: Step[]; uses?: string; "timeout-minutes"?: number; strategy?: { matrix: { shard: number[] } } };
 type Workflow = { on: unknown; jobs: Record<string, Job> };
 
 function workflowOf(file: string) {
@@ -67,11 +67,34 @@ test("a pull request waits on one gate check, which runs the suite on the pull r
   for (const result of ["failure", "cancelled", "skipped"]) expect(exitFor(result), result).not.toBe(0);
 });
 
-test.each(["pnpm test:handshake", "pnpm e2e"])("%s runs on every pull request and every push to main, in its own job beside the gate", (command) => {
+test.each(["pnpm test:handshake", "pnpm e2e", "pnpm e2e:rewrite"])("%s runs on every pull request and every push to main, in its own job beside the gate, within a time limit", (command) => {
   const job = jobRunning(command);
 
   expect(workflow.on).toEqual({ pull_request: null, push: { branches: ["main"] } });
   expect(job).toBeDefined();
   expect(job?.[1].uses).toBeUndefined();
+  expect(job?.[1]["timeout-minutes"]).toBeGreaterThan(0);
   expect(job?.[1].steps?.find((step) => step.uses?.startsWith("actions/checkout@"))?.with).toMatchObject({ "persist-credentials": false });
+});
+
+test("the rewrite's journeys need a browser for the e2e tool's web engine, but no faketime: the rewrite moves its own clock", () => {
+  const [, job] = jobRunning("pnpm e2e:rewrite") ?? [];
+  const runs = job?.steps?.map((step) => step.run).filter(Boolean);
+
+  expect(runs).toContain("pnpm exec e2e-web install chromium --with-deps");
+  expect(runs?.some((run) => run?.includes("faketime"))).toBe(false);
+});
+
+test("every job uses an action at the same pinned commit as every other job", () => {
+  const pins = new Map<string, Set<string>>();
+  for (const job of [...Object.values(workflow.jobs), ...Object.values(suite.jobs)]) {
+    for (const { uses } of job.steps ?? []) {
+      if (uses === undefined) continue;
+      const [action, ref] = uses.split("@") as [string, string];
+      expect(ref, uses).toMatch(/^[0-9a-f]{40}$/);
+      pins.set(action, (pins.get(action) ?? new Set()).add(ref));
+    }
+  }
+
+  expect([...pins].filter(([, refs]) => refs.size > 1)).toEqual([]);
 });
