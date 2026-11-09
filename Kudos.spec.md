@@ -48,5 +48,9 @@ Peer recognition for Slack on one Convex deployment per workspace; the product r
   handler: auth in convex/auth.ts
   trust: browser
   control: none — public keys only; the private key stays in JWT_PRIVATE_KEY
+- route GET /healthz: anyone asks a copy of the service which commit it serves, whether its migrations are done and whether it is switched off
+  handler: createApp in service/src/http/app.ts
+  trust: browser
+  control: none — it reads no row and no secret; it answers the commit the image was built from and two states
 
 ## invariants

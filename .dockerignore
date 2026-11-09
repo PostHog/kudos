@@ -1,0 +1,5 @@
+**/node_modules
+.env*
+service/COMMIT
+website/proof
+website/dist
