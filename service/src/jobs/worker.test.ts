@@ -404,14 +404,18 @@ describe("scheduling", () => {
     let most = 0;
     const slow = actionJob("slack.delivery.send", z.object({}), async () => {
       most = Math.max(most, ++running);
+      if (running === 2) hold.reached();
       await hold.opened;
       running -= 1;
     });
     const { worker, enqueue } = setUp([slow]);
     for (let i = 0; i < 3; i++) await enqueue(slow, {});
 
-    const settling = worker().settle(5_000);
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    const copy = worker();
+    const settling = copy.settle(5_000);
+    await hold.arrived;
+    await copy.tick(); // a poll while both slots run starts nothing
+    expect((await jobRows()).map((row) => row.state).sort(), "the third waits while two run").toEqual(["pending", "running", "running"]);
     hold.open();
 
     expect((await settling).ran).toHaveLength(3);
