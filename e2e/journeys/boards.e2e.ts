@@ -1,4 +1,4 @@
-import { expect, test } from "../test.ts";
+import { test } from "../test.ts";
 import { emoji, mention, text } from "../slack.ts";
 
 const periods = ["leaderboard", "leaderboard month", "leaderboard all"];
@@ -15,14 +15,9 @@ test("the leaderboards rank members by the hugs they gave this week, this month 
   for (const message of messages) await slack.react(keen, message, "taco");
   await slack.react(steady, messages[0]!, "taco");
 
-  const rowsOf = (board: string) => board.split("\n").filter((line) => [keen, steady, author].some((member) => line.includes(`<@${member}>`)));
-  const boards = async () =>
-    Promise.all(
-      periods.map(async (period) => {
-        const [shown] = await slack.responsesTo(await slack.command(steady, channel, period));
-        return rowsOf(String(shown?.text)).map((row) => row.replace(/^\S+ /, ""));
-      }),
-    );
-  const ranked = [`<@${keen}> · 3 hugs`, `<@${steady}> · 1 hug`];
-  await expect.poll(boards).toEqual([ranked, ranked, ranked]);
+  // A board's rows for this journey's members, without their medals or places, in the board's order.
+  const rowsOf = (board: string) => board.split("\n").filter((line) => [keen, steady, author].some((member) => line.includes(`<@${member}>`))).map((row) => row.replace(/^\S+ /, ""));
+  const ranked = JSON.stringify([`<@${keen}> · 3 hugs`, `<@${steady}> · 1 hug`]);
+  // The hugs land a moment after their reactions, so each board is read until it ranks them; a failure names its rows.
+  for (const period of periods) await slack.askUntil(steady, channel, period, (answer) => JSON.stringify(rowsOf(answer)) === ranked);
 });
