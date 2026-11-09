@@ -1,11 +1,13 @@
 // The outbox's write API, as today's convex/analytics/outbox.ts: product events and exceptions become pending rows in
 // the caller's transaction, so they commit or roll back with it. Sending them is the drain's (S14), which `wakeDrain`
-// schedules.
+// wakes without reading or writing anything of the drain's.
 import { randomUUID } from "node:crypto";
 import { asc, eq } from "drizzle-orm";
+import { z } from "zod";
 import type { Id } from "../db/columns.ts";
 import { fromDocument } from "../db/documents.ts";
 import { analyticsOutbox, workspaceKeys, type Doc } from "../db/schema/index.ts";
+import { actionJob } from "../jobs/define.ts";
 import type { MutationContext, QueryContext } from "../operations.ts";
 import { captureSettings, nativeErrorReportingOn, type Capture } from "./capture.ts";
 import { analyticsIdOf } from "./person.ts";
@@ -81,5 +83,17 @@ async function insertPending(ctx: MutationContext, row: Pending): Promise<void> 
   await ctx.tx.insert(analyticsOutbox).values(fromDocument(analyticsOutbox, document) as typeof analyticsOutbox.$inferInsert);
 }
 
-/** S14's seam: today this schedules the one drain unless it is already due. Until S14 fills it, rows wait here. */
-async function wakeDrain(_ctx: MutationContext): Promise<void> {}
+/**
+ * The drain, S14's to fill: it claims the due pending rows `FOR UPDATE SKIP LOCKED`, exits at once when another drain
+ * holds them, and sends them. Until then it does nothing, and the rows wait.
+ */
+export const drain = actionJob("analytics.drain.drain", z.object({}), async () => {});
+
+/**
+ * Wakes the drain once the caller commits: a job row and the jobs channel's notification, both insert-only. Today's
+ * read the drain's row, its job and the pending rows in the caller's transaction, so requests conflicted with a drain
+ * claiming the outbox and ran out of retries; a request here never touches them.
+ */
+async function wakeDrain(ctx: MutationContext): Promise<void> {
+  await ctx.jobs.enqueue(drain, {});
+}
