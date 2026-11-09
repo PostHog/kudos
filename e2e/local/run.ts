@@ -4,7 +4,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { constants, tmpdir } from "node:os";
 import { join } from "node:path";
 import { flagsKey, projectToken } from "../../testing/fakePostHog.ts";
-import { startLocalBackend } from "../../testing/localBackend.ts";
+import { killGroup, startLocalBackend } from "../../testing/localBackend.ts";
 import { startFakes } from "../fakes/server.ts";
 import { targetLines, type Target } from "../target.ts";
 
@@ -18,7 +18,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {
     interrupted = signal;
     startup.abort();
-    runner?.kill(signal);
+    if (runner !== undefined) killGroup(runner, signal);
   });
 }
 
@@ -63,6 +63,7 @@ function runJourneys(targetFile: string) {
   return new Promise<number>((resolve) => {
     runner = spawn("npx", ["--no", "--", "e2e", "run", "--config", "e2e/e2e.config.ts", ...process.argv.slice(2).filter((argument) => argument !== "--")], {
       stdio: "inherit",
+      detached: true,
       env: { ...process.env, E2E_TARGET: targetFile, E2E_TELEMETRY_DISABLED: "1" },
     });
     runner.once("error", (failure) => {

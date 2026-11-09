@@ -33,7 +33,7 @@ export async function startLocalBackend({ instanceName, variables, signal }: Loc
   ], { stdio: "ignore", detached: true });
   const stop = async () => {
     const exited = new Promise((resolve) => backend.once("exit", resolve));
-    const running = backend.exitCode === null;
+    const running = backend.exitCode === null && backend.signalCode === null;
     killGroup(backend);
     if (running) await exited;
     await rm(directory, { recursive: true, force: true });
@@ -119,11 +119,12 @@ function convex(args: string[], signal?: AbortSignal) {
   });
 }
 
-// The backend runs its actions in node executors of its own, so it and the CLI are stopped by process group.
-function killGroup(child: ChildProcess) {
+// A child started with `detached: true` leads its own process group. Its tools run their own children (the backend's
+// node executors, npx's CLI, the E2E runner's workers), so stopping one means signalling the whole group.
+export function killGroup(child: ChildProcess, signal: NodeJS.Signals = "SIGTERM") {
   if (child.pid === undefined) return;
   try {
-    process.kill(-child.pid, "SIGTERM");
+    process.kill(-child.pid, signal);
   } catch {
     // the group has already exited
   }
