@@ -32,6 +32,14 @@ export function option(view: View, about: string, label: string): Action {
   return { type: "static_select", action_id: picker.action_id, selected_option: { value: picked.value } };
 }
 
+// The labels a picker in the block that reads `about` offers, and the one it shows as picked.
+export function pickerOf(view: View, about: string) {
+  const block = view.blocks.find((candidate) => candidate.text?.text.includes(about));
+  const picker = block === undefined ? undefined : elementsOf(block).find((element) => element.type === "static_select");
+  if (picker === undefined) return undefined;
+  return { options: (picker.options ?? []).map((candidate) => candidate.text.text), picked: picker.initial_option?.text.text };
+}
+
 function buttonsOf(block: Block | undefined) {
   return block === undefined ? [] : elementsOf(block).filter((element) => element.type === "button");
 }

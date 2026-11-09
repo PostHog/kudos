@@ -31,7 +31,14 @@ export type View = { type: string; blocks: Block[] };
 
 export type Block = { type: string; text?: { text: string }; elements?: Element[]; accessory?: Element };
 
-export type Element = { type: string; action_id?: string; value?: string; text?: { text: string }; options?: Array<{ text: { text: string }; value: string }> };
+export type Element = {
+  type: string;
+  action_id?: string;
+  value?: string;
+  text?: { text: string };
+  options?: Array<{ text: { text: string }; value: string }>;
+  initial_option?: { text: { text: string }; value: string };
+};
 
 export type Action = { action_id: string; value?: string; type?: string; selected_option?: { value: string }; selected_channel?: string };
 
@@ -61,6 +68,20 @@ export class Slack {
   async member(options: MemberOptions = {}) {
     const id = uniqueId("U");
     await this.control("members", { id, team_id: this.target.workspace, tz: noonZone(await this.now()), real_name: `Member ${id}`, ...options });
+    return id;
+  }
+
+  // Someone Slack doesn't know yet: it answers users.info about them with user_not_found until they join.
+  stranger() {
+    const id = uniqueId("U");
+    return { id, join: async (options: MemberOptions = {}) => this.control("members", { id, team_id: this.target.workspace, tz: noonZone(await this.now()), real_name: `Member ${id}`, ...options }) };
+  }
+
+  // A user group in Slack, which the app reads only when it syncs them. Groups are workspace-wide, so a journey names
+  // its own.
+  async userGroup(name: string, users: string[]) {
+    const id = uniqueId("S");
+    await this.control("user-groups", { id, team_id: this.target.workspace, handle: name.toLowerCase().replaceAll(/[^a-z0-9]+/g, "-"), name, users });
     return id;
   }
 
