@@ -11,7 +11,7 @@ export interface Snapshot {
 }
 
 /**
- * Opens the staged chunks `0..chunks-1` as one ZIP. Reads hold one chunk in memory at a time, and go through the pool,
+ * Opens the staged chunks `0..chunks-1` as one ZIP. Reads hold at most three chunks in memory, and go through the pool,
  * outside the loader's transactions, so a batch that fails never has a read queued inside it.
  */
 export async function openSnapshot(pool: pg.Pool, chunks: number): Promise<Snapshot> {
@@ -27,13 +27,18 @@ export async function openSnapshot(pool: pg.Pool, chunks: number): Promise<Snaps
     size += row.size;
   }
 
-  let cached: { number: number; bytes: Buffer } | undefined;
+  // A few chunks stay cached: `_storage`'s documents and the files they name are read in turns from different places.
+  const cached = new Map<number, Buffer>();
   const chunk = async (number: number): Promise<Buffer> => {
-    if (cached?.number !== number) {
+    let bytes = cached.get(number);
+    if (!bytes) {
       const result = await pool.query<{ bytes: Buffer }>('select bytes from "loadChunks" where number = $1', [number]);
-      cached = { number, bytes: result.rows[0]!.bytes };
+      bytes = result.rows[0]!.bytes;
+      if (cached.size >= 3) cached.delete(cached.keys().next().value!);
     }
-    return cached.bytes;
+    cached.delete(number);
+    cached.set(number, bytes);
+    return bytes;
   };
 
   class ChunkReader extends yauzl.RandomAccessReader {

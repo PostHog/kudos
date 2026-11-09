@@ -200,7 +200,8 @@ export function createLoadControl({ pool, token, log, limits = { rows: 500, byte
       if (!resuming && (await anyAppRows())) return c.text("The database already holds data; load into an empty one", 409);
       await pool.query(`update "loadState" set phase = 'loading', chunks = $1, sha256 = $2, error = null where key = 'load'`, [body.chunks, whole]);
       await refresh();
-      if (!(await run())) return c.text("Another copy owns the load", 409);
+      // This copy runs it, unless another copy's check took it first; either way it runs once.
+      await run();
       return c.json({ phase: "loading" }, 202);
     });
 

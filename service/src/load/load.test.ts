@@ -201,7 +201,7 @@ describe("loading a Convex snapshot", () => {
 
     expect((await finish(first, archive)).status, "the first copy starts the load").toBe(202);
     await waitFor(async () => ((await status(first)).entries[0]?.lines ?? 0) >= 20);
-    // The first copy's connection drops, as when its process dies: the lock goes with it.
+    // The owner's connection drops, as when its process dies: the lock goes with it.
     await database.pool.query(
       "select pg_terminate_backend(pid) from pg_locks where locktype = 'advisory' and classid = $1 and objid = $2 and pid <> pg_backend_pid()",
       lockParts(database.schema),
@@ -209,12 +209,13 @@ describe("loading a Convex snapshot", () => {
     const done = await settled(second);
 
     expect(done, "the load finishes").toMatchObject({ phase: "verifying", error: null });
-    expect(first.logs, "the first copy's load was interrupted, not stopped").toContain("load interrupted");
-    expect([...first.logs, ...second.logs].filter((line) => line === "load running").length, "a copy took it over").toBeGreaterThanOrEqual(2);
+    const logs = [...first.logs, ...second.logs];
+    expect(logs, "the owner's load was interrupted, not stopped").toContain("load interrupted");
+    expect(logs.filter((line) => line === "load running").length, "a copy took it over").toBeGreaterThanOrEqual(2);
     expect((await documents(hypeReactions)).map((doc) => doc._id), "every row once").toStrictEqual(reactions.map((doc) => doc._id));
   });
 
-  test("one copy owns a load: another, checking all along, never runs it", async () => {
+  test("one copy owns a load: the other, checking all along, never runs it too", async () => {
     const reactions = Array.from({ length: 200 }, (_, at) => reaction(`h${String(at).padStart(3, "0")}`));
     const first = await copy({ rows: 1 });
     const second = await copy({ rows: 1 });
@@ -223,7 +224,7 @@ describe("loading a Convex snapshot", () => {
     const done = await settled(first);
 
     expect(done, "the load finishes").toMatchObject({ phase: "verifying", error: null });
-    expect(second.logs, "the second copy never ran it").not.toContain("load running");
+    expect([...first.logs, ...second.logs].filter((line) => line === "load running"), "one copy ran it, once").toStrictEqual(["load running"]);
     expect((await documents(hypeReactions)).length, "every row once").toBe(reactions.length);
   });
 });
