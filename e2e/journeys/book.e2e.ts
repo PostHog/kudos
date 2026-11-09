@@ -60,7 +60,7 @@ test("the book shows the items a member's kudos brought them face down, and list
   const turned: string[] = [];
   while (!turned.includes("Ada Example: Sticker · New")) {
     const left = (await untilTheBoard(website)).getByRole("button", { name: unlabelled, exact: true });
-    await expect(left.first(), `no item for thanking Ada waits; the items turned showed ${JSON.stringify(turned)}`).toBeVisible();
+    expect(await left.first().isVisible(), `no item for thanking Ada waits; the items turned showed ${JSON.stringify(turned)}`).toBe(true);
     turned.push(...(await turn(website, unlabelled)));
   }
   const found = [...new Set(turned.filter((said) => hoggieTurned.test(said)).map((said) => said.replace(hoggieTurned, "$1, $2")))].sort();
