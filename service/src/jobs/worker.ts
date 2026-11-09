@@ -236,7 +236,8 @@ export function createWorker({
   }
 
   // Fires the due crons, then fills. A call while one ticks makes that one tick again when it is done, so a caller
-  // who moved the clock never gets an answer from a tick that started before.
+  // who moved the clock never gets an answer from a tick that started before. It never rejects: a timer calls it, and
+  // the runner has logged whatever failed; the next tick tries again.
   function tick(): Promise<void> {
     if (ticking) {
       tickAgain = true;
@@ -246,8 +247,8 @@ export function createWorker({
       do {
         tickAgain = false;
         if (stopping || held()) return;
-        if (!seeded) await seedCrons();
-        await fireDueCrons().catch(() => {}); // logged by the runner; the next tick tries again
+        if (!seeded) await seedCrons().catch(() => {});
+        await fireDueCrons().catch(() => {});
         fill();
       } while (tickAgain);
     })().finally(() => (ticking = undefined));
@@ -358,8 +359,9 @@ export function createWorker({
 
 // The database's trouble, not the job's: the attempt did nothing, so the job may run again. A serialization failure
 // or deadlock (the runner retries those first), a connection that failed or was refused, a server that is shutting
-// down or out of resources, a lock it could not get in time.
+// down or out of resources, a statement cancelled (the service sets no statement timeout, so an operator or a client
+// cancelled it), a lock it could not get in time.
 function databaseTrouble(error: unknown): boolean {
   const { code } = errorFields(error);
-  return code !== undefined && (/^(08|40|53|57P|58)/.test(code) || code === "55P03" || /^E[A-Z]+$/.test(code) || code.startsWith("DB_"));
+  return code !== undefined && (/^(08|40|53|57|58)/.test(code) || code === "55P03" || /^E[A-Z]+$/.test(code) || code.startsWith("DB_"));
 }

@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { describe, expect, test, vi } from "vitest";
@@ -166,6 +166,25 @@ describe("mutation jobs", () => {
     expect(await worker().settle(5_000)).toEqual({ ran: ["engine.give.award"], done: true });
     expect(calls).toBe(13);
     expect(await effects("give")).toBe(1);
+    expect(await jobRows()).toEqual([{ name: "engine.give.award", state: "success", error: null }]);
+  });
+
+  test("a statement the database cancelled is not the job's failure: the job stays pending and runs later", async () => {
+    let calls = 0;
+    const slow = mutationJob("engine.give.award", z.object({}), async (ctx) => {
+      calls += 1;
+      if (calls === 1) {
+        // A statement timeout of this transaction's own, standing for an operator's or a client's cancel.
+        await ctx.tx.execute(sql`set local statement_timeout = '30ms'`);
+        await ctx.tx.execute(sql`select pg_sleep(0.15)`);
+      }
+      await effect(ctx, "give");
+    });
+    const { worker, enqueue } = setUp([slow]);
+    await enqueue(slow, {});
+
+    expect(await worker().settle(5_000)).toEqual({ ran: ["engine.give.award"], done: true });
+    expect(calls).toBe(2);
     expect(await jobRows()).toEqual([{ name: "engine.give.award", state: "success", error: null }]);
   });
 
@@ -491,6 +510,30 @@ describe("the load's hold", () => {
     expect(await copy.settle(200)).toEqual({ ran: [], done: false });
     expect(runs).toBe(0);
     expect((await jobRows()).map((row) => row.state)).toEqual(["pending"]);
+  });
+
+  test("a tick whose seeding fails once the hold lifts answers anyway, and a later tick seeds", async () => {
+    let holding = true;
+    let failSeed = true;
+    const { worker, operations } = setUp([]);
+    const copy = worker({
+      held: () => holding,
+      operations: around(operations, {
+        before: (name) => {
+          if (name !== "crons.seed" || !failSeed) return;
+          failSeed = false;
+          throw Object.assign(new pg.DatabaseError("terminating connection due to administrator command", 0, "error"), { code: "57P01" });
+        },
+      }),
+    });
+    await copy.start();
+    holding = false;
+
+    await expect(copy.tick(), "a timer's tick never rejects").resolves.toBeUndefined();
+    expect(await db.select().from(crons)).toEqual([]);
+    await copy.tick();
+    expect(await db.select().from(crons)).toHaveLength(15);
+    await copy.stop(1_000);
   });
 
   test("the sweep leaves an action past its deadline alone while the load holds", async () => {
