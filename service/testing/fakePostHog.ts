@@ -23,7 +23,10 @@ export type BatchRequest = {
 export type FlagDefinition = {
   key: string;
   active?: boolean;
+  ensure_experience_continuity?: boolean;
+  bucketing_identifier?: "distinct_id" | "device_id";
   filters: {
+    aggregation_group_type_index?: number;
     groups: Array<{ properties?: Array<Record<string, unknown>>; rollout_percentage?: number; variant?: string | null }>;
     multivariate?: { variants: Array<{ key: string; rollout_percentage: number }> } | null;
   };
@@ -157,8 +160,13 @@ function isPersonEvent({ event }: Pick<CapturedEvent, "event">) {
 
 const realFetch = globalThis.fetch;
 
+// The service's operation runner's refusal, once it is loaded (service/src/operations.ts); today's tests have none.
+const refuseNetworkInOperation = (what: string) => (globalThis as { [key: symbol]: ((what: string) => void) | undefined })[Symbol.for("kudos.refuseNetworkInOperation")]?.(what);
+
+/** The tests' network: refused inside a mutation or query, as the real one is, since `vi.stubGlobal` replaces its guard. */
 export function routedFetch(postHog: FakePostHog, otherwise: typeof fetch) {
   return async (input: string | URL | Request, init?: RequestInit) => {
+    refuseNetworkInOperation("A fetch");
     const url = new URL(input instanceof Request ? input.url : input);
     if (url.protocol === "data:") return realFetch(input, init);
     return postHog.owns(url) ? postHog.fetch(input, init) : otherwise(input, init);

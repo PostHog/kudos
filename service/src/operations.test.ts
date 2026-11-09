@@ -1,7 +1,9 @@
+import { get as httpGet } from "node:http";
+import https from "node:https";
 import { eq, sql } from "drizzle-orm";
 import { doublePrecision, integer, pgTable, text } from "drizzle-orm/pg-core";
 import pg from "pg";
-import { afterAll, beforeAll, beforeEach, describe, expect, inject, test } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, inject, test, vi } from "vitest";
 import { useTestDatabase, withSearchPath } from "../testing/database.ts";
 import { createClock } from "./clock.ts";
 import { createPool } from "./db/pool.ts";
@@ -443,5 +445,84 @@ describe("actions", () => {
 
     await expect(operations.action("post the board", throwsAtOnce)).rejects.toThrow("no channel");
     expect(lines.filter((line) => line.level === "error")).toEqual([{ level: "error", message: "operation failed", operation: "post the board", kind: "action", error: "TypeError" }]);
+  });
+});
+
+describe("no network inside a mutation or query", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  // A data: URL never leaves the process, so the real fetch answers it wherever it is allowed.
+  const fetchesOk = async () => (await fetch("data:,ok")).text();
+
+  test("a fetch inside a mutation throws, naming the operation, and fails the mutation even when the handler catches it", async () => {
+    const { operations, lines } = setUp();
+
+    await expect(operations.mutation("decide the board", fetchesOk)).rejects.toMatchObject({ name: "NetworkInOperationError", message: expect.stringContaining('"decide the board"') });
+    await expect(
+      operations.mutation("hide a fetch", async ({ tx }) => {
+        await tx.insert(counters).values({ id: "hidden", n: 1 });
+        await fetchesOk().catch(() => "swallowed");
+      }),
+    ).rejects.toMatchObject({ name: "NetworkInOperationError" });
+    expect((await pool.query("select * from counters")).rows, "its writes roll back").toEqual([]);
+    expect(lines.filter((line) => line.level === "error").map(({ operation, error }) => [operation, error])).toEqual([
+      ["decide the board", "NetworkInOperationError"],
+      ["hide a fetch", "NetworkInOperationError"],
+    ]);
+  });
+
+  test("a fetch inside a query throws too", async () => {
+    const { operations } = setUp();
+
+    await expect(operations.query("read the board", fetchesOk)).rejects.toMatchObject({ name: "NetworkInOperationError", message: expect.stringContaining('"read the board"') });
+  });
+
+  test("a fetch put in place later, as a test or a library does, is refused the same", async () => {
+    const { operations } = setUp();
+    const before = globalThis.fetch;
+    let calls = 0;
+    try {
+      globalThis.fetch = async () => (calls++, new Response("ok"));
+
+      await expect(operations.mutation("decide", fetchesOk)).rejects.toMatchObject({ name: "NetworkInOperationError" });
+      expect(calls, "the replacement never ran").toBe(0);
+      expect(await fetchesOk(), "outside an operation it runs").toBe("ok");
+      expect(calls).toBe(1);
+    } finally {
+      globalThis.fetch = before;
+    }
+  });
+
+  test("an http or https request inside an operation throws before it connects", async () => {
+    const { operations } = setUp();
+
+    await expect(operations.mutation("call out", async () => void httpGet("http://127.0.0.1:9/").on("error", () => {}))).rejects.toMatchObject({ name: "NetworkInOperationError" });
+    await expect(operations.query("call out", async () => void https.request("https://127.0.0.1:9/").on("error", () => {}).end())).rejects.toMatchObject({ name: "NetworkInOperationError" });
+  });
+
+  test("an action's own fetch, outside its mutations and queries, still works", async () => {
+    const { operations } = setUp();
+
+    const answered = await operations.action("refresh", async (ctx) => {
+      const before = await fetchesOk();
+      await ctx.run.mutation("store", ({ tx }) => tx.insert(counters).values({ id: "stored", n: 1 }));
+      return [before, await fetchesOk()];
+    });
+
+    expect(answered).toEqual(["ok", "ok"]);
+  });
+
+  test("work a mutation left behind may fetch once the mutation has ended", async () => {
+    const { operations } = setUp();
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => (release = resolve));
+    let later!: Promise<string>;
+
+    await operations.mutation("parent", async () => {
+      later = released.then(fetchesOk);
+    });
+    release();
+
+    expect(await later).toBe("ok");
   });
 });
