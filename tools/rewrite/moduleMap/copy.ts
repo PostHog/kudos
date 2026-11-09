@@ -45,11 +45,13 @@ function wholeLines(text: string, start: number, end: number) {
   return { start: lineStart, end: lineEnd === -1 ? text.length : lineEnd + 1, text: "" };
 }
 
-/** `import("…")`, `require("…")` and `import.meta`, whose specifiers no import edit reaches. */
+/** `import("…")`, `require("…")`, `import x = require("…")` and `import.meta`, whose specifiers no import edit reaches. */
 export function dynamicImports(sourceFile: ts.SourceFile): string[] {
   const found: string[] = [];
   const visit = (node: ts.Node): void => {
-    if (ts.isCallExpression(node) && (node.expression.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(node.expression) && node.expression.text === "require"))) {
+    if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference)) {
+      found.push(`line ${sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1}: import = require()`);
+    } else if (ts.isCallExpression(node) && (node.expression.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(node.expression) && node.expression.text === "require"))) {
       found.push(`line ${sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1}: ${node.expression.getText(sourceFile)}()`);
     } else if (ts.isMetaProperty(node) && node.keywordToken === ts.SyntaxKind.ImportKeyword) {
       found.push(`line ${sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1}: import.meta`);

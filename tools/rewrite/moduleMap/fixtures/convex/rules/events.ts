@@ -20,9 +20,11 @@ export const cheerEventValidator = domainEvent({
   tallies: v.record(v.string(), v.union(v.number(), v.record(v.string(), v.boolean()))),
 });
 export type CheerEvent = Infer<typeof cheerEventValidator>;
+export type CheerShape = typeof cheerEventValidator.type;
 
 export const loudnessValidator = v.union(...toneValidator.members, v.literal("quiet"), v.literal(2), v.literal(3n), v.literal(false));
 export const tones: readonly string[] = toneValidator.members.map(({ value }) => value);
+export const fieldNames = ({ fields }: typeof messageRefValidator) => Object.keys(fields);
 export const nothingValidator = v.union();
 
 const refArgs = { ...messageRefValidator.fields, member: v.id("members") };
@@ -35,3 +37,9 @@ export const channelOnlyValidator = messageRefValidator.pick("channel");
 export function fieldCount(line: { fields: string[]; members: number }, member: Id<"members">, row?: Doc<"members">): number {
   return line.fields.length + line.members + member.length + (row ? 1 : 0);
 }
+
+// An app class that shares a Convex validator's name is no validator.
+class VObject {
+  fields = { x: 1 };
+}
+export const appFields = new VObject().fields;
