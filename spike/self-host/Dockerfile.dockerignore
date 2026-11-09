@@ -1,0 +1,6 @@
+node_modules
+website/node_modules
+website/dist
+.git
+.env.local
+**/.env*
