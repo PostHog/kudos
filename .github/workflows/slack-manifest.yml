@@ -5,6 +5,9 @@
 # Off until the repository variable HEDGEHUG_MANIFEST_UPDATES turns it on: `sandbox` lets the sandbox app's job run,
 # `production` lets the production app's too. Unset or anything else, every job is skipped. A run started by hand only
 # plans (reads, compares, validates) unless its `apply` box is ticked.
+#
+# Not yet to be switched on: nothing reports whether Slack's first event reaches an app after its events URL moves,
+# which the release route needs before an app follows this workflow. A run that moves the URL says so in its summary.
 name: Slack manifest
 
 on:

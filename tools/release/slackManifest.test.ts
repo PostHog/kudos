@@ -87,6 +87,19 @@ describe("the manifest step", () => {
     expect(JSON.parse(slack.calls[2]!.args.manifest!)).toEqual(renderManifest("sandbox", appUrl));
     expect(readFileSync(summary, "utf8")).toContain(`- settings.event_subscriptions.request_url: "https://old-host.example/slack/events" → "${appUrl}/slack/events"`);
     expect(stdout).toContain("::notice::The events URL moved");
+    expect(readFileSync(summary, "utf8"), "the run's summary carries what nobody has checked yet").toMatch(/- \[ \] Slack's first event to the sandbox app's new events URL: not checked by this run; the app's request log shows it after \d{4}-\d{2}-\d{2}T/);
+  });
+
+  test("an app that already holds the manifest gets no first-event step", async () => {
+    const appUrl = await appAnswering();
+    const slack = await slackHolding(renderManifest("sandbox", appUrl));
+    const summary = join(dir, "summary.md");
+    writeFileSync(summary, "");
+
+    const { code } = await run({ APP: "sandbox", APP_URL: appUrl, APP_ID: "A_SANDBOX", SLACK_SERVICE_TOKEN: token, SIGNING_SECRET: signingSecret, SLACK_API_URL: slack.url, APPLY: "true", GITHUB_STEP_SUMMARY: summary });
+
+    expect(code).toBe(0);
+    expect(readFileSync(summary, "utf8")).toBe("The sandbox Slack app already holds this manifest.\n");
   });
 
   test("without APPLY it plans only, and sends nothing", async () => {

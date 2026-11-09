@@ -62,6 +62,11 @@ try {
   // A new scope is what a reinstall approves; Slack's own flag also rises on changes that need none, such as a moved redirect URL.
   if (scopesAdded.length > 0) console.log(`::warning::The ${app} app ${sent ? "now asks" : "would ask"} for ${scopesAdded.join(", ")}: a workspace admin reinstalls it before that works`);
   else if (permissionsUpdated) console.log(`::notice::Slack marked the ${app} app's permissions as updated, with no scope added; no reinstall is needed for this change`);
+  if (changes.some(({ path }) => path === "settings.event_subscriptions.request_url") && sent) {
+    // The URL check before the update shows the app answers with its secret, not that Slack delivers to it: event
+    // subscriptions may be off, or the app may need a reinstall. Nothing reports the first event yet, so the run says so.
+    report([`- [ ] Slack's first event to the ${app} app's new events URL: not checked by this run; the app's request log shows it after ${new Date().toISOString()}`]);
+  }
   if (changes.some(({ path }) => path === "settings.event_subscriptions.request_url")) console.log(sent ? `::notice::The events URL moved; check Slack's Event Subscriptions page for the ${app} app and the app's request log for the first event` : `::notice::Once applied, the events URL moves; then check Slack's Event Subscriptions page for the ${app} app and the app's request log for the first event`);
 } catch (failure) {
   fail(failure instanceof Error ? failure.message : String(failure));
