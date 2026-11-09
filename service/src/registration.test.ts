@@ -238,7 +238,7 @@ describe("a domain's website routes", () => {
   test("no service code streams with Hono's streaming helpers, which print a failure whole and answer 200", () => {
     // Hono's streaming helpers, and JSX streaming, directly or through the renderer's `stream` option. Built from
     // parts, so this file isn't one of them.
-    const helpers = new RegExp(`["'\`]hono/(${["streaming", "jsx/streaming", "jsx-renderer"].join("|")})["'\`]`);
+    const helpers = new RegExp(`["'\`]hono/(${["streaming", "jsx/streaming", "jsx/dom/server", "jsx-renderer"].join("|")})["'\`]`);
     const sources = readdirSync(new URL(".", import.meta.url), { recursive: true, encoding: "utf8" }).filter((file) => /\.tsx?$/.test(file));
     const streaming = sources.filter((file) => helpers.test(readFileSync(new URL(file, import.meta.url), "utf8")));
 
