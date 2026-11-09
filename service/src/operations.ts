@@ -3,14 +3,18 @@
 //   read before the first attempt and kept across every retry;
 // - a query: one REPEATABLE READ READ ONLY transaction, so every read sees one snapshot, with one `now`;
 // - an action: no transaction; it reads the clock live and runs mutations and queries through the runner.
+// A mutation or query never runs another: the inner one would commit on its own, outside the outer's transaction.
 // A failure is logged with the operation's name; never its message, which may quote SQL.
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
-import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
+import pg from "pg";
 import type { Clock } from "./clock.ts";
 import { errorFields, type Log } from "./log.ts";
 
 export type Database = NodePgDatabase<Record<string, never>>;
-export type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
+/** The operation's transaction: everything a Drizzle database does, except open a transaction of its own. */
+export type Transaction = Omit<Database, "transaction">;
 
 /** What a new row is born with: a UUID, which no Convex ID can equal, and its creation time. */
 export interface NewRow {
@@ -42,7 +46,7 @@ export interface Operations {
 }
 
 export interface OperationsOptions {
-  db: Database;
+  pool: Pick<pg.Pool, "connect">;
   clock: Clock;
   log: Log;
   /** Attempts a mutation gets before a serialization failure or deadlock is its answer. */
@@ -54,7 +58,10 @@ export interface OperationsOptions {
 // Postgres's serialization failure and deadlock: the transaction did nothing, and running it again may succeed.
 const retryable = new Set(["40001", "40P01"]);
 
-export function createOperations({ db, clock, log, maxAttempts = 10, retryDelayMs = jitteredBackoff }: OperationsOptions): Operations {
+// The mutation or query whose handler is running, so another one started inside it is refused.
+const running = new AsyncLocalStorage<string>();
+
+export function createOperations({ pool, clock, log, maxAttempts = 10, retryDelayMs = jitteredBackoff }: OperationsOptions): Operations {
   let lastCreationTime = Number.NEGATIVE_INFINITY;
   const newRow = (now: number): NewRow => {
     // Rows inserted in one operation keep their order; the step is the smallest that still changes a float64 near now.
@@ -62,20 +69,64 @@ export function createOperations({ db, clock, log, maxAttempts = 10, retryDelayM
     return { _id: randomUUID(), _creationTime: lastCreationTime };
   };
 
-  const failed = (name: string, kind: string) => (error: unknown) => {
+  const failed = (name: string, kind: string, error: unknown): never => {
     log.error("operation failed", { operation: name, kind, ...errorFields(error) });
     throw error;
   };
+
+  // One transaction on a connection of its own, which always goes back to the pool: dropped when the connection may
+  // be broken, kept when the transaction ended cleanly either way.
+  async function inTransaction<T>(name: string, begin: string, handler: (tx: Transaction) => Promise<T>): Promise<T> {
+    refuseNesting(name);
+    const client = await pool.connect();
+    let broken: unknown;
+    // A checked-out client has no listener of the pool's; without one, a dropped connection would crash the process.
+    const onError = (error: unknown) => (broken ??= error);
+    client.on("error", onError);
+    // The first statement that failed. Postgres aborts the transaction on it, even when the handler catches it.
+    let aborted: unknown;
+    const tracked = {
+      query: (...args: Parameters<pg.PoolClient["query"]>) =>
+        (client.query as (...args: unknown[]) => Promise<unknown>)(...args).catch((error: unknown) => {
+          aborted ??= error;
+          throw error;
+        }),
+    };
+    try {
+      await client.query(begin).catch((error: unknown) => {
+        broken ??= error;
+        throw error;
+      });
+      let result: T;
+      try {
+        result = await running.run(name, () => handler(drizzle({ client: tracked as unknown as pg.PoolClient })));
+      } catch (error) {
+        await client.query("ROLLBACK").catch((rollbackError: unknown) => (broken ??= rollbackError));
+        throw error;
+      }
+      const commit = await client.query("COMMIT").catch((error: unknown) => {
+        // Postgres answered, so the transaction is over and the connection is fine; anything else may have broken it.
+        if (!hasSqlState(error)) broken ??= error;
+        throw error;
+      });
+      // On an aborted transaction Postgres answers COMMIT with ROLLBACK: the handler went on after a failed statement.
+      if (commit.command !== "COMMIT") throw wentOnAfter(aborted);
+      return result;
+    } finally {
+      client.removeListener("error", onError);
+      client.release(broken !== undefined);
+    }
+  }
 
   const operations: Operations = {
     async mutation(name, handler) {
       const now = clock.now();
       for (let attempt = 1; ; attempt++) {
         try {
-          return await db.transaction((tx) => handler({ tx, now, newRow: () => newRow(now) }), { isolationLevel: "serializable" });
+          return await inTransaction(name, "BEGIN ISOLATION LEVEL SERIALIZABLE", (tx) => handler({ tx, now, newRow: () => newRow(now) }));
         } catch (error) {
           const fields = errorFields(error);
-          if (!fields.code || !retryable.has(fields.code)) return failed(name, "mutation")(error);
+          if (!fields.code || !retryable.has(fields.code)) return failed(name, "mutation", error);
           if (attempt >= maxAttempts) {
             log.error("mutation retries exhausted", { operation: name, attempts: attempt, ...fields });
             throw error;
@@ -84,15 +135,44 @@ export function createOperations({ db, clock, log, maxAttempts = 10, retryDelayM
         }
       }
     },
-    query(name, handler) {
+    async query(name, handler) {
       const now = clock.now();
-      return db.transaction((tx) => handler({ tx, now }), { isolationLevel: "repeatable read", accessMode: "read only" }).catch(failed(name, "query"));
+      try {
+        return await inTransaction(name, "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY", (tx) => handler({ tx, now }));
+      } catch (error) {
+        return failed(name, "query", error);
+      }
     },
-    action(name, handler) {
-      return handler({ clock, run: operations }).catch(failed(name, "action"));
+    async action(name, handler) {
+      try {
+        refuseNesting(name);
+        return await handler({ clock, run: operations });
+      } catch (error) {
+        return failed(name, "action", error);
+      }
     },
   };
   return operations;
+}
+
+function refuseNesting(name: string): void {
+  const outer = running.getStore();
+  if (outer === undefined) return;
+  const error = new Error(`"${name}" was started inside "${outer}"; call the shared code directly, or run both from an action`);
+  error.name = "NestedOperationError";
+  throw error;
+}
+
+// The handler caught a failed statement and went on; the error carries that statement's SQLSTATE, so a serialization
+// failure it hid is still retried, and anything else is logged by its code.
+function wentOnAfter(aborted: unknown): Error {
+  const error = new Error("The operation went on after a failed statement, so its transaction rolled back", { cause: aborted });
+  return Object.assign(error, { code: hasSqlState(aborted) ? aborted.code : "25P02" });
+}
+
+// An error Postgres answered with, as opposed to one of the connection's.
+function hasSqlState(error: unknown): error is pg.DatabaseError & { code: string } {
+  return error instanceof pg.DatabaseError && typeof error.code === "string";
 }
 
 function jitteredBackoff(attempt: number): number {

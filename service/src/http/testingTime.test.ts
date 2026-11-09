@@ -49,10 +49,10 @@ describe("POST /testing/time", () => {
     expect(clock.now()).toBe(1_060_000);
   });
 
-  test("refuses a body it doesn't know or a step back", async () => {
+  test("refuses a body it doesn't know, a step back, or a step past the last date", async () => {
     const { clock, request } = app(secret);
 
-    for (const body of [{ advance: -1 }, { advance: "1" }, {}, { advance: 1, settle: true }, []]) {
+    for (const body of [{ advance: -1 }, { advance: "1" }, {}, { advance: 1, settle: true }, [], { advance: 1e300 }]) {
       expect((await request(body)).status, JSON.stringify(body)).toBe(400);
     }
     expect(clock.now()).toBe(1_000_000);

@@ -1,5 +1,4 @@
 import { serve, type ServerType } from "@hono/node-server";
-import { drizzle } from "drizzle-orm/node-postgres";
 import { createClock, type Clock } from "./clock.ts";
 import { readCommit } from "./commit.ts";
 import { runMigrations } from "./db/migrate.ts";
@@ -48,7 +47,7 @@ export async function boot({ env, log = jsonLog(), retryMs = 5_000, connectTimeo
 
   const pool = databaseUrl ? createPool(databaseUrl, { connectTimeoutMs }) : undefined;
   pool?.on("error", (error) => log.error("database connection lost", errorFields(error)));
-  const operations = pool ? createOperations({ db: drizzle({ client: pool }), clock, log }) : undefined;
+  const operations = pool ? createOperations({ pool, clock, log }) : undefined;
 
   const migrated = new Promise<void>((resolve) => {
     if (!pool) return;

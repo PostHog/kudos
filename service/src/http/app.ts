@@ -72,7 +72,12 @@ function mountTestingTime(app: Hono, secret: string, clock: Clock): void {
     if (keys.length !== 1 || keys[0] !== "advance" || typeof advance !== "number" || !Number.isFinite(advance) || advance < 0) {
       return c.json({ error: 'expected {"advance": ms} with ms a finite number, zero or more' }, 400);
     }
-    return c.json({ now: clock.advance(advance), ran: [] });
+    try {
+      return c.json({ now: clock.advance(advance), ran: [] });
+    } catch (error) {
+      if (error instanceof RangeError) return c.json({ error: "that step takes the clock past the last instant a date can hold" }, 400);
+      throw error;
+    }
   });
 }
 

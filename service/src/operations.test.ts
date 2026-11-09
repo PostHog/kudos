@@ -1,5 +1,4 @@
 import { eq, sql } from "drizzle-orm";
-import { drizzle } from "drizzle-orm/node-postgres";
 import { doublePrecision, integer, pgTable, text } from "drizzle-orm/pg-core";
 import pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, inject, test } from "vitest";
@@ -35,7 +34,7 @@ beforeEach(async () => {
   await pool.query("truncate counters");
 });
 
-function setUp(options: { maxAttempts?: number } = {}) {
+function setUp(options: { maxAttempts?: number; pool?: Pick<pg.Pool, "connect"> } = {}) {
   let real = 1_700_000_000_000;
   const clock = createClock({ real: () => real });
   const lines: Array<{ level: string; message: string } & LogFields> = [];
@@ -43,7 +42,7 @@ function setUp(options: { maxAttempts?: number } = {}) {
     info: (message, fields) => lines.push({ level: "info", message, ...fields }),
     error: (message, fields) => lines.push({ level: "error", message, ...fields }),
   };
-  const operations = createOperations({ db: drizzle({ client: pool }), clock, log, retryDelayMs: () => 1, ...options });
+  const operations = createOperations({ pool, clock, log, retryDelayMs: () => 1, ...options });
   return { operations, clock, lines, tick: (ms: number) => (real += ms) };
 }
 
@@ -141,6 +140,79 @@ describe("mutations", () => {
   });
 });
 
+describe("the transaction", () => {
+  test("lets go of a connection lost before it begins, so the next operation still gets one", async () => {
+    // One connection, so a leaked one would leave the next operation waiting until the connect timeout.
+    const single = createPool(withSearchPath(inject("databaseUrl"), schema), { max: 1, connectTimeoutMs: 2_000 });
+    let loseNext = true;
+    const losing = Object.assign(Object.create(single) as pg.Pool, {
+      async connect() {
+        const client = await single.connect();
+        if (loseNext) {
+          loseNext = false;
+          // The server ends the session after the pool hands it out and before the runner's BEGIN. Until the runner
+          // holds the client, its error is this override's to catch.
+          const meanwhile = () => {};
+          client.on("error", meanwhile);
+          await pool.query("select pg_terminate_backend($1, 5000)", [client.processID]);
+          client.removeListener("error", meanwhile);
+        }
+        return client;
+      },
+    });
+    try {
+      const { operations, lines } = setUp({ pool: losing });
+
+      await expect(operations.mutation("first", async () => "ran")).rejects.toThrow();
+      expect(await operations.mutation("second", async () => "ran"), "the next operation gets a connection").toBe("ran");
+      expect(lines.filter((line) => line.level === "error").map((line) => line.operation)).toEqual(["first"]);
+    } finally {
+      await single.end();
+    }
+  });
+
+  test("fails an operation that caught a database error and went on, keeping the error's code, and keeps none of its writes", async () => {
+    const { operations, lines } = setUp();
+    let attempts = 0;
+
+    const swallowing = operations.mutation("give twice", async ({ tx }) => {
+      attempts += 1;
+      await tx.insert(counters).values({ id: "give", n: 1 });
+      try {
+        await tx.insert(counters).values({ id: "give", n: 2 });
+      } catch {
+        // the handler hides the unique violation; Postgres has aborted the transaction all the same
+      }
+      return "done";
+    });
+
+    await expect(swallowing).rejects.toMatchObject({ code: "23505" });
+    expect(attempts, "a unique violation is not retried").toBe(1);
+    expect((await pool.query("select * from counters")).rows, "nothing it wrote stays").toEqual([]);
+    expect(lines.filter((line) => line.level === "error")).toEqual([
+      { level: "error", message: "operation failed", operation: "give twice", kind: "mutation", error: "Error", code: "23505" },
+    ]);
+  });
+
+  test("a mutation or query can't run inside another, whose writes then roll back", async () => {
+    const { operations } = setUp();
+
+    const nested = [
+      () =>
+        operations.mutation("outer", async ({ tx }) => {
+          await tx.insert(counters).values({ id: "outer", n: 1 });
+          await operations.mutation("inner", ({ tx: inner }) => inner.insert(counters).values({ id: "inner", n: 1 }));
+        }),
+      () => operations.mutation("outer query", () => operations.query("inner", async () => 1)),
+      () => operations.query("outer", () => operations.mutation("inner", async () => 1)),
+      () => operations.query("outer action", () => operations.action("inner", async () => 1)),
+    ];
+
+    for (const run of nested) await expect(run()).rejects.toMatchObject({ name: "NestedOperationError" });
+    expect((await pool.query("select * from counters")).rows, "neither the outer nor the inner write stays").toEqual([]);
+  });
+});
+
 describe("queries", () => {
   test("run in one REPEATABLE READ READ ONLY transaction", async () => {
     const { operations } = setUp();
@@ -187,5 +259,15 @@ describe("actions", () => {
 
     expect(seen.after - seen.before, "the action sees real time and the offset move").toBe(35_000);
     expect(seen.n).toBe(1);
+  });
+
+  test("an action that throws before its first await is logged like any other failure", async () => {
+    const { operations, lines } = setUp();
+    const throwsAtOnce = (() => {
+      throw new TypeError("no channel");
+    }) as () => Promise<never>;
+
+    await expect(operations.action("post the board", throwsAtOnce)).rejects.toThrow("no channel");
+    expect(lines.filter((line) => line.level === "error")).toEqual([{ level: "error", message: "operation failed", operation: "post the board", kind: "action", error: "TypeError" }]);
   });
 });
