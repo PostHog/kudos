@@ -89,6 +89,7 @@ describe("a database that accepts connections but never answers", () => {
 
     const failures = lines.filter((line) => line.message === "migrations failed, retrying");
     expect(failures.length, "one failure per hung connection").toBe(2);
+    expect(failures.map(({ code }) => code), "each named as a connect timeout").toEqual(["DB_CONNECT_TIMEOUT", "DB_CONNECT_TIMEOUT"]);
     expect(lines.at(-1)?.message, "then the migrations ran").toBe("migrations done");
   });
 
