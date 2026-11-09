@@ -62,9 +62,8 @@ export interface OperationsOptions {
 // Postgres's serialization failure and deadlock: the transaction did nothing, and running it again may succeed.
 const retryable = new Set(["40001", "40P01"]);
 
-// A statement that begins or ends a transaction; `rollback to savepoint` is not one, and only undoes part of it.
-const transactionControl = /^\s*(begin|start\s+transaction|commit|end|abort|rollback(?!\s+(work\s+|transaction\s+)?to\b)|prepare\s+transaction)\b/i;
-const rollbackToSavepoint = /^\s*rollback\s+(work\s+|transaction\s+)?to\b/i;
+// The runner sends each handler statement on its own (pg's extended protocol), so Postgres refuses a text of several,
+// and a statement's first words decide whether it begins or ends a transaction.
 
 // The mutation or query whose transaction is open, so another one started inside it is refused. Work its handler
 // left behind keeps the store after the operation ends; `open` turns false then, and nothing is refused.
@@ -100,13 +99,15 @@ export function createOperations({ pool, clock, log, maxAttempts = 10, retryDela
     const tracked = {
       query: (...args: Parameters<pg.PoolClient["query"]>) => {
         if (!scope.open) return Promise.reject(operationEnded(name));
-        const text = typeof args[0] === "string" ? args[0] : (args[0] as { text?: unknown } | undefined)?.text;
-        const statements = typeof text === "string" ? statementsOf(text) : [];
-        if (statements.some((statement) => transactionControl.test(statement))) return Promise.reject(transactionOwned(name));
-        return (client.query as (...args: unknown[]) => Promise<unknown>)(...args).then(
+        const [query, values] = args as unknown as [string | pg.QueryConfig, unknown[] | undefined];
+        const config: pg.QueryConfig = typeof query === "string" ? { text: query } : { ...query };
+        if (values !== undefined) config.values = values;
+        const kind = statementKind(config.text);
+        if (kind === "transaction") return Promise.reject(transactionOwned(name));
+        return client.query({ ...config, queryMode: "extended" } as pg.QueryConfig).then(
           (result) => {
             // The transaction is usable again; what failed inside the savepoint no longer aborts it.
-            if (statements.some((statement) => rollbackToSavepoint.test(statement))) aborted = undefined;
+            if (kind === "rollback to savepoint") aborted = undefined;
             return result;
           },
           (error: unknown) => {
@@ -197,47 +198,38 @@ function refuseNesting(name: string): void {
 }
 
 /**
- * The statements in `text`, with every comment, quoted string, quoted name and dollar-quoted body blanked, so a
- * statement's first words are its own: `/* x *\/ commit` and `select 1; commit` show their `commit`, and
- * `select 'a; commit'` shows none.
+ * What a statement's first words make it: one that begins or ends a transaction (`begin`, `start transaction`,
+ * `commit`, `end`, `abort`, `rollback`, `prepare transaction`, `commit prepared`), a rollback to a savepoint, or any
+ * other. Only whitespace and comments can come before a statement's first word, and Postgres allows comments between
+ * its words, so those are all this reads past.
  */
-function statementsOf(text: string): string[] {
-  let plain = "";
-  for (let i = 0; i < text.length; ) {
-    const rest = text.slice(i, i + 2);
-    if (rest === "--") {
-      const end = text.indexOf("\n", i);
-      i = end < 0 ? text.length : end;
-      plain += " ";
-    } else if (rest === "/*") {
+function statementKind(text: string): "transaction" | "rollback to savepoint" | "other" {
+  const words: string[] = [];
+  let i = 0;
+  while (words.length < 3 && i < text.length) {
+    if (/[ \t\n\r\f\v]/.test(text[i]!)) i += 1;
+    else if (text.startsWith("--", i)) while (i < text.length && text[i] !== "\n" && text[i] !== "\r") i += 1;
+    else if (text.startsWith("/*", i)) {
       let depth = 0;
       do {
         if (text.startsWith("/*", i)) (depth += 1), (i += 2);
         else if (text.startsWith("*/", i)) (depth -= 1), (i += 2);
         else i += 1;
       } while (depth > 0 && i < text.length);
-      plain += " ";
-    } else if (text[i] === "'" || text[i] === '"') {
-      const quote = text[i]!;
-      const escapes = quote === "'" && /[eE]$/.test(text.slice(0, i)) && !/[\w$][eE]$/.test(text.slice(0, i));
-      for (i += 1; i < text.length; i += 1) {
-        if (escapes && text[i] === "\\") i += 1;
-        else if (text[i] === quote && text[i + 1] === quote) i += 1;
-        else if (text[i] === quote) break;
-      }
-      i += 1;
-      plain += "''";
-    } else if (text[i] === "$" && /^\$([A-Za-z_][\w]*)?\$/.test(text.slice(i)) && !/[\w$]$/.test(text.slice(0, i))) {
-      const tag = /^\$([A-Za-z_][\w]*)?\$/.exec(text.slice(i))![0];
-      const end = text.indexOf(tag, i + tag.length);
-      i = end < 0 ? text.length : end + tag.length;
-      plain += "''";
     } else {
-      plain += text[i];
-      i += 1;
+      const word = /^[A-Za-z_]+/.exec(text.slice(i))?.[0];
+      if (!word) break;
+      words.push(word.toLowerCase());
+      i += word.length;
     }
   }
-  return plain.split(";");
+  const [first, second, third] = words;
+  if (first === "rollback") {
+    const to = second === "to" || ((second === "work" || second === "transaction") && third === "to");
+    return to ? "rollback to savepoint" : "transaction";
+  }
+  if (first === "prepare") return second === "transaction" ? "transaction" : "other";
+  return first !== undefined && ["begin", "start", "commit", "end", "abort"].includes(first) ? "transaction" : "other";
 }
 
 function operationEnded(name: string): Error {
