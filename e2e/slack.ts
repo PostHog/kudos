@@ -29,6 +29,9 @@ export type SlackCall = Record<string, unknown>;
 
 export type View = { type: string; blocks: Block[] };
 
+// A message the app posted, as Slack shows it now: after any update, with the ts that names it.
+export type Shown = { channel: string; ts: string; threadTs?: string; text: string; blocks?: Block[] };
+
 export type Block = { type: string; text?: { text: string }; elements?: Element[]; accessory?: Element };
 
 export type Element = { type: string; action_id?: string; value?: string; text?: { text: string }; options?: Array<{ text: { text: string }; value: string }>; initial_option?: { text: { text: string }; value: string } };
@@ -238,9 +241,9 @@ export class Slack {
     return (await this.callsTo("chat.postMessage")).filter((call) => call.channel === user || call.channel === directMessageWith(user));
   }
 
-  // What the app posted in a channel, oldest first.
-  async postsIn(channel: string) {
-    return (await this.callsTo("chat.postMessage")).filter((call) => call.channel === channel);
+  // The messages the app posted in a channel, oldest first, each as it shows now. A member's id names their DM.
+  messagesIn(channel: string) {
+    return this.read<Shown[]>("messages", { channel });
   }
 
   // The App Home views the app published for a member, oldest first.

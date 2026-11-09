@@ -42,13 +42,15 @@ Every user-facing behaviour of HedgeHug, inventoried from the code and the specs
 ## Progression, achievements, quests and the album
 
 - [ ] Quests are drawn each week and their progress joins the reply (flags, clock)
-- [x] Each kudos brings the giver an item for their album, one per teammate a week, and the reply sends them to the website to identify it (`album.e2e.ts`)
+- [x] Each kudos brings the giver an item for their album, one per teammate a week, and the reply's button opens their book on the website to identify it (`album.e2e.ts`)
+- [ ] The book on the website shows the items a member's kudos brought them, waiting to be identified (browser)
 - [ ] Newly shipped features are announced to members who reached them (flags, clock)
 
 ## Groups, teams and boards
 
 - [ ] User groups sync from Slack, and a member's group pick on App Home puts them on the groups board (flags, clock)
-- [x] The leaderboards rank members by the hugs they gave this week, this month and all time, never by what they received (`boards.e2e.ts`, `hugs.e2e.ts`)
+- [x] The leaderboards rank members by the hugs they gave, on the week, month and all-time boards alike, never by what they received (`boards.e2e.ts`, `hugs.e2e.ts`)
+- [ ] The week and month boards stop counting hugs once their period ends, and the all-time board keeps them (clock)
 
 ## Scheduled posts
 
