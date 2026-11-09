@@ -1,6 +1,6 @@
 // The image's entrypoint.
 import { boot } from "./boot.ts";
-import { errorName, jsonLog } from "./log.ts";
+import { errorFields, jsonLog } from "./log.ts";
 
 const log = jsonLog();
 const service = await boot({ env: process.env, log });
@@ -11,7 +11,7 @@ for (const signal of ["SIGTERM", "SIGINT"] as const) {
     service.stop().then(
       () => process.exit(0),
       (error: unknown) => {
-        log.error("stop failed", { error: errorName(error) });
+        log.error("stop failed", errorFields(error));
         process.exit(1);
       },
     );

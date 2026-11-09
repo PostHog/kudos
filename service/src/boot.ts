@@ -3,13 +3,17 @@ import pg from "pg";
 import { readCommit } from "./commit.ts";
 import { runMigrations } from "./db/migrate.ts";
 import { createApp, type Migrations } from "./http/app.ts";
-import { errorName, jsonLog, type Log } from "./log.ts";
+import { errorFields, jsonLog, type Log } from "./log.ts";
 
 export interface BootOptions {
   env: NodeJS.ProcessEnv;
   log?: Log;
   /** How long to wait before trying the migrations again after a failure. */
   retryMs?: number;
+  /** How long a database connection may take, handshake included, before the attempt fails and is retried. */
+  connectTimeoutMs?: number;
+  /** How long `stop` waits for the database's connections to close before it gives up on them. */
+  stopTimeoutMs?: number;
 }
 
 export interface Service {
@@ -23,7 +27,7 @@ export interface Service {
  * Starts the service: listens on `0.0.0.0:$PORT` at once, then brings the database up to date.
  * `/healthz` answers from the first moment; every other route answers 503 until the migrations are done.
  */
-export async function boot({ env, log = jsonLog(), retryMs = 5_000 }: BootOptions): Promise<Service> {
+export async function boot({ env, log = jsonLog(), retryMs = 5_000, connectTimeoutMs = 10_000, stopTimeoutMs = 5_000 }: BootOptions): Promise<Service> {
   const databaseUrl = env.DATABASE_URL || undefined;
   const off = env.HEDGEHUG_OFF === "1" || env.HEDGEHUG_OFF === "true";
   let migrations: Migrations = databaseUrl ? "pending" : "no-database";
@@ -34,8 +38,8 @@ export async function boot({ env, log = jsonLog(), retryMs = 5_000 }: BootOption
   const port = (server.address() as { port: number }).port;
   log.info("listening", { port, migrations, off });
 
-  const pool = databaseUrl ? new pg.Pool({ connectionString: databaseUrl, max: 5 }) : undefined;
-  pool?.on("error", (error) => log.error("database connection lost", { error: errorName(error) }));
+  const pool = databaseUrl ? new pg.Pool({ connectionString: databaseUrl, max: 5, connectionTimeoutMillis: connectTimeoutMs }) : undefined;
+  pool?.on("error", (error) => log.error("database connection lost", errorFields(error)));
 
   const migrated = new Promise<void>((resolve) => {
     if (!pool) return;
@@ -47,7 +51,7 @@ export async function boot({ env, log = jsonLog(), retryMs = 5_000 }: BootOption
         log.info("migrations done");
         resolve();
       } catch (error) {
-        log.error("migrations failed, retrying", { error: errorName(error), retryMs });
+        log.error("migrations failed, retrying", { ...errorFields(error), retryMs });
         setTimeout(attempt, retryMs).unref();
       }
     };
@@ -60,7 +64,8 @@ export async function boot({ env, log = jsonLog(), retryMs = 5_000 }: BootOption
     async stop() {
       stopping = true;
       await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
-      await pool?.end();
+      // A connection stuck mid-query would hold `end` forever; the process exits after `stop` either way.
+      if (pool) await Promise.race([pool.end(), new Promise((resolve) => setTimeout(resolve, stopTimeoutMs).unref())]);
     },
   };
 }

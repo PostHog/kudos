@@ -1,7 +1,11 @@
+import { readdirSync, readFileSync } from "node:fs";
+import { createServer, connect, type Server, type Socket } from "node:net";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { describe, expect, inject, onTestFinished, test } from "vitest";
+import { boot } from "./boot.ts";
 import { runMigrations } from "./db/migrate.ts";
+import { errorFields, type Log, type LogFields } from "./log.ts";
 import { useTestDatabase, withSearchPath } from "../testing/database.ts";
 import { startServiceProcess, type ServiceProcess } from "../testing/serviceProcess.ts";
 
@@ -64,6 +68,41 @@ describe("booting", () => {
   });
 });
 
+describe("a database that accepts connections but never answers", () => {
+  test("each attempt times out and is retried, and the service comes up once the database answers", async () => {
+    const real = new URL(database.url);
+    // The first two connections hang after the TCP handshake; later ones reach the real database.
+    let connections = 0;
+    const proxy = await listenOn((client) => {
+      connections += 1;
+      if (connections <= 2) return;
+      const upstream = connect(Number(real.port), real.hostname);
+      client.pipe(upstream).pipe(client);
+      upstream.on("error", () => client.destroy());
+      client.on("error", () => upstream.destroy());
+    });
+    const { log, lines } = captureLog();
+    const service = await boot({ env: { PORT: "0", DATABASE_URL: viaProxy(database.url, proxy) }, log, retryMs: 50, connectTimeoutMs: 300 });
+    onTestFinished(() => service.stop());
+
+    await service.migrated;
+
+    const failures = lines.filter((line) => line.message === "migrations failed, retrying");
+    expect(failures.length, "one failure per hung connection").toBe(2);
+    expect(lines.at(-1)?.message, "then the migrations ran").toBe("migrations done");
+  });
+
+  test("stop returns while a connection still hangs", async () => {
+    const proxy = await listenOn(() => {});
+    const service = await boot({ env: { PORT: "0", DATABASE_URL: viaProxy(database.url, proxy) }, log: captureLog().log, connectTimeoutMs: 60_000, stopTimeoutMs: 200 });
+
+    const started = performance.now();
+    await service.stop();
+
+    expect(performance.now() - started, "stop gives up on the hung connection").toBeLessThan(5_000);
+  });
+});
+
 describe("migrations", () => {
   const fixture = fileURLToPath(new URL("../testing/fixtures/migrations", import.meta.url));
 
@@ -86,4 +125,66 @@ describe("migrations", () => {
     const { rows } = await admin.query(`select "_id" from "${schema}".fixture`);
     expect(rows, "the fixture migration's insert ran once").toEqual([{ _id: "only-once" }]);
   });
+
+  test("no migration names a schema, so it lands in whichever schema the connection's search_path names", () => {
+    // Each test worker migrates its own schema through search_path, and production may use any schema. drizzle-kit
+    // qualifies foreign keys and enums with "public"; a migration that did would reach past the worker's schema.
+    const folder = fileURLToPath(new URL("../migrations", import.meta.url));
+    const qualified = readdirSync(folder)
+      .filter((name) => name.endsWith(".sql"))
+      .filter((name) => /"public"\s*\./i.test(readFileSync(`${folder}/${name}`, "utf8")));
+
+    expect(qualified).toEqual([]);
+  });
+
+  test("a failed migration is logged by its class and SQLSTATE, never by its SQL", async () => {
+    const schema = `${database.schema}_failing`;
+    const admin = new pg.Client({ connectionString: inject("databaseUrl") });
+    await admin.connect();
+    await admin.query(`drop schema if exists "${schema}" cascade; create schema "${schema}"`);
+    const pool = new pg.Pool({ connectionString: withSearchPath(inject("databaseUrl"), schema), max: 1 });
+    onTestFinished(async () => {
+      await pool.end();
+      await admin.query(`drop schema if exists "${schema}" cascade`);
+      await admin.end();
+    });
+
+    const error = await runMigrations(pool, fileURLToPath(new URL("../testing/fixtures/failing-migration", import.meta.url))).catch((caught: unknown) => caught);
+
+    expect(String((error as Error).message) + String((error as Error).cause), "the error itself quotes the SQL").toContain("hedgehug-fixture-literal");
+    const fields = errorFields(error);
+    expect(fields.code, "the SQLSTATE of an invalid integer").toBe("22P02");
+    expect(JSON.stringify(fields), "the logged fields").not.toContain("hedgehug-fixture-literal");
+  });
 });
+
+function captureLog(): { log: Log; lines: Array<{ message: string } & LogFields> } {
+  const lines: Array<{ message: string } & LogFields> = [];
+  const push = (message: string, fields: LogFields = {}) => lines.push({ message, ...fields });
+  return { log: { info: push, error: push }, lines };
+}
+
+async function listenOn(onConnection: (socket: Socket) => void): Promise<Server> {
+  const sockets = new Set<Socket>();
+  const server = createServer((socket) => {
+    sockets.add(socket);
+    socket.on("close", () => sockets.delete(socket));
+    onConnection(socket);
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  onTestFinished(
+    () =>
+      new Promise<void>((resolve) => {
+        for (const socket of sockets) socket.destroy();
+        server.close(() => resolve());
+      }),
+  );
+  return server;
+}
+
+function viaProxy(databaseUrl: string, proxy: Server): string {
+  const url = new URL(databaseUrl);
+  url.hostname = "127.0.0.1";
+  url.port = String((proxy.address() as { port: number }).port);
+  return url.toString();
+}
