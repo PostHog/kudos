@@ -32,6 +32,9 @@ export const appTables: PgTable[] = (Object.values(schema) as unknown[]).filter(
 );
 const tablesByName = new Map(appTables.map((table) => [getTableName(table), table]));
 
+/** A stored file is read whole into one row; one larger than this stops the load rather than the process. */
+export const maxFileBytes = 32 * 1024 * 1024;
+
 /** A batch commits after this many rows or bytes, whichever comes first, well inside the statement timeout. */
 export interface BatchLimits {
   rows: number;
@@ -52,8 +55,9 @@ interface Step {
   path: string;
   /** Where the entry's namespace starts: empty for the root, such as `_components/posthog/` for a component. */
   prefix: string;
-  /** `app` for the root, else the component path, such as `posthog`. */
+  /** The archive's source: `app` for the root, else the component's path in the export, such as `_components/posthog`. */
   source: string;
+  root: boolean;
   table: string;
   /** For `_storage`: each file's entry by ID. */
   files?: Map<string, string>;
@@ -72,13 +76,14 @@ function planEntries(snapshot: Snapshot): Step[] {
       rest = tail.join("/");
     }
     const prefix = path.slice(0, path.length - rest.length);
-    const source = components.length > 0 ? components.join("/") : "app";
+    const root = components.length === 0;
+    const source = root ? "app" : prefix.slice(0, -1);
     const [table, file, ...deeper] = rest.split("/");
     if (rest === "README.md" || (deeper.length === 0 && file === "generated_schema.jsonl")) continue;
     if (deeper.length > 0 || file === undefined) throw new LoadError(`The snapshot has an entry the loader doesn't know: ${path}`);
     if (table === "_storage" && file !== "documents.jsonl") continue;
     if (file !== "documents.jsonl") throw new LoadError(`The snapshot has an entry the loader doesn't know: ${path}`);
-    const step: Step = { path, prefix, source, table: table! };
+    const step: Step = { path, prefix, source, root, table: table! };
     if (table === "_storage") step.files = storedFiles(snapshot, prefix);
     (table === "_tables" ? inventories : steps).push(step);
   }
@@ -152,7 +157,7 @@ async function loadEntry(client: pg.PoolClient, snapshot: Snapshot, step: Step, 
 function documentInsert(step: Step, doc: Doc, reports: Report[]): Insert {
   const _id = doc._id;
   if (typeof _id !== "string" || typeof doc._creationTime !== "number") throw new LoadError(`A document of ${step.path} has no _id or _creationTime`);
-  const table = step.source === "app" ? tablesByName.get(step.table) : undefined;
+  const table = step.root ? tablesByName.get(step.table) : undefined;
   if (!table) return archiveInsert(step.source, step.table, doc);
   checkKinds(table, doc);
   reports.push(...indexedSpecials(table, doc));
@@ -173,15 +178,17 @@ async function storedFile(snapshot: Snapshot, step: Step, doc: Doc): Promise<Ins
   const _id = doc._id as string;
   const path = step.files!.get(_id);
   if (!path) throw new LoadError(`The snapshot has no bytes for stored file ${_id}`);
-  const parts: Buffer[] = [];
-  for await (const part of await snapshot.open(snapshot.entries.get(path)!)) parts.push(part as Buffer);
-  const bytes = Buffer.concat(parts);
+  const entry = snapshot.entries.get(path)!;
+  if (entry.uncompressedSize > maxFileBytes) throw new LoadError(`Stored file ${_id} is larger than the loader takes (${maxFileBytes} bytes)`);
+  const bytes = Buffer.alloc(entry.uncompressedSize);
+  let at = 0;
+  for await (const part of await snapshot.open(entry)) at += (part as Buffer).copy(bytes, at);
   const sha256 = createHash("sha256").update(bytes).digest("base64");
   if (doc.sha256 !== sha256 || BigInt(bytes.length) !== BigInt(doc.size as bigint)) {
     throw new LoadError(`Stored file ${_id} doesn't match its size or sha256`);
   }
   const metadata = archiveInsert(step.source, "_storage", doc);
-  if (step.source !== "app") {
+  if (!step.root) {
     const content = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
     return [metadata, archiveInsert(step.source, "_storage/bytes", { _id, _creationTime: doc._creationTime!, bytes: content })];
   }

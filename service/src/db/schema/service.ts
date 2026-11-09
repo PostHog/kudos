@@ -10,7 +10,7 @@ import { bytes, creationTime, f64, id, str, value } from "../columns.ts";
 export const archive = pgTable(
   "archive",
   {
-    /** Where the row came from: `app`, or the component's name. */
+    /** Where the row came from: `app`, or the component's path in the export, such as `_components/posthog`. */
     source: str().notNull(),
     table: str().notNull(),
     _id: str("_id").notNull(),

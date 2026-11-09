@@ -45,10 +45,11 @@ export function createApp({ commit, readiness, off, log, load }: AppOptions): Ho
   app.get("/healthz", (c) => c.json({ commit, migrations: readiness.migrations(), off }));
 
   app.use(async (c, next) => {
+    const migrated = readiness.migrations() === "done";
+    // A load's hold wins over HEDGEHUG_OFF: Slack hears 503 and retries rather than an acknowledgement.
+    if (migrated && load?.held() && !(load.routes && loadPaths.test(c.req.path))) return unavailable();
     if (off) return slackPaths.test(c.req.path) ? c.body(null, 200) : unavailable();
-    if (readiness.migrations() !== "done") return unavailable();
-    if (load?.routes && loadPaths.test(c.req.path)) return next();
-    if (load?.held()) return unavailable();
+    if (!migrated) return unavailable();
     return next();
   });
 

@@ -10,6 +10,7 @@ import { files, hypeReactions, kudosMessages, members, wordDeletionRequests } fr
 import { createApp } from "../http/app.ts";
 import type { Log } from "../log.ts";
 import { createLoadControl, type LoadControl } from "./control.ts";
+import { maxFileBytes } from "./loader.ts";
 
 const database = useTestDatabase();
 const db = drizzle({ client: database.pool });
@@ -28,15 +29,15 @@ const copies: Copy[] = [];
 afterEach(() => copies.splice(0).forEach((copy) => copy.load.stop()));
 
 /** One copy of the service: the app over the test database with the load's control, as boot wires them. */
-async function copy(options: { adminToken?: string | undefined; rows?: number } = {}): Promise<Copy> {
-  const { rows = 500 } = options;
+async function copy(options: { adminToken?: string | undefined; rows?: number; off?: boolean } = {}): Promise<Copy> {
+  const { rows = 500, off = false } = options;
   const adminToken = "adminToken" in options ? options.adminToken : token;
   const logs: string[] = [];
   const log: Log = { info: (message) => logs.push(message), error: (message) => logs.push(message) };
   const load = createLoadControl({ pool: database.pool, token: adminToken, log, limits: { rows, bytes: 1 << 20 }, pollMs: 50 });
   await load.refresh();
   load.resume();
-  const app = createApp({ commit: "test", readiness: { migrations: () => "done" }, off: false, log, load });
+  const app = createApp({ commit: "test", readiness: { migrations: () => "done" }, off, log, load });
   const request: Copy["request"] = (path, { token: given = token, ...init } = {}) =>
     Promise.resolve(app.request(path, { ...init, headers: { ...(given === null ? {} : { "x-hedgehug-admin-token": given }), ...init.headers } }));
   const made = { load, request, logs };
@@ -151,6 +152,8 @@ describe("loading a Convex snapshot", () => {
       "_storage/st1.png": card,
       "_storage/st2": asset,
       "_components/posthog/_tables/documents.jsonl": tablesOf(["flags"]),
+      "_components/app/_tables/documents.jsonl": tablesOf(["hypeReactions"]),
+      "_components/app/hypeReactions/documents.jsonl": jsonl([reaction("c1")]),
       "_components/posthog/flags/documents.jsonl": jsonl([flag]),
       "_components/posthog/_storage/documents.jsonl": jsonl([componentFile]),
       "_components/posthog/_storage/cs1.svg": asset,
@@ -177,14 +180,15 @@ describe("loading a Convex snapshot", () => {
       archived.rows.map((row) => ({ ...row, document: decodeStored(row.document) })),
       "everything without a table is archived verbatim, the _storage documents with their internal IDs",
     ).toStrictEqual([
+      { source: "_components/app", table: "hypeReactions", _id: "c1", document: reaction("c1") },
+      { source: "_components/posthog", table: "_storage", _id: "cs1", document: componentFile },
+      { source: "_components/posthog", table: "_storage/bytes", _id: "cs1", document: { _id: "cs1", _creationTime: 12, bytes: bufferOf(asset) } },
+      { source: "_components/posthog", table: "flags", _id: "f1", document: flag },
       { source: "app", table: "_scheduled_functions", _id: "s1", document: scheduled },
       { source: "app", table: "_storage", _id: "st1", document: storage[0] },
       { source: "app", table: "_storage", _id: "st2", document: storage[1] },
       { source: "app", table: "authAccounts", _id: "a1", document: account },
       { source: "app", table: "retiredTable", _id: "r1", document: retired },
-      { source: "posthog", table: "_storage", _id: "cs1", document: componentFile },
-      { source: "posthog", table: "_storage/bytes", _id: "cs1", document: { _id: "cs1", _creationTime: 12, bytes: bufferOf(asset) } },
-      { source: "posthog", table: "flags", _id: "f1", document: flag },
     ]);
     expect(await documents(files), "stored files keep their metadata and bytes; a null content type is missing").toStrictEqual([
       { _id: "st1", _creationTime: 10, sha256: base64(card), size: card.length, contentType: "image/png", bytes: card },
@@ -260,6 +264,14 @@ describe("what stops a load", () => {
     expect((await stops({ "notes.txt": "hello" })).error, "an unknown entry").toBe("The snapshot has an entry the loader doesn't know: notes.txt");
   });
 
+  test("a stored file larger than the loader takes, before it is read", async () => {
+    const big = Buffer.alloc(maxFileBytes + 1);
+    const doc: Doc = { _id: "st1", _creationTime: 1, sha256: "x", size: BigInt(big.length), contentType: null, internalId: "i1" };
+    const service = await copy();
+    await finish(service, zip({ "_storage/documents.jsonl": jsonl([doc]), "_storage/st1": big }));
+    expect((await settled(service)).error, "too large").toBe(`Stored file st1 is larger than the loader takes (${maxFileBytes} bytes)`);
+  });
+
   test("a stored file whose bytes don't match its document", async () => {
     const doc: Doc = { _id: "st1", _creationTime: 1, sha256: "AAAA", size: 3n, contentType: null, internalId: "i1" };
     expect((await stops({ "_storage/documents.jsonl": jsonl([doc]), "_storage/st1": "abc" })).error, "a bad hash").toBe(
@@ -290,15 +302,21 @@ describe("the admin path and the hold", () => {
     expect(response.status, "refused").toBe(409);
   });
 
-  test("a chunk sent again with the same bytes is a no-op, with other bytes refused; finish checks the whole", async () => {
+  test("a chunk sent again with the same bytes is a no-op, with other bytes refused; finish checks the chunks and the whole", async () => {
     const service = await copy();
     const send = (body: string) => service.request("/admin/load?chunk=0", { method: "POST", body });
     expect((await send("one")).status, "first send").toBe(200);
     expect((await send("one")).status, "the same bytes again").toBe(200);
     expect((await send("two")).status, "other bytes").toBe(409);
-    const wrong = await service.request("/admin/load/finish", { method: "POST", body: JSON.stringify({ chunks: 1, sha256: "0".repeat(64) }) });
-    expect(wrong.status, "a sha256 the chunks don't match").toBe(409);
-    expect((await service.request("/admin/load/finish", { method: "POST", body: JSON.stringify({ chunks: 2, sha256: "x" }) })).status, "a missing chunk").toBe(409);
+    const finishWith = (chunks: number, sha256: string) => service.request("/admin/load/finish", { method: "POST", body: JSON.stringify({ chunks, sha256 }) });
+    expect((await finishWith(2, "x")).status, "a missing chunk").toBe(409);
+
+    expect((await finishWith(1, "0".repeat(64))).status, "the chunks are all there").toBe(202);
+    expect(await settled(service), "the load checks the whole before it writes").toMatchObject({
+      phase: "loading",
+      error: "The staged chunks don't match the sha256 sent with finish",
+      entries: [],
+    });
   });
 
   test("a reset before the load is done empties every table it wrote, and the load can start over", async () => {
@@ -308,7 +326,8 @@ describe("the admin path and the hold", () => {
 
     const reset = await service.request("/admin/load/reset", { method: "POST" });
     expect(reset.status, "reset").toBe(200);
-    expect(await status(service), "nothing left").toMatchObject({ phase: "none", stagedChunks: 0, entries: [] });
+    expect(await status(service), "nothing left, back to staging").toMatchObject({ phase: "staging", error: null, stagedChunks: 0, entries: [] });
+    expect((await copy({ adminToken: undefined })).load.held(), "a copy without the token still holds after the reset").toBe(true);
     await finish(service, zip({ "hypeReactions/documents.jsonl": jsonl([reaction("h1")]) }));
     expect(await settled(service), "a new load").toMatchObject({ phase: "verifying", error: null });
   });
@@ -329,6 +348,21 @@ describe("the admin path and the hold", () => {
     expect(resumed.error, "it stops on the same row, not on h1 written twice").toBe(stopped.error);
     expect(resumed.entries, "from the checkpoint").toStrictEqual([{ entry: "hypeReactions/documents.jsonl", lines: 1, done: false }]);
     expect((await documents(hypeReactions)).map((doc) => doc._id), "h1 once").toStrictEqual(["h1"]);
+  });
+
+  test("a copy that was serving holds once another copy starts a load", async () => {
+    const serving = await copy({ adminToken: undefined });
+    expect((await serving.request("/anything", { token: null })).status, "serving before").toBe(404);
+    const loading = await copy();
+    await loading.request("/admin/load?chunk=0", { method: "POST", body: "zip" });
+
+    await waitFor(async () => (await serving.request("/anything", { token: null })).status === 503);
+  });
+
+  test("the hold wins over HEDGEHUG_OFF: Slack hears 503, not an acknowledgement", async () => {
+    const service = await copy({ off: true });
+    const slack = await service.request("/slack/events", { method: "POST", body: "{}", token: null });
+    expect(slack.status, "Slack while held and off").toBe(503);
   });
 
   test("the hold outlives a restart, token or not, and a finished load refuses its token", async () => {
