@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import type { LoadControl } from "../load/control.ts";
 import type { Log } from "../log.ts";
 
 /**
@@ -18,11 +19,14 @@ export interface AppOptions {
   /** `HEDGEHUG_OFF`: Slack's routes answer 200 and do nothing, everything else answers 503. */
   off: boolean;
   log: Log;
+  /** The data load: its hold and, while its token is set, its `/admin/load` routes. */
+  load?: Pick<LoadControl, "held" | "routes">;
 }
 
 const slackPaths = /^\/slack(\/|$)/;
+const loadPaths = /^\/admin\/load(\/|$)/;
 
-export function createApp({ commit, readiness, off, log }: AppOptions): Hono {
+export function createApp({ commit, readiness, off, log, load }: AppOptions): Hono {
   const app = new Hono();
 
   // One line per request: method, path without its query, status and duration. Never a header or a body.
@@ -43,8 +47,12 @@ export function createApp({ commit, readiness, off, log }: AppOptions): Hono {
   app.use(async (c, next) => {
     if (off) return slackPaths.test(c.req.path) ? c.body(null, 200) : unavailable();
     if (readiness.migrations() !== "done") return unavailable();
+    if (load?.routes && loadPaths.test(c.req.path)) return next();
+    if (load?.held()) return unavailable();
     return next();
   });
+
+  if (load?.routes) app.route("/admin/load", load.routes);
 
   return app;
 }
