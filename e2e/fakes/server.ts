@@ -2,27 +2,40 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { AddressInfo } from "node:net";
 import { FakePostHog, type FlagDefinition } from "../../testing/fakePostHog.ts";
 import { FakeSlack, rateLimitedFor, type SlackUser } from "../../testing/fakeSlack.ts";
+import { SlackOpenId, type NextSignIn } from "../../testing/slackOpenId.ts";
 import { productionFlags } from "./productionFlags.ts";
 
 export type Fakes = { url: string; stop: () => Promise<void> };
 
-export async function startFakes(): Promise<Fakes> {
+// `flagsChanged` makes the app reload its flags from the fakes, when a journey changed them, before the change
+// answers: a target whose app polls the fakes waits there until it has.
+export type FakesOptions = { flagsChanged?: () => Promise<void> };
+
+export async function startFakes({ flagsChanged = async () => {} }: FakesOptions = {}): Promise<Fakes> {
   const slack = new FakeSlack();
   // PostHog serves the flags production had, so journeys prove what its members saw.
   const postHog = new FakePostHog().withFlags(...productionFlags);
   const responses = new Map<string, unknown[]>();
-  const server = createServer((request, response) => void route({ slack, postHog, responses }, request, response).catch((failure) => answer(response, new Response(String(failure), { status: 500 }))));
+  let state: State | undefined;
+  const server = createServer((request, response) => void route(state!, request, response).catch((failure) => answer(response, new Response(String(failure), { status: 500 }))));
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const { port } = server.address() as AddressInfo;
-  return { url: `http://127.0.0.1:${port}`, stop: () => new Promise((resolve) => server.close(() => resolve())) };
+  const url = `http://127.0.0.1:${port}`;
+  // The fakes are Slack's OpenID issuer too, so a browser signs in with Slack as the member a journey names next.
+  const openId = new SlackOpenId(url, { team: "", user: "" });
+  state = { slack, postHog, openId, responses, flagsChanged };
+  return { url, stop: () => new Promise((resolve) => server.close(() => resolve())) };
 }
 
-type State = { slack: FakeSlack; postHog: FakePostHog; responses: Map<string, unknown[]> };
+type State = { slack: FakeSlack; postHog: FakePostHog; openId: SlackOpenId; responses: Map<string, unknown[]>; flagsChanged: () => Promise<void> };
 
-async function route({ slack, postHog, responses }: State, request: IncomingMessage, response: ServerResponse) {
+async function route(state: State, request: IncomingMessage, response: ServerResponse) {
+  const { slack, postHog, openId, responses } = state;
   const url = new URL(request.url ?? "/", "http://fakes");
   const body = await bodyOf(request);
-  if (url.pathname.startsWith("/_control/")) return answer(response, control({ slack, postHog, responses }, url, body));
+  if (url.pathname.startsWith("/_control/")) return answer(response, await control(state, url, body));
+  const asIssuer = openId.answer(url, { headers: new Headers(headersOf(request)), body });
+  if (asIssuer !== undefined) return answer(response, await asIssuer);
   // A slash command's response URL: the app posts its answer to the command here.
   if (url.pathname.startsWith("/responses/")) {
     const reply = url.pathname.slice("/responses/".length);
@@ -35,7 +48,7 @@ async function route({ slack, postHog, responses }: State, request: IncomingMess
   answer(response, await postHog.fetch(url, init).catch(() => new Response(null, { status: 200 })));
 }
 
-function control({ slack, postHog, responses }: State, url: URL, body: string) {
+async function control({ slack, postHog, openId, responses, flagsChanged }: State, url: URL, body: string) {
   const query = (name: string) => url.searchParams.get(name) ?? "";
   switch (url.pathname) {
     case "/_control/members": {
@@ -61,12 +74,16 @@ function control({ slack, postHog, responses }: State, url: URL, body: string) {
       return Response.json(responses.get(query("reply")) ?? []);
     case "/_control/flags":
       postHog.withFlags(...(JSON.parse(body) as FlagDefinition[]));
+      await flagsChanged();
+      return Response.json({ ok: true });
+    case "/_control/next-sign-in":
+      openId.signsInNext(JSON.parse(body) as NextSignIn);
       return Response.json({ ok: true });
     // What the app reported to PostHog as exceptions: the type and message of each, and where it was thrown.
     case "/_control/exceptions":
       return Response.json(postHog.events().filter((event) => event.event === "$exception").flatMap(({ properties }) => ((properties.$exception_list as ReportedException[] | undefined) ?? []).map(describe)));
     case "/_control/calls":
-      return Response.json(slack.callsTo(query("method")));
+      return Response.json(url.searchParams.has("method") ? slack.callsTo(query("method")) : slack.calls);
     case "/_control/reactions":
       return Response.json(slack.reactionsOn(query("channel"), query("ts")));
     default:

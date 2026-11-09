@@ -7,7 +7,13 @@ export type Target = {
   workspace: string;
   appId: string;
   fakesUrl: string;
+  // How a member signs in to the website. Today's app signs in with Slack; it is the only way so far.
+  signIn: SignInMechanism;
 };
+
+export const signInMechanisms = ["slack-openid"] as const;
+
+export type SignInMechanism = (typeof signInMechanisms)[number];
 
 const names = {
   appUrl: "KUDOS_APP_URL",
@@ -15,6 +21,7 @@ const names = {
   workspace: "KUDOS_SLACK_WORKSPACE",
   appId: "KUDOS_SLACK_APP_ID",
   fakesUrl: "KUDOS_FAKES_URL",
+  signIn: "KUDOS_SIGN_IN",
 } as const satisfies Record<keyof Target, string>;
 
 export function targetLines(target: Target) {
@@ -29,5 +36,7 @@ export function targetOf(file = process.env.E2E_TARGET): Target {
     if (!value) throw new Error(`the target file ${file} sets no ${names[key]}`);
     return value;
   };
-  return { appUrl: read("appUrl"), signingSecret: read("signingSecret"), workspace: read("workspace"), appId: read("appId"), fakesUrl: read("fakesUrl") };
+  const signIn = variables[names.signIn] ?? "slack-openid";
+  if (!(signInMechanisms as readonly string[]).includes(signIn)) throw new Error(`the target file ${file} sets ${names.signIn}=${signIn}, but journeys sign in only by ${signInMechanisms.join(", ")}`);
+  return { appUrl: read("appUrl"), signingSecret: read("signingSecret"), workspace: read("workspace"), appId: read("appId"), fakesUrl: read("fakesUrl"), signIn: signIn as SignInMechanism };
 }

@@ -1,6 +1,7 @@
 import { test as base } from "@e2e-dev/web";
 import { Slack, type SlackCall } from "./slack.ts";
 import { targetOf } from "./target.ts";
+import { Website } from "./website.ts";
 
 import { expect } from "e2e";
 
@@ -23,8 +24,11 @@ export function receipt(reply: SlackCall) {
   return [headline, ...rest.filter((line) => /kudos left today$|last kudos for today|^I skipped /.test(line))].join("\n");
 }
 
-export const test = base.extend<{ slack: Slack }>({
+export const test = base.extend<{ slack: Slack; website: Website }>({
   slack: async ({}, use) => {
     await use(new Slack(targetOf()));
+  },
+  website: async ({ app, screen, browser }, use) => {
+    await use(new Website(targetOf(), { app, screen, browser }));
   },
 });

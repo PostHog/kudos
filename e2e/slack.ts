@@ -96,6 +96,21 @@ export class Slack {
     return { ...posted, elements };
   }
 
+  // Its author deletes a message: Slack sends message_deleted with the message as it was.
+  async remove(posted: Posted) {
+    const { user, ts, threadTs } = posted;
+    await this.sendEvent({
+      type: "message",
+      subtype: "message_deleted",
+      hidden: true,
+      channel: posted.channel,
+      channel_type: posted.channelType,
+      ts: uniqueTs(),
+      deleted_ts: ts,
+      previous_message: { type: "message", user, ts, team: this.target.workspace, ...(threadTs !== undefined && { thread_ts: threadTs }), ...content(posted.elements) },
+    });
+  }
+
   // A member adds a reaction to someone's message.
   async react(user: string, { channel, ts, user: author }: Posted, reaction: string) {
     const eventTs = uniqueTs();
@@ -195,6 +210,12 @@ export class Slack {
 
   callsTo(method: string) {
     return this.read<SlackCall[]>("calls", { method });
+  }
+
+  // The calls the app made to Slack about a message: any method, with the message's channel and timestamp.
+  async callsAbout({ channel, ts }: Posted) {
+    const calls = await this.read<Array<{ method: string; args: SlackCall }>>("calls", {});
+    return calls.filter(({ args }) => args.channel === channel && (args.timestamp === ts || args.ts === ts || args.thread_ts === ts));
   }
 
   private lastEnvelope: string | undefined;

@@ -63,11 +63,13 @@ Every user-facing behaviour of HedgeHug, inventoried from the code and the specs
 
 ## Website
 
-- [ ] A deleted message leaves the activity and the spotlight; Slack takes its reactions away itself, and HedgeHug calls Slack for nothing (browser)
-- [ ] A member signs in with Slack and lands where they started, and the refusals the handshake suite proves create no session (browser)
-- [ ] While the website is closed nobody signs in, and an unverified person never reads as a member (browser, flags)
-- [ ] Activity, leaderboard, quests, skills, the book and settings show the member's own data (browser, flags)
-- [ ] A setting changed on the website changes it in Slack too (browser, flags)
+- [x] A deleted message leaves the activity and the kudos of the week; Slack takes its reactions away itself, and HedgeHug calls Slack for nothing about it (`deleted.e2e.ts`)
+- [x] A member signs in and lands where they started, a deep link included (`signIn.e2e.ts`)
+- [x] Someone from another workspace is refused and left signed out, and someone Slack's directory can't verify ends on "Membership not checked", never a member's page (`signIn.e2e.ts`). The sign-in protocol's own refusals (a wrong nonce or audience, a tampered or missing state, a code redeemed twice or without its PKCE verifier) stay in `pnpm test:handshake`: they test today's Slack sign-in, which a rewrite replaces, so they are no journey's
+- [x] While the website is closed nobody signs in and a member already signed in reads it closed (`closed.e2e.ts`; the journey switches the `website` flag through the fakes, which answer once the app has reloaded its flags)
+- [x] Activity, leaderboard and profile show the member's own kudos from Slack, and settings show their own choices (`pages.e2e.ts`, `settings.e2e.ts`)
+- [ ] Quests, skills and the book show the member's own progress (flags: the quests show on the leaderboard and activity, the skill tree is off in production's flags, and no journey reads a quest's or the book's progress yet)
+- [x] A leaderboard or reply setting changed on the website changes it in Slack too (`settings.e2e.ts`)
 
 ## Off in production
 
