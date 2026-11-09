@@ -5,7 +5,7 @@
   "description": "Peer recognition for Slack, built on Convex.",
   "type": "module",
   "scripts": {
-    "typecheck": "tsc --noEmit && tsc --noEmit -p website",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p website && tsc --noEmit -p service",
     "test": "vitest run",
     "manifest": "node slack-app/render-manifest.ts",
     "coherence": "coherence spec --check && coherence lexicon --check",

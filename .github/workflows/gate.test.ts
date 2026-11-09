@@ -31,6 +31,15 @@ test("the suite runs every command of pnpm gate, with the tests split into shard
   expect(shards).toEqual(shards.map((_, index) => index + 1));
 });
 
+test("the suite builds the root Dockerfile and checks the image boots under the host's limits", () => {
+  const [, image] = jobRunning('service/scripts/check-image.sh hedgehug-service:check "$(git rev-parse HEAD)"', suite) ?? [];
+
+  expect(image?.steps?.map((step) => step.run).filter(Boolean)).toEqual([
+    "docker build -t hedgehug-service:check .",
+    'service/scripts/check-image.sh hedgehug-service:check "$(git rev-parse HEAD)"',
+  ]);
+});
+
 test("every suite job checks out the commit its caller names, keeps no git credentials and only reads the repository", () => {
   const jobs = Object.values(suite.jobs);
 
