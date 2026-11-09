@@ -4,7 +4,7 @@ Outside-in journeys for HedgeHug on [e2e](https://e2e.com), TypeScript on Playwr
 
 - signed Slack requests (events, slash commands, interactions) sent to the app's base URL;
 - recording fakes of Slack's API and of PostHog, which the app calls instead of the real ones (`fakes/server.ts`, over `testing/fakeSlack.ts` and `testing/fakePostHog.ts`);
-- the website, in a browser.
+- the website, in a browser, which a journey signs in to through one call, `website.signIn(member)`.
 
 It imports nothing from `convex/`. Every journey makes its own synthetic members and messages, so journeys never share state.
 
@@ -24,11 +24,14 @@ A target file is an env file that names the app and its fakes:
 | `KUDOS_SLACK_SIGNING_SECRET` | The signing secret the app checks Slack's requests with. |
 | `KUDOS_SLACK_WORKSPACE` | The Slack workspace id the app serves. |
 | `KUDOS_SLACK_APP_ID` | The Slack app id that Slack's requests to the app carry. |
-| `KUDOS_FAKES_URL` | The fakes the app calls as Slack's Web API (`/api`) and as PostHog. |
+| `KUDOS_FAKES_URL` | The fakes the app calls as Slack's Web API (`/api`), as Slack's OpenID issuer and as PostHog. |
+| `KUDOS_SIGN_IN` | How a member signs in to the website. `slack-openid`, the default and today's only way, clicks the website's Slack button and the fakes, as Slack's issuer, send the browser straight back as the member the journey named. A target that signs in another way adds its mechanism to `website.ts`. |
 | `KUDOS_TIME_URL` | The app's time seam. Optional: it defaults to `KUDOS_APP_URL` plus `/testing/time`. |
 | `KUDOS_TEST_SECRET` | The test-only secret the time seam asks for. A target without it runs no journey tagged `@time`. |
 
-`pnpm e2e` writes the local one itself. Another target, such as the rewrite, writes its own file outside the repository and runs `E2E_TARGET=<file> pnpm exec e2e run --config e2e/e2e.config.ts`; its app must reach the fakes.
+`pnpm e2e` writes the local one itself, after building the website against the local backend and uploading it to the backend's static hosting. Another target, such as the rewrite, writes its own file outside the repository and runs `E2E_TARGET=<file> pnpm exec e2e run --config e2e/e2e.config.ts`; its app must reach the fakes.
+
+A journey that switches a flag posts the new definitions to the fakes, which answer once the app has reloaded them: `startFakes({ flagsChanged })` takes how. The local target runs the PostHog component's refresh; a target whose app polls the fakes passes a `flagsChanged` that waits until it has.
 
 ## Time
 

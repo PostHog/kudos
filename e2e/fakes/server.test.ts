@@ -29,3 +29,44 @@ describe("the fakes server's Slack Web API", () => {
     expect(calls).toEqual([{ channel: "C_FORM", text: "[Hi] {there}", blocks }]);
   });
 });
+
+describe("the fakes server's other roles", () => {
+  test("as Slack's OpenID issuer, it sends a sign-in straight back as the member named next", async () => {
+    const fakes = await startFakes();
+    try {
+      await fetch(`${fakes.url}/_control/next-sign-in`, { method: "POST", body: JSON.stringify({ team: "T1", user: "U_NEXT" }) });
+      const discovery = await (await fetch(`${fakes.url}/.well-known/openid-configuration`)).json();
+      const authorize = new URL(discovery.authorization_endpoint);
+      authorize.search = new URLSearchParams({ redirect_uri: "http://app.test/api/auth/callback/slack", state: "s", nonce: "n" }).toString();
+
+      const back = new URL((await fetch(authorize, { redirect: "manual" })).headers.get("location")!);
+      const token = await fetch(discovery.token_endpoint, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ code: back.searchParams.get("code")!, redirect_uri: "http://app.test/api/auth/callback/slack", client_id: "mock-client", client_secret: "mock-client-secret" }).toString(),
+      });
+      const idToken = String((await token.json()).id_token);
+      const claims = JSON.parse(Buffer.from(idToken.split(".")[1]!, "base64url").toString());
+
+      expect(discovery.issuer).toBe(fakes.url);
+      expect(back.origin + back.pathname).toBe("http://app.test/api/auth/callback/slack");
+      expect(back.searchParams.get("state")).toBe("s");
+      expect(claims).toMatchObject({ iss: fakes.url, nonce: "n", "https://slack.com/team_id": "T1", "https://slack.com/user_id": "U_NEXT" });
+    } finally {
+      await fakes.stop();
+    }
+  });
+
+  test("a change to the flags answers only after the app has reloaded them", async () => {
+    const reloaded: string[] = [];
+    const fakes = await startFakes({ flagsChanged: async () => void reloaded.push("reloaded") });
+    try {
+      const answer = await fetch(`${fakes.url}/_control/flags`, { method: "POST", body: JSON.stringify([]) });
+
+      expect(answer.ok).toBe(true);
+      expect(reloaded).toEqual(["reloaded"]);
+    } finally {
+      await fakes.stop();
+    }
+  });
+});
