@@ -3,6 +3,7 @@ import { readCommit } from "./commit.ts";
 import { runMigrations } from "./db/migrate.ts";
 import { createPool } from "./db/pool.ts";
 import { createApp, type Migrations } from "./http/app.ts";
+import { createLoadControl } from "./load/control.ts";
 import { errorFields, jsonLog, type Log } from "./log.ts";
 
 export interface BootOptions {
@@ -33,21 +34,26 @@ export async function boot({ env, log = jsonLog(), retryMs = 5_000, connectTimeo
   let migrations: Migrations = databaseUrl ? "pending" : "no-database";
   let stopping = false;
 
-  const app = createApp({ commit: readCommit(env), readiness: { migrations: () => migrations }, off, log });
+  const pool = databaseUrl ? createPool(databaseUrl, { connectTimeoutMs }) : undefined;
+  pool?.on("error", (error) => log.error("database connection lost", errorFields(error)));
+  const load = pool ? createLoadControl({ pool, token: env.HEDGEHUG_ADMIN_TOKEN || undefined, log }) : undefined;
+
+  const app = createApp({ commit: readCommit(env), readiness: { migrations: () => migrations }, off, log, load });
   const server = await listen(app.fetch, Number(env.PORT ?? 8080));
   const port = (server.address() as { port: number }).port;
   log.info("listening", { port, migrations, off });
-
-  const pool = databaseUrl ? createPool(databaseUrl, { connectTimeoutMs }) : undefined;
-  pool?.on("error", (error) => log.error("database connection lost", errorFields(error)));
 
   const migrated = new Promise<void>((resolve) => {
     if (!pool) return;
     const attempt = async () => {
       if (stopping) return;
       try {
+        // Reads the load's state first, so a held copy holds while it migrates, even with HEDGEHUG_OFF.
+        await load!.refresh();
         await runMigrations(pool);
+        await load!.refresh();
         migrations = "done";
+        load!.resume();
         log.info("migrations done");
         resolve();
       } catch (error) {
@@ -63,6 +69,7 @@ export async function boot({ env, log = jsonLog(), retryMs = 5_000, connectTimeo
     migrated,
     async stop() {
       stopping = true;
+      load?.stop();
       await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
       // A connection stuck mid-query would hold `end` forever; the process exits after `stop` either way.
       if (pool) await Promise.race([pool.end(), new Promise((resolve) => setTimeout(resolve, stopTimeoutMs).unref())]);
