@@ -37,13 +37,12 @@ Every user-facing behaviour of HedgeHug, inventoried from the code and the specs
 - [x] Opening App Home publishes it with the member's tabs, and an admin's with the Admin tab (`home.e2e.ts`)
 - [x] Switching tabs, leaderboard visibility and message settings publish App Home again, and the boards and replies follow them (`home.e2e.ts`)
 - [x] Admins pick the announcement channel or stop posting there, and switch public celebrations and the Monday post (`admin.e2e.ts`)
-- [ ] The avatar picker sets the hoggie a member holds as their avatar (flags, browser: a member holds a hoggie only once they turn an item on the website)
 
 ## Progression, achievements, quests and the album
 
 - [x] The onboarding quests, and then a quest drawn each week, show their progress in the giver's reply (`quests.e2e.ts`)
 - [x] Each kudos brings the giver an item for their album, one per teammate a week, and the reply's button opens their book on the website to identify it (`album.e2e.ts`)
-- [ ] The book on the website shows the items a member's kudos brought them, waiting to be identified (browser)
+- [x] The book on the website shows the items a member's kudos brought them face down, and identifying the one for thanking a teammate turns it into that teammate's sticker (`book.e2e.ts`)
 
 ## Groups, teams and boards
 
@@ -59,7 +58,7 @@ Every user-facing behaviour of HedgeHug, inventoried from the code and the specs
 ## Channels, links and emoji
 
 - [x] A new public channel is joined unless it is named for a customer or for sharing, and a channel that becomes shared or is renamed a customer channel is left (`channels.e2e.ts`)
-- [ ] Links to a member's or a team's page on the website unfurl into previews (flags, browser or clock: production's flags put a page's address in Slack only in the Monday post, and members copy it from the website)
+- [x] A link to a member's page, copied from the website and posted in Slack, unfurls into a preview of their card (`links.e2e.ts`). Team pages come from the company's team directory, which the app reads from a fixed address no fake stands in for, so a team link's preview stays in `convex/slack/linkPreviews.test.ts`
 
 ## Website
 
@@ -68,9 +67,9 @@ Every user-facing behaviour of HedgeHug, inventoried from the code and the specs
 - [x] Someone from another workspace is refused and left signed out, and someone Slack's directory can't verify ends on "Membership not checked", never a member's page (`signIn.e2e.ts`). The sign-in protocol's own refusals (a wrong nonce or audience, a tampered or missing state, a code redeemed twice or without its PKCE verifier) stay in `pnpm test:handshake`: they test today's Slack sign-in, which a rewrite replaces, so they are no journey's
 - [x] While the website is closed nobody signs in and a member already signed in reads it closed (`closed.e2e.ts`; the journey switches the `website` flag through the fakes, which answer once the app has reloaded its flags)
 - [x] Activity, leaderboard and profile show the member's own kudos from Slack, and settings show their own choices (`pages.e2e.ts`, `settings.e2e.ts`)
-- [ ] Quests, skills and the book show the member's own progress (flags: the quests show on the leaderboard and activity, the skill tree is off in production's flags, and no journey reads a quest's or the book's progress yet)
+- [x] The week's quests and the book show the member's own progress: a kudos to someone new moves the activity page's kudos quest on, and the book lists the hoggies the member identified (`progress.e2e.ts`, `book.e2e.ts`). The hugs quest's count stays out: it can miss a hug the app takes in out of order, a defect of its own
 - [x] A leaderboard or reply setting changed on the website changes it in Slack too (`settings.e2e.ts`)
 
 ## Off in production
 
-Their flags were off for production's members at the pause, or on only for the app's owner, so members never saw them and no journey is owed until a flag turns them on: unlocks, their perks and the announcement of newly shipped features, the store, coins and crates (and with them picking a custom emoji synced from Slack as the kudos emoji), achievements' tiers, the skill tree, team spirit, the hoggie forge, the level-up reveal, random emojis, workspace settings, and the nudge to add the kudos emoji to a thank-you. The welcome nudge's switch shows only to the app's maintainer, the one member `KUDOS_MAINTAINER` names.
+Their flags were off for production's members at the pause, or on only for the app's owner, so members never saw them and no journey is owed until a flag turns them on: unlocks, their perks and the announcement of newly shipped features, App Home's hoggies and with them its avatar picker (they show only with `unlocks`, and the website has no picker), the store, coins and crates (and with them picking a custom emoji synced from Slack as the kudos emoji), achievements' tiers, the skill tree, team spirit, the hoggie forge, the level-up reveal, random emojis, workspace settings, and the nudge to add the kudos emoji to a thank-you. The welcome nudge's switch shows only to the app's maintainer, the one member `KUDOS_MAINTAINER` names.
