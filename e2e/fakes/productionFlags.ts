@@ -47,7 +47,6 @@ export const productionFlagKeys = [
   "rarity-caps",
   "rich-link-cards",
   "shareable-urls",
-  "slots-retired",
   "standard-emoji",
   "sticker-book",
   "team-pages",
