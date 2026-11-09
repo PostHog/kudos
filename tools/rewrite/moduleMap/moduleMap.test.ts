@@ -161,6 +161,8 @@ export type Note = z.infer<typeof noteValidator>;
         "convex/ctx/unconvertible.ts:9: a record keyed other than by v.string(), which zod would require every key of",
         "convex/ctx/unconvertible.ts:10: reads a Convex validator's members other than by name",
         "convex/ctx/unconvertible.ts:11: reads a Convex validator's members other than by name",
+        "convex/ctx/unconvertible.ts:12: reads a Convex validator's members other than by name",
+        "convex/ctx/unconvertible.ts:14: a record keyed other than by v.string(), which zod would require every key of",
       ],
     });
     expect(convert("convex/ctx/handler.ts")).toEqual({ refusals: ["convex/ctx/handler.ts: imports ../_generated/server, which the service has no counterpart for"] });
@@ -216,6 +218,7 @@ describe("the equivalence check", () => {
       '{"":true}: Convex rejects, zod accepts',
       '{"$dollar":true}: Convex rejects, zod accepts',
       '{"_underscore":true}: Convex rejects, zod accepts',
+      '{"__proto__":true}: Convex rejects, zod accepts',
       '{"é":true}: Convex rejects, zod accepts',
       '{"tab\\t":true}: Convex rejects, zod accepts',
       `{"${"k".repeat(1025)}":true}: Convex rejects, zod accepts`,

@@ -118,6 +118,10 @@ export function validatorEdits(checker: ts.TypeChecker, sourceFile: ts.SourceFil
     return symbol ? imported.get(symbol) : undefined;
   };
 
+  // `v.<kind>(…)`, where `v` is this module's import of Convex's `v`, whatever its local name.
+  const isConvexCall = (node: ts.Node, kind: string): node is ts.CallExpression =>
+    ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === kind && ts.isIdentifier(node.expression.expression) && convexName(node.expression.expression) === "v";
+
   const visit = (node: ts.Node): void => {
     if (ts.isImportDeclaration(node)) return;
     if (ts.isIdentifier(node) && (node.text === "z" || node.text === "zv") && !convexName(node)) {
@@ -127,7 +131,7 @@ export function validatorEdits(checker: ts.TypeChecker, sourceFile: ts.SourceFil
       const target = calls[kind];
       const [key] = node.arguments;
       if (!target) refuse(node, `v.${kind} has no zod counterpart here`);
-      else if (kind === "record" && !(key && ts.isCallExpression(key) && key.arguments.length === 0 && /^\w+\.string$/.test(key.expression.getText(sourceFile)))) {
+      else if (kind === "record" && !(key && isConvexCall(key, "string") && key.arguments.length === 0)) {
         refuse(node, "a record keyed other than by v.string(), which zod would require every key of");
       } else if (kind === "union" && node.arguments.length === 0) replace(node.getStart(sourceFile), node.getEnd(), "z.never()");
       else {
@@ -161,7 +165,10 @@ export function validatorEdits(checker: ts.TypeChecker, sourceFile: ts.SourceFil
       if (right.text !== "type") refuse(node, `reads ${right.text} of a Convex validator, which zod has no counterpart for`);
       else replace(node.getStart(sourceFile), node.getEnd(), `z.infer<typeof ${left.getText(sourceFile)}>`);
       return;
-    } else if (ts.isElementAccessExpression(node) && validatorClassOf(checker.getTypeAtLocation(node.expression))) {
+    } else if (
+      (ts.isElementAccessExpression(node) && validatorClassOf(checker.getTypeAtLocation(node.expression))) ||
+      (ts.isIndexedAccessTypeNode(node) && validatorClassOf(checker.getTypeFromTypeNode(node.objectType)))
+    ) {
       refuse(node, `reads a Convex validator's members other than by name`);
     } else if (ts.isObjectBindingPattern(node) && validatorClassOf(checker.getTypeAtLocation(node))) {
       // `({ value }) => value` reads members by name too: each is renamed as a property read would be.
