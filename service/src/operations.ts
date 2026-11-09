@@ -223,7 +223,8 @@ export function createOperations({ pool, clock, log, maxAttempts = 10, retryDela
     };
     async function fenced<T>(inner: () => Promise<T>): Promise<T> {
       const savepoint = `fence_${randomUUID().replaceAll("-", "")}`;
-      await client.query(`savepoint ${savepoint}`);
+      // Tracked like any statement: after a failure the handler swallowed, it answers with that failure's code.
+      await (tracked.query as (text: string) => Promise<unknown>)(`savepoint ${savepoint}`);
       const behind: Scope = {
         name,
         get open() {
@@ -240,9 +241,10 @@ export function createOperations({ pool, clock, log, maxAttempts = 10, retryDela
       }
       if (behind.network) failure = { error: behind.network };
       if (failure === undefined) return result as T;
-      // Straight to the client, as the savepoint went: the refusal stops every other statement. If it fails too, the
-      // transaction is lost and the operation fails with it.
+      // Straight to the client: the refusal stops every other statement. If it fails too, the transaction is lost and
+      // the operation fails with it. Once the operation has ended, the connection may be another's: it is left alone.
       behind.undone = true;
+      if (!scope.open) throw failure.error;
       await client.query(`rollback to savepoint ${savepoint}`);
       aborted = undefined;
       if (scope.network === behind.network) scope.network = undefined;

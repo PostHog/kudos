@@ -535,6 +535,44 @@ describe("no network inside a mutation or query", () => {
     ).rejects.toMatchObject({ name: "NetworkInOperationError" });
   });
 
+  test("a fence taken after a swallowed serialization failure answers with it, so the mutation retries", async () => {
+    const { operations } = setUp();
+    let attempts = 0;
+
+    const result = await operations.mutation("went on", async ({ tx }) => {
+      attempts += 1;
+      if (attempts === 1) await tx.execute(sql`do $$ begin raise exception using errcode = '40001'; end $$`).catch(() => {});
+      return fence(async () => "fenced");
+    });
+
+    expect(result).toBe("fenced");
+    expect(attempts).toBe(2);
+  });
+
+  test("a fence left running past its operation never touches the connection the next operation gets", async () => {
+    const single = createPool(withSearchPath(inject("databaseUrl"), schema), { max: 1, connectTimeoutMs: 2_000 });
+    try {
+      const { operations } = setUp({ pool: single });
+      let fail!: () => void;
+      const failing = new Promise<void>((_, reject) => (fail = () => reject(new Error("the job failed"))));
+      let left!: Promise<unknown>;
+
+      await operations.mutation("leaves a fence behind", async () => {
+        left = fence(() => failing).catch((error: unknown) => error);
+      });
+      const next = operations.mutation("next", async ({ tx }) => {
+        fail();
+        await left;
+        await tx.insert(counters).values({ id: "next", n: 1 });
+      });
+
+      await next;
+      expect((await pool.query("select id from counters")).rows, "the next operation's write commits").toEqual([{ id: "next" }]);
+    } finally {
+      await single.end();
+    }
+  });
+
   test("one fence per attempt: never twice, never nested, never outside an operation", async () => {
     const { operations } = setUp();
 
