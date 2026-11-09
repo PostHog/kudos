@@ -9,7 +9,10 @@ import { decodeStored } from "../db/codec.ts";
 import { archive, crons, jobs } from "../db/schema/service.ts";
 import type { Log } from "../log.ts";
 import { createOperations, type MutationContext, type Operations } from "../operations.ts";
-import { retiredCrons } from "./crons.ts";
+import { cronIds, retiredCrons } from "./crons.ts";
+
+// Every cron but the retired ones has a row.
+const liveCrons = cronIds.length - retiredCrons.size;
 import { actionJob, jobRegistry, mutationJob, type Job } from "./define.ts";
 import { createWorker, type WorkerOptions } from "./worker.ts";
 
@@ -433,10 +436,10 @@ describe("crons", () => {
     const { worker, clock } = setUp([]);
     await worker().start();
     const first = await db.select().from(crons);
-    clock.advance(60_000); // less than any cron's interval, so the second start's tick fires none
+    clock.advance(30_000); // less than any cron's interval, so the second start's tick fires none
     await worker().start();
 
-    expect(first).toHaveLength(15);
+    expect(first).toHaveLength(liveCrons);
     expect(first.some((row) => retiredCrons.has(row.id as never))).toBe(false);
     expect(first.find((row) => row.id === "website.clock.tick")!.nextRun).toBe(1_800_000_000_000 + 15 * 60_000);
     expect(await db.select().from(crons), "a second start moves nothing").toEqual(first);
@@ -520,7 +523,7 @@ describe("the load's hold", () => {
     holding = false;
     await copy.tick();
     expect((await copy.settle(5_000)).ran).toEqual(["website.clock.tick"]);
-    expect(await db.select().from(crons)).toHaveLength(15);
+    expect(await db.select().from(crons)).toHaveLength(liveCrons);
     clock.advance(15 * 60_000);
     await copy.tick();
     await copy.settle(5_000);
@@ -563,7 +566,7 @@ describe("the load's hold", () => {
     await expect(copy.tick(), "a timer's tick never rejects").resolves.toBeUndefined();
     expect(await db.select().from(crons)).toEqual([]);
     await copy.tick();
-    expect(await db.select().from(crons)).toHaveLength(15);
+    expect(await db.select().from(crons)).toHaveLength(liveCrons);
     await copy.stop(1_000);
   });
 
