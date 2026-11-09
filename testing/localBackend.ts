@@ -11,7 +11,8 @@ import { exportJWK, exportPKCS8, generateKeyPair } from "jose";
 const backendVersion = "precompiled-2026-10-06-a3538c6";
 const run = promisify(execFile);
 
-export type LocalBackend = { cloud: string; site: string; envFile: string; stop: () => Promise<void> };
+// `run` runs one of the deployment's functions as its admin, as `npx convex run` does, and gives back what it printed.
+export type LocalBackend = { cloud: string; site: string; envFile: string; run: (name: string, options?: { component?: string }) => Promise<string>; stop: () => Promise<void> };
 
 // `signal` cancels startup: it aborts the download, the deploy and the wait, and stops whatever had started.
 export type LocalBackendOptions = { instanceName: string; variables: (site: string) => Record<string, string>; signal?: AbortSignal };
@@ -46,7 +47,9 @@ export async function startLocalBackend({ instanceName, variables, signal }: Loc
     await writeFile(variablesFile, envLines({ ...(await signingKeys()), ...variables(site) }));
     await convex(["env", "set", "--from-file", variablesFile, "--env-file", envFile], signal);
     await convex(["deploy", "--yes", "--typecheck", "disable", "--codegen", "disable", "--env-file", envFile], signal);
-    return { cloud, site, envFile, stop };
+    const runFunction = (name: string, { component }: { component?: string } = {}) =>
+      convex(["run", ...(component === undefined ? [] : ["--component", component]), name, "--env-file", envFile], signal);
+    return { cloud, site, envFile, run: runFunction, stop };
   } catch (failure) {
     await stop();
     throw failure;
@@ -102,10 +105,12 @@ async function adminKey(binary: string, instanceName: string, instanceSecret: st
 
 // The CLI runs under npx in a process group of its own, so stopping it stops the whole tree, not just npx.
 function convex(args: string[], signal?: AbortSignal) {
-  return new Promise<void>((resolve, reject) => {
+  return new Promise<string>((resolve, reject) => {
     signal?.throwIfAborted();
-    const cli = spawn("npx", ["--no", "--", "convex", ...args], { stdio: ["ignore", "ignore", "pipe"], detached: true });
+    const cli = spawn("npx", ["--no", "--", "convex", ...args], { stdio: ["ignore", "pipe", "pipe"], detached: true });
     let errors = "";
+    let output = "";
+    cli.stdout.on("data", (chunk) => (output = (output + String(chunk)).slice(-16_384)));
     cli.stderr.on("data", (chunk) => (errors = (errors + String(chunk)).slice(-16_384)));
     const abort = () => killGroup(cli);
     signal?.addEventListener("abort", abort, { once: true });
@@ -113,7 +118,7 @@ function convex(args: string[], signal?: AbortSignal) {
     cli.once("exit", (code, killedBy) => {
       signal?.removeEventListener("abort", abort);
       if (signal?.aborted) reject(signal.reason);
-      else if (code === 0) resolve();
+      else if (code === 0) resolve(output);
       else reject(new Error(`convex ${args[0]} exited with ${code ?? killedBy}: ${errors}`));
     });
   });
