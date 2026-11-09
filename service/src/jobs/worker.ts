@@ -14,7 +14,7 @@ import { and, asc, eq, inArray, lte, or, sql } from "drizzle-orm";
 import { decodeStored } from "../db/codec.ts";
 import { crons, jobs } from "../db/schema/service.ts";
 import { errorFields, type Log } from "../log.ts";
-import type { MutationContext, Operations, Transaction } from "../operations.ts";
+import { isNetworkInOperation, type MutationContext, type Operations, type Transaction } from "../operations.ts";
 import { cronIds, cronSchedules, isCronId, nextRun, retiredCrons, type CronId } from "./crons.ts";
 import type { ActionJob, JobRegistry, MutationJob } from "./define.ts";
 
@@ -121,10 +121,12 @@ export function createWorker({
   async function runNext(): Promise<Ran | undefined> {
     const started = performance.now();
     let name: string | undefined;
+    let id: string | undefined;
     let claimed: Claimed | undefined;
     try {
       claimed = await operations.mutation("jobs.run", async (ctx) => {
         name = undefined;
+        id = undefined;
         if (stopping || held()) return undefined;
         const [row] = await ctx.tx
           .select({ _id: jobs._id, name: jobs.name, args: jobs.args })
@@ -135,6 +137,7 @@ export function createWorker({
           .for("update", { skipLocked: true });
         if (!row || stopping || held()) return undefined; // the hold may have begun while it looked
         name = row.name;
+        id = row._id;
         const job = registry.get(row.name);
         if (!job) {
           const error = new Error(`No job is registered as ${row.name}`);
@@ -148,6 +151,14 @@ export function createWorker({
     } catch (error) {
       // The runner logged it. Whatever the transaction claimed rolled back: the job is still pending.
       if (name === undefined) return undefined;
+      // A mutation job that reached for the network failed its whole transaction, claim and all, so its failure is
+      // marked apart. Another copy may take it in between; it is refused the same and writes nothing either.
+      if (id !== undefined && isNetworkInOperation(error)) {
+        const failedId = id;
+        // Unmarked, the job is still pending: it waits for a later poll rather than running again at once.
+        const marked = await operations.mutation("jobs.fail", ({ tx, now }) => markFailed(tx, now, failedId, error)).then(() => true, () => false);
+        return report({ name, outcome: marked ? "failed" : "pending", error }, started);
+      }
       return report({ name, outcome: "pending", error }, started);
     }
     if (claimed === undefined || name === undefined) return undefined;
@@ -166,6 +177,7 @@ export function createWorker({
       return { outcome: "success" };
     } catch (error) {
       if (databaseTrouble(error)) throw error; // the runner retries it, or the job stays pending
+      if (isNetworkInOperation(error)) throw error; // nothing more runs in this transaction; runNext marks it failed
       await ctx.tx.execute(sql`rollback to savepoint job`);
       await markFailed(ctx.tx, ctx.now, id, error);
       return { outcome: "failed", error };

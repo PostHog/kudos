@@ -4,6 +4,7 @@ import { encodeStored, type Value } from "../db/codec.ts";
 import { jobs } from "../db/schema/service.ts";
 import type { NewRow, Transaction } from "../operations.ts";
 import type { Job } from "./define.ts";
+import { notifyDue } from "./wakeups.ts";
 
 /** When a job becomes due: at an instant, or after a delay from the operation's `now`. */
 export type When = { at: number } | { after: number };
@@ -26,6 +27,7 @@ export function createScheduler(tx: Transaction, now: number, newRow: () => NewR
       job.args.parse(args); // refused now, in the caller's transaction; its output is the run's, not the row's
       const { _id, _creationTime } = newRow();
       await tx.insert(jobs).values({ _id, _creationTime, name: job.name, args: encodeStored(args as Value), runAt, kind: job.kind, state: "pending" });
+      if (runAt <= now) await notifyDue(tx); // a later job waits for the poll
       return _id;
     },
     async cancel(id) {

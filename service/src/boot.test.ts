@@ -9,6 +9,7 @@ import { boot } from "./boot.ts";
 import { z } from "zod";
 import { runMigrations } from "./db/migrate.ts";
 import { actionJob, mutationJob } from "./jobs/define.ts";
+import { jobsChannel } from "./jobs/wakeups.ts";
 import { createRegistry } from "./registration.ts";
 import { errorFields, type Log, type LogFields } from "./log.ts";
 import { useTestDatabase, withSearchPath } from "../testing/database.ts";
@@ -125,6 +126,21 @@ describe("the worker in the service", () => {
     await time({ advance: 60_000 });
     expect(await (await time({ settle: true })).json()).toMatchObject({ ran: ["website.clock.tick"] });
     expect(await (await time({ runCron: "website.clock.tick" })).json()).toMatchObject({ ran: ["website.clock.tick"] });
+  });
+
+  test("a due job starts once its transaction commits, long before the worker's next poll", async () => {
+    let ran!: () => void;
+    const started = new Promise<string>((resolve) => (ran = () => resolve("ran")));
+    const woken = mutationJob("website.clock.tick", z.object({}), async () => ran());
+    const service = await boot({ env: { PORT: "0", DATABASE_URL: database.url }, log: captureLog().log, registry: createRegistry({ test: { jobs: [woken] } }), pollMs: 3_600_000 });
+    onTestFinished(() => service.stop());
+    await service.migrated;
+    const listening = `listen "${jobsChannel(database.schema)}"`;
+    await vi.waitFor(async () => expect((await database.pool.query("select 1 from pg_stat_activity where query = $1 and state = 'idle'", [listening])).rowCount).toBe(1));
+
+    await service.operations!.mutation("schedule", ({ jobs }) => jobs.enqueue(woken, {}));
+
+    expect(await Promise.race([started, new Promise((resolve) => setTimeout(() => resolve("waited for the poll"), 3_000))])).toBe("ran");
   });
 
   test("a domain's website routes run on the service's operations and clock", async () => {

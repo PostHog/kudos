@@ -1,5 +1,6 @@
 // The service's own tables, beside the ones generated from convex/schema.ts.
-import { doublePrecision, index, pgTable, primaryKey } from "drizzle-orm/pg-core";
+import { doublePrecision, index, jsonb, pgTable, primaryKey, text } from "drizzle-orm/pg-core";
+import type { FlagDefinitions } from "../../analytics/evaluator/types.ts";
 import { bytes, creationTime, f64, id, str, value } from "../columns.ts";
 
 /**
@@ -59,4 +60,24 @@ export const jobs = pgTable(
 export const crons = pgTable("crons", {
   id: str().primaryKey(),
   nextRun: f64().notNull(),
+});
+
+/**
+ * The latest valid flag definitions PostHog returned: one row, `key = 'posthog'`, and when PostHog returned them. S1's
+ * own, never generated from convex/schema.ts: today's is the PostHog component's private table, which the load seeds
+ * it from (S18). Only the refresh replaces it, and only when the definitions changed.
+ */
+export const flagDefinitions = pgTable("flagDefinitions", {
+  key: text().primaryKey(),
+  definitions: jsonb().$type<FlagDefinitions>().notNull(),
+  fetchedAt: doublePrecision().notNull(),
+});
+
+/**
+ * When the refresh last had a good answer, `key = 'posthog'`, changed or not: how stale the definitions are. A row of its
+ * own, so the refresh writes it every minute while a decision, which reads only `flagDefinitions`, never conflicts.
+ */
+export const flagRefreshes = pgTable("flagRefreshes", {
+  key: text().primaryKey(),
+  refreshedAt: doublePrecision().notNull(),
 });

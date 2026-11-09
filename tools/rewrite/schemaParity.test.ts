@@ -20,6 +20,8 @@ describe("the Drizzle schema has every Convex table", () => {
       "archive",
       "crons",
       "files",
+      "flagDefinitions",
+      "flagRefreshes",
       "jobs",
       "loadCheckpoints",
       "loadChunks",

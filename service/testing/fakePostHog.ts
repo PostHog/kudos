@@ -23,7 +23,10 @@ export type BatchRequest = {
 export type FlagDefinition = {
   key: string;
   active?: boolean;
+  ensure_experience_continuity?: boolean;
+  bucketing_identifier?: "distinct_id" | "device_id";
   filters: {
+    aggregation_group_type_index?: number;
     groups: Array<{ properties?: Array<Record<string, unknown>>; rollout_percentage?: number; variant?: string | null }>;
     multivariate?: { variants: Array<{ key: string; rollout_percentage: number }> } | null;
   };
@@ -54,6 +57,9 @@ export class FakePostHog {
   readonly requests: BatchRequest[] = [];
   private readonly scripted: Answer[] = [];
   private definitions: FlagDefinition[] = [];
+  private readonly scriptedDefinitions: Answer[] = [];
+  /** Requests for the flags' definitions, whatever they were answered. */
+  definitionRequests = 0;
 
   answering(...answers: Answer[]) {
     this.scripted.push(...answers);
@@ -63,6 +69,25 @@ export class FakePostHog {
   withFlags(...definitions: FlagDefinition[]) {
     this.definitions = definitions;
     return this;
+  }
+
+  /** Scripts the next answers of the definitions endpoint; once they run out, it serves the flags again. */
+  answeringDefinitions(...answers: Answer[]) {
+    this.scriptedDefinitions.push(...answers);
+    return this;
+  }
+
+  /** What the definitions endpoint serves: the flags `withFlags` set, in PostHog's shape. */
+  definitionsBody() {
+    const flags = this.definitions.map((definition, index) => ({
+      id: index + 1,
+      name: definition.key,
+      deleted: false,
+      active: true,
+      ensure_experience_continuity: false,
+      ...definition,
+    }));
+    return { flags, group_type_mapping: {}, cohorts: {} };
   }
 
   events() {
@@ -96,7 +121,7 @@ export class FakePostHog {
 
   readonly fetch = async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(input instanceof Request ? input.url : input);
-    if (url.pathname === "/flags/definitions") return this.flagDefinitions(url, new Headers(init?.headers));
+    if (url.pathname === "/flags/definitions") return this.flagDefinitions(url, new Headers(init?.headers), init?.signal ?? undefined);
     const body = String(init?.body ?? "");
     const parsed = JSON.parse(body) as { api_key: unknown; batch: CapturedEvent[] };
     const request: BatchRequest = { url: url.href, body, apiKey: parsed.api_key, events: parsed.batch, startedAt: Date.now() };
@@ -111,18 +136,12 @@ export class FakePostHog {
     }
   };
 
-  private flagDefinitions(url: URL, headers: Headers) {
+  private flagDefinitions(url: URL, headers: Headers, signal?: AbortSignal) {
+    this.definitionRequests += 1;
     const authorized = url.searchParams.get("token") === projectToken && headers.get("authorization") === `Bearer ${flagsKey}`;
     if (!authorized) return answersWith(401)();
-    const flags = this.definitions.map((definition, index) => ({
-      id: index + 1,
-      name: definition.key,
-      deleted: false,
-      active: true,
-      ensure_experience_continuity: false,
-      ...definition,
-    }));
-    return Response.json({ flags, group_type_mapping: {}, cohorts: {} });
+    const scripted = this.scriptedDefinitions.shift();
+    return scripted ? scripted(signal) : Response.json(this.definitionsBody());
   }
 }
 
@@ -141,8 +160,13 @@ function isPersonEvent({ event }: Pick<CapturedEvent, "event">) {
 
 const realFetch = globalThis.fetch;
 
+// The service's operation runner's refusal, once it is loaded (service/src/operations.ts); today's tests have none.
+const refuseNetworkInOperation = (what: string) => (globalThis as { [key: symbol]: ((what: string) => void) | undefined })[Symbol.for("kudos.refuseNetworkInOperation")]?.(what);
+
+/** The tests' network: refused inside a mutation or query, as the real one is, since `vi.stubGlobal` replaces its guard. */
 export function routedFetch(postHog: FakePostHog, otherwise: typeof fetch) {
   return async (input: string | URL | Request, init?: RequestInit) => {
+    refuseNetworkInOperation("A fetch");
     const url = new URL(input instanceof Request ? input.url : input);
     if (url.protocol === "data:") return realFetch(input, init);
     return postHog.owns(url) ? postHog.fetch(input, init) : otherwise(input, init);

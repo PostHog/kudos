@@ -9,7 +9,10 @@ import { decodeStored } from "../db/codec.ts";
 import { archive, crons, jobs } from "../db/schema/service.ts";
 import type { Log } from "../log.ts";
 import { createOperations, type MutationContext, type Operations } from "../operations.ts";
-import { retiredCrons } from "./crons.ts";
+import { cronIds, retiredCrons } from "./crons.ts";
+
+// Every cron but the retired ones has a row.
+const liveCrons = cronIds.length - retiredCrons.size;
 import { actionJob, jobRegistry, mutationJob, type Job } from "./define.ts";
 import { createWorker, type WorkerOptions } from "./worker.ts";
 
@@ -122,6 +125,74 @@ describe("mutation jobs", () => {
     expect(runs).toBe(1);
     expect(await effects("pack"), "its write rolled back").toBe(0);
     expect(await jobRows()).toEqual([{ name: "album.packs.open", state: "failed", error: "TypeError: no such pack" }]);
+  });
+
+  test("a mutation job that reaches for the network is marked failed like any app error, its writes rolled back, and never runs again", async () => {
+    let runs = 0;
+    const call = mutationJob("analytics.flags.call", z.object({}), async (ctx) => {
+      runs += 1;
+      await effect(ctx, "call");
+      await fetch("http://127.0.0.1:9/never");
+    });
+    const { worker, enqueue } = setUp([call]);
+    await enqueue(call, {});
+
+    await worker().settle(2_000);
+    await worker().settle(500);
+
+    expect(runs).toBe(1);
+    expect(await effects("call"), "its write rolled back").toBe(0);
+    expect(await jobRows()).toEqual([{ name: "analytics.flags.call", state: "failed", error: expect.stringContaining("never reaches the network") }]);
+  });
+
+  test("a mutation job can't launder a refused fetch through a savepoint of its own: it fails, and none of its writes commit", async () => {
+    let runs = 0;
+    const launder = mutationJob("analytics.flags.launder", z.object({}), async (ctx) => {
+      runs += 1;
+      await effect(ctx, "before");
+      await ctx.tx.execute(sql`savepoint own`);
+      try {
+        await fetch("http://127.0.0.1:9/never");
+      } catch {
+        // swallowed
+      }
+      await ctx.tx.execute(sql`rollback to own`).catch(() => "swallowed too");
+      await effect(ctx, "after").catch(() => "and this");
+    });
+    const { worker, enqueue } = setUp([launder]);
+    await enqueue(launder, {});
+
+    await worker().settle(2_000);
+    await worker().settle(500);
+
+    expect(runs).toBe(1);
+    expect((await effects("before")) + (await effects("after")), "no write commits").toBe(0);
+    expect(await jobRows()).toEqual([{ name: "analytics.flags.launder", state: "failed", error: expect.stringContaining("never reaches the network") }]);
+  });
+
+  test("a refused job whose failure can't be marked stays pending for a later poll, not rerun at once", async () => {
+    let runs = 0;
+    const call = mutationJob("analytics.flags.unmarked", z.object({}), async () => {
+      runs += 1;
+      await fetch("http://127.0.0.1:9/never");
+    });
+    // One slot: a second would find the job pending again once the first rolls back, and run it without a refill.
+    const { worker, operations, enqueue } = setUp([call], { concurrency: 1 });
+    await enqueue(call, {});
+    const unmarkable = around(operations, {
+      before: (name) => {
+        if (name === "jobs.fail") throw Object.assign(new Error("connection reset while marking"), { code: "ECONNRESET" });
+      },
+    });
+
+    // One tick and no poll for an hour: a slot that counts the unmarked failure as progress starts the job again.
+    const copy = worker({ operations: unmarkable });
+    await copy.tick();
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    await copy.stop(1_000);
+
+    expect(runs, "one run, then it waits for the next poll").toBe(1);
+    expect(await jobRows()).toEqual([{ name: "analytics.flags.unmarked", state: "pending", error: null }]);
   });
 
   test("an app error is marked failed before the job's claim ends: a copy that looks the moment it ends never runs it", async () => {
@@ -433,10 +504,10 @@ describe("crons", () => {
     const { worker, clock } = setUp([]);
     await worker().start();
     const first = await db.select().from(crons);
-    clock.advance(60_000); // less than any cron's interval, so the second start's tick fires none
+    clock.advance(30_000); // less than any cron's interval, so the second start's tick fires none
     await worker().start();
 
-    expect(first).toHaveLength(15);
+    expect(first).toHaveLength(liveCrons);
     expect(first.some((row) => retiredCrons.has(row.id as never))).toBe(false);
     expect(first.find((row) => row.id === "website.clock.tick")!.nextRun).toBe(1_800_000_000_000 + 15 * 60_000);
     expect(await db.select().from(crons), "a second start moves nothing").toEqual(first);
@@ -520,7 +591,7 @@ describe("the load's hold", () => {
     holding = false;
     await copy.tick();
     expect((await copy.settle(5_000)).ran).toEqual(["website.clock.tick"]);
-    expect(await db.select().from(crons)).toHaveLength(15);
+    expect(await db.select().from(crons)).toHaveLength(liveCrons);
     clock.advance(15 * 60_000);
     await copy.tick();
     await copy.settle(5_000);
@@ -563,7 +634,7 @@ describe("the load's hold", () => {
     await expect(copy.tick(), "a timer's tick never rejects").resolves.toBeUndefined();
     expect(await db.select().from(crons)).toEqual([]);
     await copy.tick();
-    expect(await db.select().from(crons)).toHaveLength(15);
+    expect(await db.select().from(crons)).toHaveLength(liveCrons);
     await copy.stop(1_000);
   });
 
