@@ -1,5 +1,5 @@
 import { test as base } from "@e2e-dev/web";
-import { Slack } from "./slack.ts";
+import { Slack, type SlackCall } from "./slack.ts";
 import { targetOf } from "./target.ts";
 
 import { expect } from "e2e";
@@ -14,6 +14,13 @@ export async function staysEqual<Value>(read: () => Promise<Value>, expected: Va
     expect(await read()).toEqual(expected);
     await new Promise((resolve) => setTimeout(resolve, 250));
   } while (Date.now() < until);
+}
+
+// A giver's reply opens with what they gave, the XP it earned and what's left today, then any mention it skipped. The
+// lines after those (goals, quests, album items) belong to the journeys of those features.
+export function receipt(reply: SlackCall) {
+  const [headline = "", ...rest] = String(reply.text).split("\n");
+  return [headline, ...rest.filter((line) => /kudos left today$|last kudos for today|^I skipped /.test(line))].join("\n");
 }
 
 export const test = base.extend<{ slack: Slack }>({

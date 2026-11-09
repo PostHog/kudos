@@ -2,12 +2,14 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { AddressInfo } from "node:net";
 import { FakePostHog, type FlagDefinition } from "../../testing/fakePostHog.ts";
 import { FakeSlack, rateLimitedFor, type SlackUser } from "../../testing/fakeSlack.ts";
+import { productionFlags } from "./productionFlags.ts";
 
 export type Fakes = { url: string; stop: () => Promise<void> };
 
 export async function startFakes(): Promise<Fakes> {
   const slack = new FakeSlack();
-  const postHog = new FakePostHog();
+  // PostHog serves the flags production had, so journeys prove what its members saw.
+  const postHog = new FakePostHog().withFlags(...productionFlags);
   const responses = new Map<string, unknown[]>();
   const server = createServer((request, response) => void route({ slack, postHog, responses }, request, response).catch((failure) => answer(response, new Response(String(failure), { status: 500 }))));
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
