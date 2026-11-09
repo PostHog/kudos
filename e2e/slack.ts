@@ -205,6 +205,14 @@ export class Slack {
     await this.sendEvent({ type: "reaction_added", user, reaction, item_user: author, item: { type: "message", channel, ts }, event_ts: eventTs });
   }
 
+  // Slack sees links in a message a member posted to a channel the app is in, on a domain the app unfurls, and tells
+  // the app with link_shared. The channel is shared with no other organization.
+  async shareLinks({ user, channel, ts, threadTs }: Posted, urls: string[]) {
+    const links = urls.map((url) => ({ url, domain: new URL(url).hostname }));
+    const event = { type: "link_shared", channel, user, message_ts: ts, ...(threadTs !== undefined && { thread_ts: threadTs }), unfurl_id: uniqueId("Uf"), source: "conversations_history", links, event_ts: uniqueTs(await this.now()) };
+    await this.sendEvent(event, { is_ext_shared_channel: false });
+  }
+
   // A member opens the app's Home tab.
   async openHome(user: string) {
     await this.sendEvent({ type: "app_home_opened", user, channel: uniqueId("D"), tab: "home", event_ts: uniqueTs(await this.now()) });
@@ -348,8 +356,8 @@ export class Slack {
   private lastEnvelope: string | undefined;
   private readonly immediateResponses = new Map<string, Record<string, unknown>>();
 
-  private async sendEvent(event: Record<string, unknown>) {
-    this.lastEnvelope = JSON.stringify({ type: "event_callback", team_id: this.target.workspace, event_id: uniqueId("Ev"), event_time: Math.floor((await this.now()) / 1000), event });
+  private async sendEvent(event: Record<string, unknown>, envelope: Record<string, unknown> = {}) {
+    this.lastEnvelope = JSON.stringify({ type: "event_callback", team_id: this.target.workspace, event_id: uniqueId("Ev"), event_time: Math.floor((await this.now()) / 1000), ...envelope, event });
     await this.deliver(this.lastEnvelope);
   }
 
