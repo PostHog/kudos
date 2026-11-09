@@ -8,7 +8,7 @@
 //   Postgres's `double precision` reads (`"NaN"`, `"Infinity"`, `"-Infinity"`, `"-0"`), so a generated index column
 //   can cast it; every other number is a float64. Postgres keeps this form exactly: `jsonb` stores numbers as numeric,
 //   which would turn `-0.0` into `0.0` and lose whether `3` was an int64, so nothing is left to the number's spelling.
-//   A NaN's payload is not kept: JavaScript holds one NaN.
+//   The stored form canonicalises NaN on purpose: a NaN's sign and payload, which the export form keeps, become one NaN.
 // - **Export** (`parseExport`/`printExport`): the JSONL of a Convex snapshot export. int64 is a bare integer (`3`),
 //   a finite float64 always has a dot or an exponent (`3.0`, `-0.0`, `1e21`), and NaN, ±Infinity and bytes are tagged
 //   as above (`$float`, `$bytes`). `JSON.parse` would lose the difference, and int64 beyond 2^53, so this parser keeps each number's text.
