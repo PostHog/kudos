@@ -51,6 +51,14 @@ describe("the test-port ledger", () => {
     ]);
   });
 
+  test("every line of the table is a whole row, outer pipes and all, until a blank line ends it", () => {
+    const ok = "| convex/b.test.ts | S20 | | |";
+    expect(check(ledger("| convex/a.test.ts | S4 | | |", ok, "convex/a.test.ts | S21 | README.md | S0 |")), "a row without its outer pipes").toEqual([
+      "line 5 isn't a row of four columns",
+    ]);
+    expect(check(`${ledger("| convex/a.test.ts | S4 | | |", ok)}\n\nA paragraph after the table, with a | in it.`), "text after the table").toEqual([]);
+  });
+
   test("a port is a service test file by its plain path from the repository's root", () => {
     const anything = (port: string) => checkLedger(ledger(`| convex/a.test.ts | S4 | ${port} | |`, "| convex/b.test.ts | S20 | | |"), tests, () => true);
     for (const port of ["README.md", "service/src", "service/src/a.ts", "convex/a.test.ts", "service/../convex/a.test.ts", "service/src/./a.test.ts", "/service/src/a.test.ts", "service\\src\\a.test.ts"]) {

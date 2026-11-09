@@ -16,7 +16,11 @@ export interface IndexOrder {
   after(document: Readonly<Record<string, unknown>>, direction?: Direction): SQL;
 }
 
-/** The index on `fields`, in order, of `table`; `_creationTime` and `_id` are appended, as Convex appends them. */
+/**
+ * The index on `fields`, in order, of `table`; `_creationTime` and `_id` are appended, as Convex appends them. A nested
+ * field's document value must be of its generated column's kind, as the schema's documents are: a value of another
+ * kind reads as missing in the column but not in `after`.
+ */
 export function indexOrder<Table extends PgTable>(table: Table, fields: ReadonlyArray<keyof Table["_"]["columns"] & string>): IndexOrder {
   const all = getTableColumns(table);
   const keys: Key[] = [...fields, "_creationTime", "_id"].flatMap((field) => {

@@ -29,8 +29,11 @@ export function checkLedger(text: string, convexTests: readonly string[], exists
   if (start < 0) return ["the ledger's table has no header row"];
   const problems: string[] = [];
   const rows: Row[] = [];
-  for (const [i, line] of lines.entries()) {
-    if (i <= start + 1 || !line.trim().startsWith("|")) continue;
+  // The table runs from its header to the first blank line; every line in it must be a whole row, since Markdown
+  // renders a row without its outer pipes too.
+  const end = lines.findIndex((line, i) => i > start && line.trim() === "");
+  for (const [i, line] of lines.slice(0, end < 0 ? lines.length : end).entries()) {
+    if (i <= start + 1) continue;
     const row = cells(line);
     if (row.length !== header.length) {
       problems.push(`line ${i + 1} isn't a row of four columns`);
