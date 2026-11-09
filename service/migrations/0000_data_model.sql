@@ -710,7 +710,7 @@ CREATE TABLE "publicReplies" (
 	"reached" jsonb,
 	"summary" text COLLATE "C",
 	"reached.member" text COLLATE "C" GENERATED ALWAYS AS (CASE jsonb_typeof("reached"->'member') WHEN 'string' THEN "reached"->>'member' END) STORED,
-	"reached.level" double precision GENERATED ALWAYS AS (CASE jsonb_typeof("reached"->'level') WHEN 'number' THEN ("reached"->>'level')::double precision END) STORED
+	"reached.level" double precision GENERATED ALWAYS AS (CASE jsonb_typeof("reached"->'level') WHEN 'number' THEN ("reached"->>'level')::double precision WHEN 'object' THEN ("reached"->'level'->>'$float')::double precision END) STORED
 );
 --> statement-breakpoint
 CREATE TABLE "sentNotices" (

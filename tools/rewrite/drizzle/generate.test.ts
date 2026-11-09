@@ -15,6 +15,7 @@ describe("the column rule", () => {
     ["an ID", field({ type: "id", tableName: "members" }), { kind: "string", nullable: false }],
     ["a union of string literals", field(union(literal("a"), literal("b"))), { kind: "string", nullable: false }],
     ["an int64 literal", field({ type: "literal", value: { $integer: "AQAAAAAAAAA=" } }), { kind: "bigint" }],
+    ["a -0 literal, tagged $float", field({ type: "literal", value: { $float: "AAAAAAAAAIA=" } }), { kind: "number", nullable: false }],
     ["a required string or null", field(union(string, nil)), { kind: "string", nullable: true, nullMeansNull: true }],
     ["an optional string or null", field(union(string, nil), true), { kind: "value", nullable: true }],
     ["a string or a number", field(union(string, { type: "number" })), { kind: "value", nullable: false }],

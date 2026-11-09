@@ -22,6 +22,9 @@ const values: Array<[string, Value]> = [
   ["the smallest int64", -(2n ** 63n)],
   ["bytes", bytes(0, 1, 254, 255)],
   ["nested objects and arrays", { a: [1, 2n, { b: null }], "": "empty key" }],
+  // A field named __proto__ (JSON.parse makes it an own field, as Convex holds it), and one of each special float nested.
+  ["a field named __proto__", JSON.parse('{"annotations":{"__proto__":{"keep":true},"other":"fixture"}}') as Value],
+  ["special floats nested", { level: -0, ratio: Number.NaN, cap: Number.POSITIVE_INFINITY }],
   // The directory check's job args: an int64 attempt beside a message reference.
   ["the directory check's args", { ref: { workspace: "T0", conversation: "C0", message: "1.000100" }, attempt: 2n }],
 ];
@@ -38,6 +41,23 @@ describe("the stored encoding", () => {
 
   test("a missing object field is left out and a null one kept", () => {
     expect(decodeStored(encodeStored({ a: undefined, b: null } as unknown as Value))).toStrictEqual({ b: null });
+  });
+
+  test("NaN, ±Infinity and -0 are tagged by the name Postgres's double precision reads", () => {
+    expect([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, -0].map(encodeStored)).toEqual([
+      '{"$float":"NaN"}',
+      '{"$float":"Infinity"}',
+      '{"$float":"-Infinity"}',
+      '{"$float":"-0"}',
+    ]);
+    expect(() => decodeStored('{"$float":"1.5"}'), "a finite float is never tagged").toThrow("Malformed $float");
+  });
+
+  test("a field named __proto__ stays an own field and the object keeps its prototype", () => {
+    const back = decodeStored(encodeStored(JSON.parse('{"__proto__":{"keep":true}}') as Value)) as Record<string, Value>;
+
+    expect(Object.hasOwn(back, "__proto__")).toBe(true);
+    expect(Object.getPrototypeOf(back)).toBe(Object.prototype);
   });
 
   test("a field name starting with $ is refused, so a tag is never ambiguous", () => {

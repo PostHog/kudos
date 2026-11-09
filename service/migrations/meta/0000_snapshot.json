@@ -1,5 +1,5 @@
 {
-  "id": "aca8e59c-f5e7-4f4a-b5e0-03982208d79c",
+  "id": "4a1f6c16-6923-4dd0-bdb4-6ba09b8c61cf",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -7569,7 +7569,7 @@
           "primaryKey": false,
           "notNull": false,
           "generated": {
-            "as": "CASE jsonb_typeof(\"reached\"->'level') WHEN 'number' THEN (\"reached\"->>'level')::double precision END",
+            "as": "CASE jsonb_typeof(\"reached\"->'level') WHEN 'number' THEN (\"reached\"->>'level')::double precision WHEN 'object' THEN (\"reached\"->'level'->>'$float')::double precision END",
             "type": "stored"
           }
         }

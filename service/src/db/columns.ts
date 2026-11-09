@@ -10,8 +10,15 @@ export const str = customType<{ data: string; driverData: string }>({
   dataType: () => 'text COLLATE "C"',
 });
 
-/** A float64. Postgres keeps NaN, ±Infinity and -0 in `double precision`. */
-export const f64 = (name?: string) => (name ? doublePrecision(name) : doublePrecision());
+/**
+ * A float64. Postgres keeps NaN, ±Infinity and -0 in `double precision`; pg writes a parameter with `String()`, which
+ * turns -0 into "0", so -0 goes as its text. pg reads `double precision` with `parseFloat`, which keeps all four.
+ */
+export const f64 = customType<{ data: number; driverData: number | string }>({
+  dataType: () => "double precision",
+  toDriver: (value) => (Object.is(value, -0) ? "-0" : value),
+  fromDriver: (value) => Number(value),
+});
 
 /** An int64, read back as a `bigint`. */
 export const i64 = (name?: string) => (name ? bigint(name, { mode: "bigint" }) : bigint({ mode: "bigint" }));

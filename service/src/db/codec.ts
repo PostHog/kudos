@@ -3,10 +3,12 @@
 // A value is what a Convex document field can hold: null, a boolean, a float64 (`number`), an int64 (`bigint`),
 // a string, bytes (`ArrayBuffer`), an array or an object. Two text forms carry it:
 //
-// - **Stored** (`encodeStored`/`decodeStored`): what `jsonb` columns and job args hold. int64 is `{"$integer": base64}`,
-//   bytes `{"$bytes": base64}`, and NaN, ±Infinity and -0 `{"$float": base64}` (8 little-endian bytes each); every
-//   other number is a float64. Postgres keeps this form exactly: `jsonb` stores numbers as numeric, which would turn
-//   `-0.0` into `0.0` and lose whether `3` was an int64, so nothing is left to the number's spelling.
+// - **Stored** (`encodeStored`/`decodeStored`): what `jsonb` columns and job args hold. int64 is `{"$integer": base64}`
+//   (8 little-endian bytes), bytes `{"$bytes": base64}`, and NaN, ±Infinity and -0 `{"$float": name}` with the name
+//   Postgres's `double precision` reads (`"NaN"`, `"Infinity"`, `"-Infinity"`, `"-0"`), so a generated index column
+//   can cast it; every other number is a float64. Postgres keeps this form exactly: `jsonb` stores numbers as numeric,
+//   which would turn `-0.0` into `0.0` and lose whether `3` was an int64, so nothing is left to the number's spelling.
+//   A NaN's payload is not kept: JavaScript holds one NaN.
 // - **Export** (`parseExport`/`printExport`): the JSONL of a Convex snapshot export. int64 is a bare integer (`3`),
 //   a finite float64 always has a dot or an exponent (`3.0`, `-0.0`, `1e21`), and NaN, ±Infinity and bytes are tagged
 //   as above (`$float`, `$bytes`). `JSON.parse` would lose the difference, and int64 beyond 2^53, so this parser keeps each number's text.
@@ -51,27 +53,48 @@ export function printExport(value: Value): string {
 function toTagged(value: Value): Json {
   if (value === null || typeof value === "boolean" || typeof value === "string") return value;
   if (typeof value === "bigint") return { $integer: int64Base64(checkedInt64(value)) };
-  if (typeof value === "number") return isSpecial(value) ? floatTag(value) : value;
+  if (typeof value === "number") return isSpecial(value) ? { $float: specialName(value) } : value;
   if (value instanceof ArrayBuffer) return { $bytes: Buffer.from(value).toString("base64") };
   if (Array.isArray(value)) return value.map(toTagged);
-  const out: { [key: string]: Json } = {};
-  for (const [field, inner] of Object.entries(value)) {
-    if (inner === undefined) continue;
-    if (field.startsWith("$")) throw new Error(`A field name can't start with $: ${field}`);
-    out[field] = toTagged(inner);
-  }
-  return out;
+  // Built from entries, so a field named `__proto__` stays a field.
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([, inner]) => inner !== undefined)
+      .map(([field, inner]) => {
+        if (field.startsWith("$")) throw new Error(`A field name can't start with $: ${field}`);
+        return [field, toTagged(inner)];
+      }),
+  );
 }
 
-function fromTagged(json: Json, number: (value: number) => Value): Value {
+const specialFloats = new Map<string, number>([
+  ["NaN", Number.NaN],
+  ["Infinity", Number.POSITIVE_INFINITY],
+  ["-Infinity", Number.NEGATIVE_INFINITY],
+  ["-0", -0],
+]);
+
+function specialName(value: number): string {
+  if (Number.isNaN(value)) return "NaN";
+  if (Object.is(value, -0)) return "-0";
+  return value > 0 ? "Infinity" : "-Infinity";
+}
+
+/** Decodes the stored form; `exportTags` reads `$float` as Convex's export writes it, 8 little-endian bytes in base64. */
+function fromTagged(json: Json, number: (value: number) => Value, exportTags = false): Value {
   if (json === null || typeof json === "boolean" || typeof json === "string") return json;
   if (typeof json === "number") return number(json);
-  if (Array.isArray(json)) return json.map((inner) => fromTagged(inner, number));
+  if (Array.isArray(json)) return json.map((inner) => fromTagged(inner, number, exportTags));
   const keys = Object.keys(json);
   const tag = keys.length === 1 && keys[0]!.startsWith("$") ? keys[0]! : undefined;
   if (tag !== undefined) {
     const payload = json[tag];
     if (typeof payload !== "string") throw new Error(`Malformed ${tag} value`);
+    if (tag === "$float" && !exportTags) {
+      const float = specialFloats.get(payload);
+      if (float === undefined) throw new Error(`Malformed $float value: ${payload}`);
+      return float;
+    }
     const bytes = Buffer.from(payload, "base64");
     if (tag === "$bytes") return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
     if (bytes.byteLength !== 8) throw new Error(`Malformed ${tag} value: ${bytes.byteLength} bytes`);
@@ -83,9 +106,7 @@ function fromTagged(json: Json, number: (value: number) => Value): Value {
     }
     throw new Error(`Unknown value tag ${tag}`);
   }
-  const out: { [field: string]: Value } = {};
-  for (const key of keys) out[key] = fromTagged(json[key]!, number);
-  return out;
+  return Object.fromEntries(keys.map((key) => [key, fromTagged(json[key]!, number, exportTags)]));
 }
 
 function isSpecial(value: number): boolean {
@@ -167,7 +188,7 @@ class ExportParser {
     const [only] = fields;
     if (fields.length === 1 && only![0].startsWith("$")) {
       // A tag: reuse the stored form's decoder, whose payload is a base64 string either way.
-      return fromTagged({ [only![0]]: only![1] as Json }, (number) => number);
+      return fromTagged({ [only![0]]: only![1] as Json }, (number) => number, true);
     }
     return Object.fromEntries(fields);
   }

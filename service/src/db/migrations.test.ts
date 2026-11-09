@@ -49,6 +49,50 @@ describe("the migrations build the schema", () => {
     for (const [table, shape] of tableShapes()) expect((actual.get(table) ?? []).sort(byName), table).toEqual([...shape.indexes].sort(byName));
   });
 
+  test("every generated column reads its own nested field, of its kind, and NULL for anything else", async () => {
+    const { rows } = await database.pool.query<{ table: string; name: string; type: string; expression: string }>(`
+      select c.relname as table, a.attname as name, format_type(a.atttypid, a.atttypmod) as type, pg_get_expr(d.adbin, d.adrelid) as expression
+      from pg_attribute a
+      join pg_class c on c.oid = a.attrelid
+      join pg_namespace n on n.oid = c.relnamespace
+      join pg_attrdef d on d.adrelid = a.attrelid and d.adnum = a.attnum
+      where n.nspname = current_schema() and a.attgenerated = 's'`);
+    expect(rows.length, "today's schema has generated columns").toBeGreaterThan(0);
+
+    // What each kind's column must read from the stored encoding, and what it reads back as text.
+    const cases: Record<string, Array<[unknown, string]>> = {
+      text: [["fixture-value", "fixture-value"]],
+      "double precision": [[2.5, "2.5"], [{ $float: "-0" }, "-0"], [{ $float: "NaN" }, "NaN"], [{ $float: "-Infinity" }, "-Infinity"]],
+      boolean: [[true, "true"]],
+    };
+    const client = await database.pool.connect();
+    try {
+      for (const { table, name, type, expression } of rows) {
+        const [parent, ...path] = name.split(".");
+        expect(cases[type], `${table}.${name} has a kind the test knows`).toBeDefined();
+        // The field at its path, beside decoys at every level, so reading a sibling or the wrong depth shows.
+        const nest = (leaf: unknown) => path.reduceRight<unknown>((inner, step) => ({ [step]: inner, [`${step}Decoy`]: "decoy" }), leaf);
+        const probe = async (document: unknown) => {
+          await client.query("begin");
+          try {
+            await client.query(`create temp table probe ("${parent}" jsonb, g ${type} generated always as (${expression}) stored) on commit drop`);
+            const { rows: [row] } = await client.query<{ g: string | null }>(`insert into probe ("${parent}") values ($1) returning g::text as g`, [
+              document === undefined ? null : JSON.stringify(document),
+            ]);
+            return row!.g;
+          } finally {
+            await client.query("rollback");
+          }
+        };
+        for (const [stored, expected] of cases[type]!) expect(await probe(nest(stored)), `${table}.${name} reads ${JSON.stringify(stored)}`).toBe(expected);
+        expect(await probe(undefined), `${table}.${name} with its parent missing`).toBeNull();
+        expect(await probe(nest(type === "text" ? 1 : "a string")), `${table}.${name} holding another kind`).toBeNull();
+      }
+    } finally {
+      client.release();
+    }
+  });
+
   test("strings compare byte-wise, as Convex compares them", async () => {
     const { rows } = await database.pool.query<{ ordered: string[] }>(
       `select array_agg(s order by s) as ordered from (values ('b'::text collate "C"), ('B'), ('a'), ('é'), ('Z')) v(s)`,

@@ -39,6 +39,15 @@ describe("documents keep missing and null apart", () => {
     expect(back, "no optional field appears").toStrictEqual(member);
   });
 
+  test("a typed float column keeps -0, NaN and ±Infinity", async () => {
+    const special = [-0, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY];
+    for (const [i, at] of special.entries()) {
+      const link = { _id: `f${i}`, _creationTime: 1, workspace: "T0", member: "m1", profile: null, by: "self", setBy: "m1", at } as Doc<"companyProfileLinks">;
+      const back = await roundTrip<"companyProfileLinks">(companyProfileLinks, link);
+      expect(Object.is(back.at, at), `${Object.is(at, -0) ? "-0" : at} reads back as itself`).toBe(true);
+    }
+  });
+
   test("an int64 field and a nested object come back with their kinds", async () => {
     const text = {
       _id: "k1",

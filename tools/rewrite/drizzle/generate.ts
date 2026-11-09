@@ -14,7 +14,7 @@
 export type Validator =
   | { type: "string" | "number" | "bigint" | "boolean" | "null" | "any" | "bytes" }
   | { type: "id"; tableName: string }
-  | { type: "literal"; value: string | number | boolean | null | { $integer: string } }
+  | { type: "literal"; value: string | number | boolean | null | { $integer: string } | { $float: string } }
   | { type: "array"; value: Validator }
   | { type: "record"; keys: Validator; values: { fieldType: Validator; optional: boolean } }
   | { type: "object"; value: Record<string, Field> }
@@ -58,7 +58,7 @@ export function kindsOf(validator: Validator): Set<Kind> {
     case "literal": {
       const value = validator.value;
       if (value === null) return new Set(["null"]);
-      if (typeof value === "object") return new Set(["bigint"]);
+      if (typeof value === "object") return new Set(["$integer" in value ? "bigint" : "number"]);
       return new Set([typeof value as Scalar]);
     }
     case "id":
@@ -117,7 +117,9 @@ export function typeOf(validator: Validator): string {
     case "id":
       return `Id<${JSON.stringify(validator.tableName)}>`;
     case "literal":
-      return typeof validator.value === "object" && validator.value !== null ? "bigint" : JSON.stringify(validator.value);
+      // An int64 literal is tagged `$integer`; NaN, ±Infinity and -0 are tagged `$float`.
+      if (typeof validator.value === "object" && validator.value !== null) return "$integer" in validator.value ? "bigint" : "number";
+      return JSON.stringify(validator.value);
     case "array":
       return `Array<${typeOf(validator.value)}>`;
     case "record":
@@ -166,8 +168,12 @@ function nestedColumn(path: string, fields: Record<string, Field>): { key: strin
   const text = `"${parent}"${rest.slice(0, -1).map((step) => `->'${step}'`).join("")}->>'${rest.at(-1)}'`;
   const key = path.replaceAll(".", "$");
   if (kind === "string") return { key, source: `str(${JSON.stringify(path)}).generatedAlwaysAs(sql\`CASE jsonb_typeof(${json}) WHEN 'string' THEN ${text} END\`)` };
+  // NaN, ±Infinity and -0 are stored as `{"$float": name}`, a name `double precision` reads.
   if (kind === "number")
-    return { key, source: `f64(${JSON.stringify(path)}).generatedAlwaysAs(sql\`CASE jsonb_typeof(${json}) WHEN 'number' THEN (${text})::double precision END\`)` };
+    return {
+      key,
+      source: `f64(${JSON.stringify(path)}).generatedAlwaysAs(sql\`CASE jsonb_typeof(${json}) WHEN 'number' THEN (${text})::double precision WHEN 'object' THEN (${json}->>'$float')::double precision END\`)`,
+    };
   if (kind === "boolean")
     return { key, source: `bool(${JSON.stringify(path)}).generatedAlwaysAs(sql\`CASE jsonb_typeof(${json}) WHEN 'boolean' THEN (${text})::boolean END\`)` };
   throw new Error(`Nested index field ${path} holds ${kinds.join(", ")}; give it a column by hand`);

@@ -134,7 +134,7 @@ export const publicReplies = pgTable(
     reached: value(),
     summary: str().$type<Id<"tierSummaries">>(),
     reached$member: str("reached.member").generatedAlwaysAs(sql`CASE jsonb_typeof("reached"->'member') WHEN 'string' THEN "reached"->>'member' END`),
-    reached$level: f64("reached.level").generatedAlwaysAs(sql`CASE jsonb_typeof("reached"->'level') WHEN 'number' THEN ("reached"->>'level')::double precision END`),
+    reached$level: f64("reached.level").generatedAlwaysAs(sql`CASE jsonb_typeof("reached"->'level') WHEN 'number' THEN ("reached"->>'level')::double precision WHEN 'object' THEN ("reached"->'level'->>'$float')::double precision END`),
   },
   (t) => [
     index("publicReplies_by_destination").on(t.workspace, t.conversation.asc().nullsFirst(), t.message.asc().nullsFirst(), t.channel, t.threadTs.asc().nullsFirst(), t._creationTime, t._id),
