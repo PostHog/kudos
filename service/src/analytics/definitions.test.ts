@@ -88,6 +88,10 @@ describe("the definitions check", () => {
     const malformed: Record<string, (body: Body) => void> = {
       "a string negation": (body) => (firstProperty(body).negation = "false"),
       "no value for an operator that compares one": (body) => (firstProperty(body).value = null),
+      "a boolean for a date comparison": (body) => Object.assign(firstProperty(body), { operator: "is_date_before", value: true }),
+      "a list for a date comparison": (body) => Object.assign(firstProperty(body), { operator: "is_date_after", value: ["2026-01-01"] }),
+      "a number for a regex": (body) => Object.assign(firstProperty(body), { operator: "regex", value: 5 }),
+      "a list for a numeric comparison": (body) => Object.assign(firstProperty(body), { operator: "gt", value: [1, 2] }),
       "a non-numeric condition rollout percentage": (body) => (flag(body).filters.groups[0].rollout_percentage = "100"),
       "a rollout percentage above 100": (body) => (flag(body).filters.groups[1].rollout_percentage = 150),
       "a malformed property deep in a cohort": (body) => (deepCohortProperty(body).negation = "true"),

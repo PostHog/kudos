@@ -26,7 +26,17 @@ const property = z
   })
   // A cohort tells a nested group from a property by a `values` field (match-property.ts, matchPropertyGroup).
   .refine((fields) => !("values" in fields))
-  .refine((fields) => fields.value != null || fields.operator === "is_set" || fields.operator === "is_not_set");
+  .refine((fields) => valueFits(fields.operator, fields.value));
+
+// What each operator compares its value as (core's matchFeatureFlagProperty): a date or a pattern is one string, an
+// order one string or number, set or unset nothing; the rest take a value or a list of them.
+function valueFits(operator: string | null | undefined, value: unknown): boolean {
+  if (operator === "is_set" || operator === "is_not_set") return true;
+  if (value == null) return false;
+  if (operator?.startsWith("is_date_") || operator === "regex" || operator === "not_regex") return typeof value === "string";
+  if (operator === "gt" || operator === "gte" || operator === "lt" || operator === "lte") return typeof value === "string" || typeof value === "number";
+  return true;
+}
 type Group = { type: "AND" | "OR"; values: Group[] | z.infer<typeof property>[] };
 // A cohort's values are all groups or all properties: a mixed list would be read as whichever its first one is.
 const group: z.ZodType<Group> = z.lazy(() => z.looseObject({ type: z.enum(["AND", "OR"]), values: z.union([z.array(group), z.array(property)]) }));

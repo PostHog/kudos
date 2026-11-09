@@ -145,6 +145,31 @@ describe("mutation jobs", () => {
     expect(await jobRows()).toEqual([{ name: "analytics.flags.call", state: "failed", error: expect.stringContaining("never reaches the network") }]);
   });
 
+  test("a mutation job can't launder a refused fetch through a savepoint of its own: it fails, and none of its writes commit", async () => {
+    let runs = 0;
+    const launder = mutationJob("analytics.flags.launder", z.object({}), async (ctx) => {
+      runs += 1;
+      await effect(ctx, "before");
+      await ctx.tx.execute(sql`savepoint own`);
+      try {
+        await fetch("http://127.0.0.1:9/never");
+      } catch {
+        // swallowed
+      }
+      await ctx.tx.execute(sql`rollback to own`).catch(() => "swallowed too");
+      await effect(ctx, "after").catch(() => "and this");
+    });
+    const { worker, enqueue } = setUp([launder]);
+    await enqueue(launder, {});
+
+    await worker().settle(2_000);
+    await worker().settle(500);
+
+    expect(runs).toBe(1);
+    expect((await effects("before")) + (await effects("after")), "no write commits").toBe(0);
+    expect(await jobRows()).toEqual([{ name: "analytics.flags.launder", state: "failed", error: expect.stringContaining("never reaches the network") }]);
+  });
+
   test("an app error is marked failed before the job's claim ends: a copy that looks the moment it ends never runs it", async () => {
     let runs = 0;
     const open = mutationJob("album.packs.open", z.object({}), async (ctx) => {

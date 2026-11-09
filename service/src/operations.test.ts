@@ -471,6 +471,21 @@ describe("no network inside a mutation or query", () => {
     ]);
   });
 
+  test("a handler can't launder a refused fetch through a savepoint of its own: nothing it wrote, before or after, commits", async () => {
+    const { operations } = setUp();
+
+    await expect(
+      operations.mutation("launder a fetch", async ({ tx }) => {
+        await tx.insert(counters).values({ id: "before", n: 1 });
+        await tx.execute(sql`savepoint own`);
+        await fetchesOk().catch(() => "swallowed");
+        await tx.execute(sql`rollback to savepoint own`).catch(() => "swallowed too");
+        await tx.insert(counters).values({ id: "after", n: 1 }).catch(() => "and this");
+      }),
+    ).rejects.toMatchObject({ name: "NetworkInOperationError" });
+    expect((await pool.query("select * from counters")).rows, "its writes roll back").toEqual([]);
+  });
+
   test("a fetch inside a query throws too", async () => {
     const { operations } = setUp();
 

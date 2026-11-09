@@ -92,6 +92,11 @@ export function refuseNetworkInOperation(what: string): void {
   throw error;
 }
 
+/** Whether `error` is a network call an operation refused. */
+export function isNetworkInOperation(error: unknown): boolean {
+  return error instanceof Error && error.name === "NetworkInOperationError";
+}
+
 // The tests' fetch stand-ins find it here without importing the runner (service/testing/fakePostHog.ts).
 (globalThis as { [key: symbol]: unknown })[Symbol.for("kudos.refuseNetworkInOperation")] = refuseNetworkInOperation;
 
@@ -155,11 +160,9 @@ export function createOperations({ pool, clock, log, maxAttempts = 10, retryDela
     const tracked = {
       query: (...args: Parameters<pg.PoolClient["query"]>) => {
         if (!scope.open) return Promise.reject(operationEnded(name));
-        // After a refused network call the attempt stands as Postgres stands a failed statement: nothing more runs
-        // until a rollback to a savepoint, which must predate the refusal and so undoes everything after it.
-        if (scope.network !== undefined && statementKind(typeof args[0] === "string" ? args[0] : (args[0] as pg.QueryConfig).text) !== "rollback to savepoint") {
-          return Promise.reject(scope.network);
-        }
+        // After a refused network call nothing more runs in the attempt, not even a rollback to a savepoint, so no
+        // write of it commits however the handler goes on; a mutation job's failure is marked apart (worker.ts).
+        if (scope.network !== undefined) return Promise.reject(scope.network);
         const [query, values] = args as unknown as [string | pg.QueryConfig, unknown[] | undefined];
         const config: pg.QueryConfig = typeof query === "string" ? { text: query } : { ...query };
         if (values !== undefined) config.values = values;
@@ -168,7 +171,7 @@ export function createOperations({ pool, clock, log, maxAttempts = 10, retryDela
         return client.query({ ...config, queryMode: "extended" } as pg.QueryConfig).then(
           (result) => {
             // The transaction is usable again; what failed inside the savepoint no longer aborts it.
-            if (kind === "rollback to savepoint") (aborted = undefined), (scope.network = undefined);
+            if (kind === "rollback to savepoint") aborted = undefined;
             return result;
           },
           (error: unknown) => {
