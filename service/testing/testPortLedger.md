@@ -12,6 +12,7 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | --- | --- | --- | --- |
 | .github/workflows/deploy.test.ts | S20 | | |
 | .github/workflows/gate.test.ts | S20 | | |
+| .github/workflows/promote.test.ts | S20 | | |
 | convex/achievements/achievements.test.ts | S6 | | |
 | convex/achievements/measures.test.ts | S6 | | |
 | convex/achievements/oldFriends.test.ts | S6 | | |
@@ -286,11 +287,14 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/website/xpMoment.test.ts | S17 | | |
 | convex/welcome/welcome.test.ts | S5 | | |
 | convex/workspace/workspaceSettings.test.ts | S3 | | |
+| e2e/edgeSignIn.test.ts | S20 | | |
 | e2e/fakes/server.test.ts | S20 | | |
 | e2e/local/edge.test.ts | S20 | | |
 | e2e/local/rewrite.test.ts | S20 | | |
 | e2e/target.test.ts | S20 | | |
 | slack-app/manifest.test.ts | S20 | | |
 | testing/privateFolder.test.ts | S20 | | |
+| tools/release/promote.test.ts | S20 | | |
+| tools/release/promotion.test.ts | S20 | | |
 | tools/rewrite/drizzle/generate.test.ts | S20 | | |
 | tools/rewrite/schemaParity.test.ts | S20 | | |

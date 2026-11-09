@@ -15,7 +15,7 @@ function post(path: string, body: string, { secret = targetOf().signingSecret, a
   return fetch(`${targetOf().appUrl}${path}`, { method: "POST", headers, body });
 }
 
-test("Slack's URL check gets its challenge back", async ({ slack }) => {
+test("Slack's URL check gets its challenge back", { tags: ["@sandbox"] }, async ({ slack }) => {
   const challenge = `challenge-${Math.random().toString(36).slice(2)}`;
 
   const answer = await post("/slack/events", JSON.stringify({ token: "unused", challenge, type: "url_verification" }), { at: await slack.now() });
@@ -24,7 +24,7 @@ test("Slack's URL check gets its challenge back", async ({ slack }) => {
   expect(await answer.json()).toEqual({ challenge });
 });
 
-test("a request Slack didn't sign is refused on every route", async ({ slack }) => {
+test("a request Slack didn't sign is refused on every route", { tags: ["@sandbox"] }, async ({ slack }) => {
   const now = await slack.now();
   const body = JSON.stringify({ token: "unused", challenge: "not-for-you", type: "url_verification" });
 
