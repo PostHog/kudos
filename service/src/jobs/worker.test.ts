@@ -176,7 +176,8 @@ describe("mutation jobs", () => {
       runs += 1;
       await fetch("http://127.0.0.1:9/never");
     });
-    const { worker, operations, enqueue } = setUp([call]);
+    // One slot: a second would find the job pending again once the first rolls back, and run it without a refill.
+    const { worker, operations, enqueue } = setUp([call], { concurrency: 1 });
     await enqueue(call, {});
     const unmarkable = around(operations, {
       before: (name) => {
