@@ -3,12 +3,15 @@ import { button, headerOf, option, pickerOf } from "../home.ts";
 import { expect, test } from "../test.ts";
 import { emoji, mention, text, type Slack } from "../slack.ts";
 
+// Each clock step may take the seam's 25 s budget, and this journey may take several, so it outlasts the suite's minute.
+const clockedJourneyMs = 180_000;
+
 const minuteMs = 60 * 1000;
 const pickQuestion = "Which group do you count for on the leaderboard?";
 
 const lastHome = async (slack: Slack, member: string) => (await slack.homesOf(member)).at(-1);
 
-test("user groups sync from Slack, and a member's group pick on App Home puts them on that group's board", { tags: ["@time"] }, async ({ slack, time }) => {
+test("user groups sync from Slack, and a member's group pick on App Home puts them on that group's board", { tags: ["@time"], timeout: clockedJourneyMs }, async ({ slack, time }) => {
   const [member, fernMate, oakMate, otherOakMate] = [await slack.member(), await slack.member(), await slack.member(), await slack.member()];
   const channel = await slack.channel();
   // Everyone meets the app before the sync, so the groups' members are its members.
@@ -33,10 +36,14 @@ test("user groups sync from Slack, and a member's group pick on App Home puts th
   // The app knows no group until it syncs, so the member sits on no group's board.
   expect(await leaderboard()).not.toContain(tag);
 
-  // The sync lists the groups, then reads each group's members a few seconds apart.
+  // The sync lists the groups, then reads each group's members a few seconds apart, in batches that each schedule the
+  // next. Groups other journeys left in the workspace come first or between, so the clock moves a minute at a time until
+  // the member counts for a group, for at most ten.
   await time.runCron("slack.userGroups.syncUserGroups");
-  await time.advance(minuteMs);
-  await time.settle();
+  for (let minutes = 0; minutes < 10 && (await groupBoard(ferns)).length === 0 && (await groupBoard(oaks)).length === 0; minutes++) {
+    await time.advance(minuteMs);
+    await time.settle();
+  }
 
   // A member counts for the smallest of their groups until they pick another, and their leaderboard shows its board.
   expect(await groupBoard(ferns)).toEqual([`*${ferns}*`, "Give kudos this week to join the board."]);
