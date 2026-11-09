@@ -108,7 +108,7 @@ export function createFrontDoor({ signingSecret, clock, off, log, operations, ha
     if (envelope?.type === "url_verification") return c.json({ challenge: envelope.challenge });
     if (off || !isEventCallback(envelope)) return acknowledged();
     const [kind] = eventKinds.find(([, test]) => test(envelope.event))!;
-    const handler = handlers.events?.[kind];
+    const handler = own(handlers.events, kind);
     if (handler) await takeIn(`slack.events.${kind}`, { workspace: envelope.team_id, eventId: envelope.event_id }, [(ctx) => handler(ctx, envelope)]);
     return acknowledged();
   });
@@ -119,12 +119,12 @@ export function createFrontDoor({ signingSecret, clock, off, log, operations, ha
     if (body === null || off) return acknowledged();
     const payload = payloadOf(body);
     if (isOptionsRequest(payload)) {
-      const options = handlers.options && Object.hasOwn(handlers.options, payload.action_id) ? handlers.options[payload.action_id] : undefined;
+      const options = own(handlers.options, payload.action_id);
       return c.json({ options: options ? await database().query(`slack.options.${payload.action_id}`, (ctx) => options(ctx, payload)) : [] });
     }
     if (!isMemberClick(payload)) return acknowledged();
     const steps = clickKinds.flatMap((kind) => {
-      const handler = handlers.clicks?.[kind];
+      const handler = own(handlers.clicks, kind);
       return handler ? [(ctx: MutationContext) => handler(ctx, payload)] : [];
     });
     if (steps.length > 0) await takeIn("slack.interactivity.click", { workspace: payload.team.id, eventId: payload.trigger_id }, steps);
@@ -138,7 +138,7 @@ export function createFrontDoor({ signingSecret, clock, off, log, operations, ha
     if (body === null || off) return acknowledged();
     const command = new URLSearchParams(new TextDecoder().decode(body));
     for (const kind of commandKinds) {
-      const answer = await handlers.commands?.[kind]?.({ operations: database(), arrivedAt }, command);
+      const answer = await own(handlers.commands, kind)?.({ operations: database(), arrivedAt }, command);
       if (answer !== undefined) return answer;
     }
     return acknowledged();
@@ -151,6 +151,11 @@ export function createFrontDoor({ signingSecret, clock, off, log, operations, ha
   });
 
   return app;
+}
+
+// A registered handler, never one the handlers object inherits: an options request for `toString` finds nothing.
+function own<Handler>(handlers: Partial<Record<string, Handler>> | undefined, kind: string): Handler | undefined {
+  return handlers !== undefined && Object.hasOwn(handlers, kind) ? handlers[kind] : undefined;
 }
 
 function jsonOf(body: Uint8Array): unknown {

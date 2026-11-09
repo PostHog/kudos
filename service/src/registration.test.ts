@@ -1,3 +1,4 @@
+import { createHmac } from "node:crypto";
 import { readdirSync } from "node:fs";
 import { Hono } from "hono";
 import { describe, expect, test, vi } from "vitest";
@@ -88,6 +89,71 @@ describe("a domain's website routes", () => {
       expect(await (await app.request("/healthz")).json()).toMatchObject({ commit: "test" });
     }
     expect(reached).toEqual([]);
+  });
+
+  test("a throw that isn't an Error, from a route, middleware or a Slack handler, answers 500 and is logged without its value", async () => {
+    const lines: string[] = [];
+    const log = { info: (message: string, fields?: object) => void lines.push(JSON.stringify({ message, ...fields })), error: (message: string, fields?: object) => void lines.push(JSON.stringify({ message, ...fields })) };
+    const thrown: unknown[] = ["thanks for the release notes", { text: "thanks for the release notes" }, null];
+    for (const value of thrown) {
+      lines.length = 0;
+      const routes = new Hono()
+        .use("/api/guarded/*", async () => {
+          throw value;
+        })
+        .post("/api/give", () => {
+          throw value;
+        })
+        .post("/api/guarded/x", (c) => c.text("never"));
+      const clock = createClock();
+      const slack = createFrontDoor({ signingSecret: "s", clock, off: false, log, operations: runtime.operations, handlers: { commands: { profileCard: async () => { throw value; } } } });
+      const app = createApp({ commit: "test", readiness: { migrations: () => "done" }, off: false, log, clock, slack, routes: [routes] });
+      const timestamp = Math.floor(clock.now() / 1000).toString();
+      const command = "text=thanks";
+      const signature = `v0=${createHmac("sha256", "s").update(`v0:${timestamp}:${command}`).digest("hex")}`;
+      const requests: Array<[string, RequestInit]> = [
+        ["/api/give", { method: "POST" }],
+        ["/api/guarded/x", { method: "POST" }],
+        ["/slack/commands", { method: "POST", headers: { "x-slack-request-timestamp": timestamp, "x-slack-signature": signature }, body: command }],
+      ];
+
+      for (const [path, init] of requests) {
+        const answer = await app.request(path, init);
+        expect(answer.status, `${path}, ${JSON.stringify(value)}`).toBe(500);
+        expect(await answer.text()).not.toContain("thanks");
+      }
+      expect(lines.join("\n")).not.toContain("thanks");
+      expect(lines.filter((line) => line.includes('"request failed"'))).toHaveLength(3);
+      expect(lines.filter((line) => line.includes('"message":"request"'))).toHaveLength(3);
+    }
+  });
+
+  test("a response body that fails while it streams ends the response, and is logged without its message", async () => {
+    const lines: string[] = [];
+    const log = { info: () => {}, error: (message: string, fields?: object) => void lines.push(JSON.stringify({ message, ...fields })) };
+    const failing = new Hono().get("/api/export", () => {
+      let sent = false;
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (sent) throw Object.assign(new TypeError("select failed for thanks for the release notes"), { code: "57014" });
+          sent = true;
+          controller.enqueue(new TextEncoder().encode("first,"));
+        },
+      });
+      return new Response(body, { headers: { "content-type": "text/csv" } });
+    });
+    const app = createApp({ commit: "test", readiness: { migrations: () => "done" }, off: false, log, clock: createClock(), routes: [failing] });
+
+    const answer = await app.request("/api/export");
+    const read = await answer.text().then(
+      () => "read whole",
+      (error: unknown) => String(error),
+    );
+
+    expect(read).not.toBe("read whole");
+    expect(read).not.toContain("thanks");
+    expect(answer.headers.get("content-type")).toBe("text/csv");
+    expect(lines).toEqual([JSON.stringify({ message: "response body failed", path: "/api/export", error: "TypeError", code: "57014" })]);
   });
 
   test("a route that fails answers 500 and logs its class and code, never its message", async () => {

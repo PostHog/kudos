@@ -4,7 +4,7 @@ import { createServer, connect, type Server, type Socket } from "node:net";
 import { fileURLToPath } from "node:url";
 import { Hono } from "hono";
 import pg from "pg";
-import { describe, expect, inject, onTestFinished, test } from "vitest";
+import { describe, expect, inject, onTestFinished, test, vi } from "vitest";
 import { boot } from "./boot.ts";
 import { z } from "zod";
 import { runMigrations } from "./db/migrate.ts";
@@ -142,6 +142,40 @@ describe("the worker in the service", () => {
 
     expect(after.now - before.now).toBeGreaterThanOrEqual(3_600_000);
     expect(after.queried - before.queried).toBeGreaterThanOrEqual(3_600_000);
+  });
+
+  test("a response body that fails mid-stream prints nothing of its error through the server", async () => {
+    const registry = createRegistry({
+      website: {
+        routes: () =>
+          new Hono().get("/api/export", () => {
+            let sent = false;
+            const body = new ReadableStream<Uint8Array>({
+              pull(controller) {
+                if (sent) throw new TypeError("select failed for thanks for the release notes");
+                sent = true;
+                controller.enqueue(new TextEncoder().encode("first,"));
+              },
+            });
+            return new Response(body);
+          }),
+      },
+    });
+    const printed: unknown[] = [];
+    const console = vi.spyOn(globalThis.console, "error").mockImplementation((...args) => void printed.push(...args));
+    onTestFinished(() => console.mockRestore());
+    const { log, lines } = captureLog();
+    const service = await boot({ env: { PORT: "0", DATABASE_URL: database.url }, log, registry, pollMs: 3_600_000 });
+    onTestFinished(() => service.stop());
+    await service.migrated;
+
+    const read = await fetch(`http://127.0.0.1:${service.port}/api/export`).then((answer) => answer.text()).then(() => "read", (error: unknown) => String(error));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    expect(read).not.toContain("thanks");
+    expect(printed.map((value) => (value instanceof Error ? `${value.message} ${value.stack}` : String(value))).join("\n")).not.toContain("thanks");
+    expect(JSON.stringify(lines)).not.toContain("thanks");
+    expect(lines).toContainEqual({ message: "response body failed", path: "/api/export", error: "TypeError" });
   });
 
   test("while a load holds, no cron is written and no due job runs", async () => {

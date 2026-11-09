@@ -335,6 +335,23 @@ describe("/slack/commands", () => {
   });
 });
 
+describe("handlers by kind", () => {
+  test("only a kind's own handler runs: a handlers object with a prototype lends it none", async () => {
+    const inherited: SlackHandlers = {
+      events: Object.create({ message: async (ctx: MutationContext) => effect(ctx, "inherited") }),
+      clicks: Object.create({ homeClick: async (ctx: MutationContext) => effect(ctx, "inherited") }),
+      commands: Object.create({ profileCard: async () => Response.json({ text: "inherited" }) }),
+    };
+    const { event, interaction, command } = setUp(inherited);
+
+    expect((await event({ type: "message" })).status).toBe(200);
+    expect((await interaction(click("Tr-proto"))).status).toBe(200);
+    expect(await (await command("")).text()).toBe("");
+    expect(await effects("inherited")).toBe(0);
+    expect(await receipts()).toEqual([]);
+  });
+});
+
 describe("HEDGEHUG_OFF", () => {
   test("Slack's routes answer the challenge and 200, check the signature, and reach no handler", async () => {
     let calls = 0;

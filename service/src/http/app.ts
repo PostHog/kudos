@@ -46,9 +46,25 @@ export function createApp({ commit, readiness, off, log, clock, testSecret, work
   const app = new Hono();
 
   // One line per request: method, path without its query, status and duration. Never a header or a body.
+  // Hono's error hooks see only Errors: anything else thrown ends here, as a 500 logged by its kind alone.
   app.use(async (c, next) => {
     const started = performance.now();
-    await next();
+    const path = c.req.path;
+    try {
+      await next();
+    } catch (error) {
+      log.error("request failed", { path, ...errorFields(error) });
+      c.res = undefined;
+      c.res = new Response("Internal Server Error", { status: 500 });
+    }
+    const { body, status, statusText, headers } = c.res;
+    if (body) {
+      c.res = undefined;
+      c.res = new Response(
+        failingQuietly(body, (error) => log.error("response body failed", { path, ...errorFields(error) })),
+        { status, statusText, headers },
+      );
+    }
     log.info("request", {
       method: c.req.method,
       path: c.req.path,
@@ -133,6 +149,27 @@ function mountTestingTime(app: Hono, secret: string, clock: Clock, worker: AppOp
     }
     const answer = { now: clock.now(), ran: settled.ran };
     return settled.done ? c.json(answer) : c.json({ ...answer, error: `jobs were still due or running after ${budgetMs} ms` }, 504);
+  });
+}
+
+/**
+ * The body as it streams, except that a failure mid-stream is logged by `onError` and ends the stream with an error
+ * of ours: the server prints what ends a response, and the original may quote SQL parameters or a member's words.
+ */
+function failingQuietly(body: ReadableStream<Uint8Array>, onError: (error: unknown) => void): ReadableStream<Uint8Array> {
+  const reader = body.getReader();
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const { done, value } = await reader.read();
+        if (done) controller.close();
+        else controller.enqueue(value);
+      } catch (error) {
+        onError(error);
+        controller.error(new Error("The response's body failed"));
+      }
+    },
+    cancel: (reason) => reader.cancel(reason),
   });
 }
 
