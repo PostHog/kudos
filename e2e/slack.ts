@@ -23,7 +23,7 @@ export class Slack {
 
   async member() {
     const id = uniqueId("U");
-    await this.control("members", { id, team_id: this.target.workspace, tz: "UTC", real_name: `Member ${id}` });
+    await this.control("members", { id, team_id: this.target.workspace, tz: noonZone(), real_name: `Member ${id}` });
     return id;
   }
 
@@ -97,4 +97,11 @@ let lastTs = 0;
 function uniqueTs() {
   lastTs = Math.max(lastTs + 1, Date.now() * 1000);
   return `${Math.floor(lastTs / 1_000_000)}.${String(lastTs % 1_000_000).padStart(6, "0")}`;
+}
+
+// A fixed-offset zone where it is now about noon, so a journey's messages never straddle the member's midnight and
+// the daily allowance never refills mid-journey.
+function noonZone() {
+  const offset = 12 - new Date().getUTCHours();
+  return offset === 0 ? "Etc/GMT" : `Etc/GMT${offset > 0 ? "-" : "+"}${Math.abs(offset)}`;
 }

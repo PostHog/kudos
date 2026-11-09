@@ -19,7 +19,7 @@ async function route(slack: FakeSlack, postHog: FakePostHog, request: IncomingMe
   const body = await bodyOf(request);
   if (url.pathname.startsWith("/_control/")) return answer(response, control(slack, postHog, url, body));
   const init = { method: request.method ?? "GET", headers: headersOf(request), ...(body !== "" && { body }) };
-  if (url.pathname.startsWith("/api/")) return answer(response, await slack.fetch(url, init));
+  if (url.pathname.startsWith("/api/")) return answer(response, await slack.fetch(url, { ...init, ...(body !== "" && { body: jsonArguments(request, body) }) }));
   if (url.pathname === "/flags/definitions") return answer(response, await postHog.fetch(url, init));
   answer(response, await postHog.fetch(url, init).catch(() => new Response(null, { status: 200 })));
 }
@@ -42,6 +42,14 @@ function control(slack: FakeSlack, postHog: FakePostHog, url: URL, body: string)
     default:
       return new Response(`no control ${url.pathname}`, { status: 404 });
   }
+}
+
+// Slack's Web API takes JSON or form-encoded arguments; the recording fake reads JSON, so form fields become JSON
+// here, with the JSON-valued ones (blocks, view and the like) parsed.
+function jsonArguments(request: IncomingMessage, body: string) {
+  if (!(request.headers["content-type"] ?? "").startsWith("application/x-www-form-urlencoded")) return body;
+  const fields = Object.fromEntries(new URLSearchParams(body));
+  return JSON.stringify(Object.fromEntries(Object.entries(fields).map(([name, value]) => [name, /^[[{]/.test(value) ? JSON.parse(value) : value])));
 }
 
 function headersOf(request: IncomingMessage) {
