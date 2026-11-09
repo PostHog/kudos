@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { FakePostHog, type FlagDefinition } from "../../testing/fakePostHog.ts";
-import { FakeSlack, rateLimitedFor, type SlackUser } from "../../testing/fakeSlack.ts";
+import { FakeSlack, rateLimitedFor, type SlackUser, type UserGroupOptions } from "../../testing/fakeSlack.ts";
 import { SlackOpenId, type NextSignIn } from "../../testing/slackOpenId.ts";
 import { productionFlags } from "./productionFlags.ts";
 
@@ -61,6 +61,21 @@ async function control({ slack, postHog, openId, responses, flagsChanged }: Stat
       slack.withChannel(id, options);
       return Response.json({ ok: true });
     }
+    // Slack's side of a channel changing: shared with another organization, or renamed.
+    case "/_control/share-channel":
+      slack.shareChannel((JSON.parse(body) as { id: string }).id);
+      return Response.json({ ok: true });
+    case "/_control/rename-channel": {
+      const { id, name } = JSON.parse(body) as { id: string; name: string };
+      slack.renameChannel(id, name);
+      return Response.json({ ok: true });
+    }
+    // A user group as usergroups.list and usergroups.users.list answer it.
+    case "/_control/user-groups": {
+      const { id, team_id, ...options } = JSON.parse(body) as { id: string; team_id: string } & UserGroupOptions;
+      slack.withUserGroup(id, { ...options, teamId: team_id });
+      return Response.json({ ok: true });
+    }
     case "/_control/rate-limits": {
       const { method, channel, seconds } = JSON.parse(body) as { method: string; channel: string; seconds: number };
       slack.answeringIn(method, channel, rateLimitedFor(seconds));
@@ -84,6 +99,9 @@ async function control({ slack, postHog, openId, responses, flagsChanged }: Stat
       return Response.json(postHog.events().filter((event) => event.event === "$exception").flatMap(({ properties }) => ((properties.$exception_list as ReportedException[] | undefined) ?? []).map(describe)));
     case "/_control/calls":
       return Response.json(url.searchParams.has("method") ? slack.callsTo(query("method")) : slack.calls);
+    // The messages the app posted in a channel, each as it shows now: its ts, and its text and blocks after any update.
+    case "/_control/messages":
+      return Response.json(slack.messagesShownIn(query("channel")));
     case "/_control/reactions":
       return Response.json(slack.reactionsOn(query("channel"), query("ts")));
     default:
