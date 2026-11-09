@@ -5,7 +5,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, inject, test } from 
 import { useTestDatabase, withSearchPath } from "../testing/database.ts";
 import { createClock } from "./clock.ts";
 import { createPool } from "./db/pool.ts";
-import type { Log, LogFields } from "./log.ts";
+import { errorFields, type Log, type LogFields } from "./log.ts";
 import { createOperations, type Database, type Operations } from "./operations.ts";
 
 // A table of the test's own, in a schema of its own, so the service's schema stays exactly the migrations'.
@@ -274,6 +274,46 @@ describe("the transaction", () => {
 
     expect(result).toBe("done");
     expect(attempts).toBe(2);
+  });
+
+  test("a statement after a swallowed failure answers with that failure's code, so a hidden serialization failure retries at once", async () => {
+    const { operations } = setUp();
+    let attempts = 0;
+    let seen: unknown;
+
+    const result = await operations.mutation("went on", async ({ tx }) => {
+      attempts += 1;
+      if (attempts === 1) {
+        await tx.execute(sql`do $$ begin raise exception using errcode = '40001'; end $$`).catch(() => {});
+        await tx.insert(counters).values({ id: "after", n: 1 }).catch((error: unknown) => {
+          seen = error;
+          throw error;
+        });
+      }
+      return "done";
+    });
+
+    expect(result).toBe("done");
+    expect(attempts).toBe(2);
+    expect(errorFields(seen).code, "not 25P02, the code of every statement after a failed one").toBe("40001");
+  });
+
+  test("work a handler left behind can't use its transaction once the handler has ended", async () => {
+    const { operations } = setUp();
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => (release = resolve));
+    let later!: Promise<unknown>;
+
+    await expect(
+      operations.mutation("parent", async ({ tx }) => {
+        later = released.then(() => tx.insert(counters).values({ id: "late", n: 1 }));
+        throw new Error("the parent failed");
+      }),
+    ).rejects.toThrow("the parent failed");
+    release();
+
+    await expect(later).rejects.toSatisfy(causedBy("OperationEndedError"));
+    expect((await pool.query("select * from counters")).rows, "nothing it wrote stays").toEqual([]);
   });
 
   test("fails an operation that caught a database error and went on, keeping the error's code, and keeps none of its writes", async () => {

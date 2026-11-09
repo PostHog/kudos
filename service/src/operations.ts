@@ -92,8 +92,11 @@ export function createOperations({ pool, clock, log, maxAttempts = 10, retryDela
     // The first statement Postgres failed. It aborts the transaction on it, even when the handler catches it; pg's own
     // refusals, such as a prepared statement's name used twice, never reach Postgres and abort nothing.
     let aborted: unknown;
+    // Open while the handler runs; work it left behind then finds its transaction gone, never a pooled connection.
+    const scope = { name, open: true };
     const tracked = {
       query: (...args: Parameters<pg.PoolClient["query"]>) => {
+        if (!scope.open) return Promise.reject(operationEnded(name));
         const text = typeof args[0] === "string" ? args[0] : (args[0] as { text?: unknown } | undefined)?.text;
         const statements = typeof text === "string" ? statementsOf(text) : [];
         if (statements.some((statement) => transactionControl.test(statement))) return Promise.reject(transactionOwned(name));
@@ -104,13 +107,15 @@ export function createOperations({ pool, clock, log, maxAttempts = 10, retryDela
             return result;
           },
           (error: unknown) => {
-            if (hasSqlState(error)) aborted ??= error;
+            if (!hasSqlState(error)) throw error;
+            // Every statement after a failed one answers 25P02; the failure the handler went on after is the answer.
+            if (error.code === "25P02" && aborted !== undefined) throw wentOnAfter(aborted);
+            aborted ??= error;
             throw error;
           },
         );
       },
     };
-    const scope = { name, open: true };
     try {
       await client.query(begin).catch((error: unknown) => {
         broken ??= error;
@@ -120,9 +125,11 @@ export function createOperations({ pool, clock, log, maxAttempts = 10, retryDela
       try {
         result = await running.run(scope, () => handler(drizzle({ client: tracked as unknown as pg.PoolClient })));
       } catch (error) {
+        scope.open = false;
         await client.query("ROLLBACK").catch((rollbackError: unknown) => (broken ??= rollbackError));
         throw error;
       }
+      scope.open = false;
       const commit = await client.query("COMMIT").catch((error: unknown) => {
         // The connection may be gone even when Postgres answered: a session ended at COMMIT answers 57P01 first.
         broken ??= error;
@@ -225,6 +232,12 @@ function statementsOf(text: string): string[] {
     }
   }
   return plain.split(";");
+}
+
+function operationEnded(name: string): Error {
+  const error = new Error(`"${name}" has ended; work it left behind runs its own operation, not its transaction`);
+  error.name = "OperationEndedError";
+  return error;
 }
 
 function transactionOwned(name: string): Error {
