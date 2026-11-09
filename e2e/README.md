@@ -36,6 +36,7 @@ A target file is an env file that names the app and its fakes:
 | `KUDOS_TIME_URL` | The app's time seam. Optional: it defaults to `KUDOS_APP_URL` plus `/testing/time`. |
 | `KUDOS_TEST_SECRET` | The test-only secret the time seam asks for. A target without it runs no journey tagged `@time`. |
 | `KUDOS_HOSTED` | `true` for an app on the hosting platform, behind its real edge and real Slack, as the promotion gate runs it. Such a target names no `KUDOS_FAKES_URL` and runs only journeys tagged `@sandbox`. |
+| `KUDOS_EDGE_SIGN_IN_URL` | On a hosted target, the start of the URL its edge sends a visitor who hasn't signed in to, so a redirect anywhere else fails `journeys/sandbox.e2e.ts`. |
 
 `pnpm e2e` writes the local one itself, after building the website against the local backend and uploading it to the backend's static hosting; `pnpm e2e:rewrite` writes the rewrite's. Another target writes its own file outside the repository and runs `E2E_TARGET=<file> pnpm exec e2e run --config e2e/e2e.config.ts`; its app must reach the fakes.
 

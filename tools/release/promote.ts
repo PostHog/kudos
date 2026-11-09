@@ -31,13 +31,24 @@ async function github<Body>(path: string): Promise<Body> {
 }
 
 type CheckRun = { id: number; name: string; status: string; conclusion: string | null };
+type Status = { context: string; state: string };
+
+// Every page of a list GitHub answers in pages of at most 100, so a check past the first page still counts.
+async function everyPage<Entry>(path: string, key: string): Promise<Entry[]> {
+  const entries: Entry[] = [];
+  for (let page = 1; ; page++) {
+    const body = await github<{ total_count: number } & Record<string, Entry[]>>(`${path}${path.includes("?") ? "&" : "?"}per_page=100&page=${page}`);
+    const found = body[key] ?? [];
+    entries.push(...found);
+    if (found.length < 100 || entries.length >= body.total_count) return entries;
+  }
+}
 
 // Check runs, the latest run of each name, and commit statuses, which is how a hosting platform may report its deploy.
 async function readChecks(): Promise<CheckState[]> {
-  const { check_runs } = await github<{ check_runs: CheckRun[] }>("check-runs?per_page=100");
   const latest = new Map<string, CheckRun>();
-  for (const run of check_runs) if ((latest.get(run.name)?.id ?? -1) < run.id) latest.set(run.name, run);
-  const { statuses } = await github<{ statuses: { context: string; state: string }[] }>("status");
+  for (const run of await everyPage<CheckRun>("check-runs", "check_runs")) if ((latest.get(run.name)?.id ?? -1) < run.id) latest.set(run.name, run);
+  const statuses = await everyPage<Status>("status", "statuses");
   return [
     ...[...latest.values()].map(({ name, status, conclusion }): CheckState => ({ name, state: status !== "completed" ? "pending" : conclusion === "success" ? "success" : ["failure", "cancelled", "timed_out", "action_required"].includes(conclusion ?? "") ? "failure" : "pending" })),
     ...statuses.map(({ context, state }): CheckState => ({ name: context, state: state === "success" ? "success" : state === "pending" ? "pending" : "failure" })),
@@ -81,8 +92,10 @@ try {
         return stdout.split(/\s/)[0];
       },
       isAncestor,
-      push: async (to: string) => {
-        const { status, stderr } = git("push", "origin", `${to}:refs/heads/production`);
+      // The lease makes the push land only while production still is the commit read above, so a branch deleted or
+      // moved in between is never created or moved over.
+      push: async (to: string, from: string) => {
+        const { status, stderr } = git("push", `--force-with-lease=refs/heads/production:${from}`, "origin", `${to}:refs/heads/production`);
         if (status !== 0) throw new Error(`git push to production failed: ${stderr}`);
       },
     };

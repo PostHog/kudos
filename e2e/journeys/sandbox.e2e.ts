@@ -15,15 +15,16 @@ const claims: Record<string, Record<string, string>> = {
 };
 
 test("a visitor who hasn't signed in is sent to the edge's sign-in from the website and its API, whatever they claim", { skip: onlyHosted, tags: ["@sandbox"] }, async () => {
-  const { appUrl } = targetOf();
+  const { appUrl, edgeSignInUrl } = targetOf();
+  // Any other redirect, to a maintenance page or another host, would let a broken edge pass for one that signs in.
+  if (!edgeSignInUrl) throw new Error("the hosted target sets no KUDOS_EDGE_SIGN_IN_URL, so the journey can't tell the edge's sign-in from any other redirect");
   for (const path of gated) {
     for (const [claim, headers] of Object.entries(claims)) {
-      const asked = new URL(path, appUrl);
-      const answer = await fetch(asked, { headers, redirect: "manual" });
+      const answer = await fetch(new URL(path, appUrl), { headers, redirect: "manual" });
 
       expect([301, 302, 303, 307, 308], `${path} with ${claim}`).toContain(answer.status);
-      const to = new URL(answer.headers.get("location") ?? "", asked);
-      expect(`${to.origin}${to.pathname}`, `where ${path} with ${claim} is sent`).not.toBe(`${asked.origin}${asked.pathname}`);
+      const to = new URL(answer.headers.get("location") ?? "", appUrl).href;
+      expect(to.startsWith(edgeSignInUrl), `${path} with ${claim} is sent to ${to}, not to ${edgeSignInUrl}`).toBe(true);
     }
   }
 });
