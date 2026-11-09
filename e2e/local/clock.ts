@@ -7,9 +7,9 @@ import { cronIds, testSecretHeader, type CronId, type TimeAnswer, type TimeStep 
 // Today's app reads the time from its backend's own clock, so the local driver moves that clock: it runs the backend
 // under libfaketime, and each advance restarts it, on the same database and ports, with the new offset. A backend whose
 // clock jumps while it runs keeps sleeping towards the jobs it had already planned, so it never runs them; one started at
-// the offset runs whatever came due at once, and catches each cron up once. `runCron` runs the cron's job with the
-// backend's admin key, and `settle` waits until no job due by the app's clock is pending or running, in the app and in
-// each of its components.
+// the offset runs whatever came due at once, and catches each cron up once, before the advance answers. `runCron` runs
+// the cron's job with the backend's admin key, and `settle` waits until no job or cron due by the app's clock is pending
+// or running, in the app and in each of its components.
 const libraries = [
   process.env.KUDOS_LIBFAKETIME,
   "/usr/lib/x86_64-linux-gnu/faketime/libfaketimeMT.so.1",
@@ -26,8 +26,10 @@ export async function startClock(backend: LocalBackend, { secret, components }: 
   let offsetMs = 0;
   const appNow = () => Date.now() + offsetMs;
 
-  const call = async (path: string, args: Record<string, unknown>, componentPath = "") => {
-    const response = await fetch(`${backend.cloud}/api/function`, {
+  // The backend's own reads (its tables, its crons) are queries it serves only at /api/query; an app's function runs at
+  // /api/function.
+  const call = async (path: string, args: Record<string, unknown>, { componentPath = "", route = "function" }: { componentPath?: string; route?: "function" | "query" } = {}) => {
+    const response = await fetch(`${backend.cloud}/api/${route}`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Convex ${backend.adminKey}` },
       body: JSON.stringify({ path, args, componentPath, format: "json" }),
@@ -41,7 +43,7 @@ export async function startClock(backend: LocalBackend, { secret, components }: 
   const unfinished = async (componentPath: string) => {
     const jobs: Job[] = [];
     for (let cursor: string | null = null, isDone = false; !isDone; ) {
-      const page = (await call("_system/cli/tableData", { table: "_scheduled_functions", order: "desc", paginationOpts: { cursor, numItems: 1000 } }, componentPath)) as {
+      const page = (await call("_system/cli/tableData", { table: "_scheduled_functions", order: "desc", paginationOpts: { cursor, numItems: 1000 } }, { componentPath, route: "query" })) as {
         page: Job[];
         isDone: boolean;
         continueCursor: string;
@@ -52,13 +54,22 @@ export async function startClock(backend: LocalBackend, { secret, components }: 
     return jobs;
   };
 
+  // A cron whose next run is due by the app's clock, or running: after a restart each one catches up once.
+  type Cron = { name: string; nextRun?: { nextTs: string; state: { type: string } } };
+  const cronsBehind = async (componentPath: string, now: number) =>
+    ((await call("_system/frontend/listCronJobs", {}, { componentPath, route: "query" })) as Cron[]).filter(
+      ({ nextRun }) => nextRun !== undefined && (nextRun.state.type !== "pending" || Number(BigInt(nextRun.nextTs) / 1_000_000n) <= now),
+    );
+
   const settle = async () => {
     const until = Date.now() + budgetMs;
     const ran = new Set<string>();
     // Two quiet reads in a row, so a job that a finishing one scheduled is seen before the queue counts as settled.
     for (let quiet = 0; quiet < 2; ) {
       const now = appNow();
-      const due = (await Promise.all(["", ...components].map(unfinished))).flat().filter((job) => job.scheduledTime <= now);
+      const jobs = (await Promise.all(["", ...components].map(unfinished))).flat().filter((job) => job.scheduledTime <= now);
+      const crons = (await Promise.all(["", ...components].map((component) => cronsBehind(component, now)))).flat();
+      const due = [...jobs, ...crons];
       for (const job of due) ran.add(job.name);
       quiet = due.length === 0 ? quiet + 1 : 0;
       if (Date.now() > until) throw new Error(`jobs still due after ${budgetMs} ms: ${due.map((job) => job.name).join(", ")}`);
@@ -74,6 +85,9 @@ export async function startClock(backend: LocalBackend, { secret, components }: 
     if (library === undefined) throw new Error("moving the app's clock needs libfaketime: install it (`sudo apt-get install faketime`) or set KUDOS_LIBFAKETIME to its libfaketimeMT.so.1");
     offsetMs += ms;
     await backend.restart({ LD_PRELOAD: library, FAKETIME: `+${(offsetMs / 1000).toFixed(3)}` });
+    // What came due runs at once on the restarted backend, all the crons with it. Let that burst finish here, so the
+    // requests a journey sends next don't race it.
+    await settle();
     return [];
   };
 
