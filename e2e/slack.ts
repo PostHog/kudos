@@ -1,5 +1,6 @@
 import { createHmac, randomBytes } from "node:crypto";
 import type { Target } from "./target.ts";
+import { appTime } from "./time.ts";
 
 export type RichElement =
   | { type: "user"; user_id: string }
@@ -41,9 +42,25 @@ export class Slack {
     this.target = target;
   }
 
+  private offsetMs: number | undefined;
+
+  // Slack's clock, which is the app's: a journey tagged @time moves both, so what Slack signs, stamps and sends keeps
+  // the time the app expects, and a new member's day sits where the app says it does.
+  async now() {
+    if (this.offsetMs === undefined) {
+      const { timeUrl, testSecret } = this.target;
+      this.followClock(testSecret === undefined ? Date.now() : await appTime(timeUrl!, testSecret).now());
+    }
+    return Date.now() + this.offsetMs!;
+  }
+
+  followClock(appNow: number) {
+    this.offsetMs = appNow - Date.now();
+  }
+
   async member(options: MemberOptions = {}) {
     const id = uniqueId("U");
-    await this.control("members", { id, team_id: this.target.workspace, tz: noonZone(), real_name: `Member ${id}`, ...options });
+    await this.control("members", { id, team_id: this.target.workspace, tz: noonZone(await this.now()), real_name: `Member ${id}`, ...options });
     return id;
   }
 
@@ -63,7 +80,7 @@ export class Slack {
   }
 
   async post(user: string, elements: RichElement[], { channel = "C_E2E_GENERAL", channelType = "channel", threadTs, fromBot = false }: PostOptions = {}): Promise<Posted> {
-    const ts = uniqueTs();
+    const ts = uniqueTs(await this.now());
     await this.sendEvent({
       type: "message",
       channel,
@@ -80,7 +97,7 @@ export class Slack {
 
   // Slack sends an edit as a message_changed event that carries the whole new message and when it was edited.
   async edit(posted: Posted, elements: RichElement[]): Promise<Posted> {
-    const editedTs = uniqueTs();
+    const editedTs = uniqueTs(await this.now());
     const { user, ts, threadTs } = posted;
     const message = { type: "message", user, ts, team: this.target.workspace, ...(threadTs !== undefined && { thread_ts: threadTs }) };
     await this.sendEvent({
@@ -98,13 +115,13 @@ export class Slack {
 
   // A member adds a reaction to someone's message.
   async react(user: string, { channel, ts, user: author }: Posted, reaction: string) {
-    const eventTs = uniqueTs();
+    const eventTs = uniqueTs(await this.now());
     await this.sendEvent({ type: "reaction_added", user, reaction, item_user: author, item: { type: "message", channel, ts }, event_ts: eventTs });
   }
 
   // A member opens the app's Home tab.
   async openHome(user: string) {
-    await this.sendEvent({ type: "app_home_opened", user, channel: uniqueId("D"), tab: "home", event_ts: uniqueTs() });
+    await this.sendEvent({ type: "app_home_opened", user, channel: uniqueId("D"), tab: "home", event_ts: uniqueTs(await this.now()) });
   }
 
   // A member clicks a button or picks an option on App Home, as Slack posts it: a form with one JSON payload.
@@ -201,7 +218,7 @@ export class Slack {
   private readonly immediateResponses = new Map<string, Record<string, unknown>>();
 
   private async sendEvent(event: Record<string, unknown>) {
-    this.lastEnvelope = JSON.stringify({ type: "event_callback", team_id: this.target.workspace, event_id: uniqueId("Ev"), event_time: Math.floor(Date.now() / 1000), event });
+    this.lastEnvelope = JSON.stringify({ type: "event_callback", team_id: this.target.workspace, event_id: uniqueId("Ev"), event_time: Math.floor((await this.now()) / 1000), event });
     await this.deliver(this.lastEnvelope);
   }
 
@@ -217,8 +234,8 @@ export class Slack {
     return new Error(reported.length === 0 ? what : `${what}; the app reported:\n${reported.join("\n")}`);
   }
 
-  private signed(path: string, body: string, contentType = "application/json") {
-    const timestamp = Math.floor(Date.now() / 1000).toString();
+  private async signed(path: string, body: string, contentType = "application/json") {
+    const timestamp = Math.floor((await this.now()) / 1000).toString();
     const signature = createHmac("sha256", this.target.signingSecret).update(`v0:${timestamp}:${body}`).digest("hex");
     return fetch(`${this.target.appUrl}${path}`, {
       method: "POST",
@@ -260,14 +277,14 @@ function uniqueId(prefix: string) {
 
 let lastTs = 0;
 
-function uniqueTs() {
-  lastTs = Math.max(lastTs + 1, Date.now() * 1000);
+function uniqueTs(now: number) {
+  lastTs = Math.max(lastTs + 1, now * 1000);
   return `${Math.floor(lastTs / 1_000_000)}.${String(lastTs % 1_000_000).padStart(6, "0")}`;
 }
 
 // A fixed-offset zone where it is now about noon, so a journey's messages never straddle the member's midnight and
 // the daily allowance never refills mid-journey.
-function noonZone() {
-  const offset = 12 - new Date().getUTCHours();
+function noonZone(now: number) {
+  const offset = 12 - new Date(now).getUTCHours();
   return offset === 0 ? "Etc/GMT" : `Etc/GMT${offset > 0 ? "-" : "+"}${Math.abs(offset)}`;
 }

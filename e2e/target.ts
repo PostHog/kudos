@@ -7,6 +7,10 @@ export type Target = {
   workspace: string;
   appId: string;
   fakesUrl: string;
+  // The app's time seam (see time.ts) and the test-only secret it asks for. A target without a secret has no clock to
+  // move, so its journeys tagged @time can't run.
+  timeUrl?: string;
+  testSecret?: string;
 };
 
 const names = {
@@ -15,10 +19,15 @@ const names = {
   workspace: "KUDOS_SLACK_WORKSPACE",
   appId: "KUDOS_SLACK_APP_ID",
   fakesUrl: "KUDOS_FAKES_URL",
+  timeUrl: "KUDOS_TIME_URL",
+  testSecret: "KUDOS_TEST_SECRET",
 } as const satisfies Record<keyof Target, string>;
 
 export function targetLines(target: Target) {
-  return (Object.keys(names) as Array<keyof Target>).map((key) => `${names[key]}=${target[key]}\n`).join("");
+  return (Object.keys(names) as Array<keyof Target>)
+    .filter((key) => target[key] !== undefined)
+    .map((key) => `${names[key]}=${target[key]}\n`)
+    .join("");
 }
 
 export function targetOf(file = process.env.E2E_TARGET): Target {
@@ -29,5 +38,15 @@ export function targetOf(file = process.env.E2E_TARGET): Target {
     if (!value) throw new Error(`the target file ${file} sets no ${names[key]}`);
     return value;
   };
-  return { appUrl: read("appUrl"), signingSecret: read("signingSecret"), workspace: read("workspace"), appId: read("appId"), fakesUrl: read("fakesUrl") };
+  const appUrl = read("appUrl");
+  return {
+    appUrl,
+    signingSecret: read("signingSecret"),
+    workspace: read("workspace"),
+    appId: read("appId"),
+    fakesUrl: read("fakesUrl"),
+    // The rewrite serves the seam beside its other routes; the local runner serves today's app's seam itself.
+    timeUrl: variables[names.timeUrl] || `${appUrl}/testing/time`,
+    testSecret: variables[names.testSecret] || undefined,
+  };
 }

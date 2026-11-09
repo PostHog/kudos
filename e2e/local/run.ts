@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { flagsKey, projectToken } from "../../testing/fakePostHog.ts";
 import { killGroup, startLocalBackend } from "../../testing/localBackend.ts";
 import { startFakes } from "../fakes/server.ts";
+import { startClock } from "./clock.ts";
 import { targetLines, type Target } from "../target.ts";
 
 const workspace = "T1";
@@ -53,7 +54,11 @@ try {
   const directory = await mkdtemp(join(tmpdir(), "kudos-e2e-target-"));
   cleanups.push(() => rm(directory, { recursive: true, force: true }));
   const targetFile = join(directory, "local.env");
-  const target: Target = { appUrl: backend.site, signingSecret, workspace, appId, fakesUrl: fakes.url };
+  // The app's components keep job queues of their own, which settling waits for too.
+  const testSecret = randomBytes(24).toString("hex");
+  const clock = await startClock(backend, { secret: testSecret, components: ["posthog", "staticHosting"] });
+  cleanups.push(clock.stop);
+  const target: Target = { appUrl: backend.site, signingSecret, workspace, appId, fakesUrl: fakes.url, timeUrl: clock.url, testSecret };
   await writeFile(targetFile, targetLines(target), { mode: 0o600 });
 
   if (interrupted === undefined) exitCode = await runJourneys(targetFile);
