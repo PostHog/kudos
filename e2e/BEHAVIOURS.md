@@ -16,7 +16,7 @@ Every user-facing behaviour of HedgeHug, inventoried from the code and the specs
 - [x] A giver or recipient the app doesn't know yet is looked up, and the kudos lands when Slack answers (every journey: its members are new to the app)
 - [ ] A member Slack doesn't know yet at first lands at a later lookup (clock: the next lookup is a minute on)
 - [x] Slack's rate limit delays the mark, never loses it (`giving.e2e.ts`)
-- [ ] The allowance refills at the giver's midnight (clock)
+- [x] The allowance refills at the giver's midnight (`allowance.e2e.ts`)
 
 ## Slash commands
 
