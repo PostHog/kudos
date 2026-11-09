@@ -16,7 +16,15 @@ const sqlTypes = { string: 'text COLLATE "C"', number: "double precision", bigin
 describe("the Drizzle schema has every Convex table", () => {
   test("one table per Convex table, besides the archived ones and the service's own", () => {
     const names = new Set(kept.map(({ tableName }) => tableName));
-    expect([...drizzle.keys()].filter((name) => !names.has(name)).sort(), "tables Convex lacks").toEqual(["archive", "crons", "files", "jobs"]);
+    expect([...drizzle.keys()].filter((name) => !names.has(name)).sort(), "tables Convex lacks").toEqual([
+      "archive",
+      "crons",
+      "files",
+      "jobs",
+      "loadCheckpoints",
+      "loadChunks",
+      "loadState",
+    ]);
     expect([...names].filter((name) => !drizzle.has(name)), "Convex tables without one").toEqual([]);
   });
 

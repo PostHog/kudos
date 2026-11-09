@@ -109,6 +109,38 @@ describe("the worker in the service", () => {
     expect(await (await time({ runCron: "website.clock.tick" })).json()).toMatchObject({ ran: ["website.clock.tick"] });
   });
 
+  test("while a load holds, no cron is written and no due job runs", async () => {
+    let runs = 0;
+    const counted = mutationJob("website.clock.tick", z.object({}), async () => {
+      runs += 1;
+    });
+    // A token set and no load started yet: the copy holds until its data arrives.
+    const service = await boot({
+      env: { PORT: "0", DATABASE_URL: database.url, HEDGEHUG_ADMIN_TOKEN: "a-load-token" },
+      log: captureLog().log,
+      registry: jobRegistry([counted]),
+      pollMs: 20,
+    });
+    onTestFinished(() => service.stop());
+    await service.migrated;
+    await database.pool.query(
+      `insert into jobs ("_id", "_creationTime", name, args, "runAt", kind, state) values ('due', 1, 'website.clock.tick', '{}', 0, 'mutation', 'pending')`,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    expect((await database.pool.query("select * from crons")).rows, "no cron written").toEqual([]);
+    expect((await database.pool.query("select state from jobs")).rows, "the due job waits").toEqual([{ state: "pending" }]);
+    expect(runs).toBe(0);
+  });
+
+  test("while a load holds, Slack answers 503 even with HEDGEHUG_OFF", async () => {
+    const service = await boot({ env: { PORT: "0", DATABASE_URL: database.url, HEDGEHUG_ADMIN_TOKEN: "a-load-token", HEDGEHUG_OFF: "1" }, log: captureLog().log });
+    onTestFinished(() => service.stop());
+    await service.migrated;
+
+    expect((await fetch(`http://127.0.0.1:${service.port}/slack/events`, { method: "POST", body: "{}" })).status).toBe(503);
+  });
+
   test("stop takes no new job and lets a running one finish before the connections close", async () => {
     let open!: () => void;
     const opened = new Promise<void>((resolve) => (open = resolve));

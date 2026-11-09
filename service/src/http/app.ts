@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import type { Clock } from "../clock.ts";
 import { isCronId } from "../jobs/crons.ts";
 import type { Settled, Worker } from "../jobs/worker.ts";
+import type { LoadControl } from "../load/control.ts";
 import type { Log } from "../log.ts";
 
 /**
@@ -13,8 +14,6 @@ export type Migrations = "no-database" | "pending" | "done";
 
 export interface Readiness {
   migrations(): Migrations;
-  /** The load's hold (S18): every route but `/healthz` answers 503, Slack's too, even with `HEDGEHUG_OFF`. */
-  held?(): boolean;
 }
 
 export interface AppOptions {
@@ -32,11 +31,14 @@ export interface AppOptions {
   worker?: Pick<Worker, "settle" | "runCron">;
   /** How long `/testing/time` may work before it answers, under the host's 30 s wait for response headers. */
   timeBudgetMs?: number;
+  /** The data load: its hold and, while its token is set, its `/admin/load` routes. */
+  load?: Pick<LoadControl, "held" | "routes">;
 }
 
 const slackPaths = /^\/slack(\/|$)/;
+const loadPaths = /^\/admin\/load(\/|$)/;
 
-export function createApp({ commit, readiness, off, log, clock, testSecret, worker, timeBudgetMs = 25_000 }: AppOptions): Hono {
+export function createApp({ commit, readiness, off, log, clock, testSecret, worker, timeBudgetMs = 25_000, load }: AppOptions): Hono {
   const app = new Hono();
 
   // One line per request: method, path without its query, status and duration. Never a header or a body.
@@ -55,11 +57,16 @@ export function createApp({ commit, readiness, off, log, clock, testSecret, work
   app.get("/healthz", (c) => c.json({ commit, migrations: readiness.migrations(), off }));
 
   app.use(async (c, next) => {
-    if (readiness.held?.()) return unavailable();
+    const migrated = readiness.migrations() === "done";
+    // A load's hold wins over HEDGEHUG_OFF, before the migrations too: Slack hears 503 and retries rather than an
+    // acknowledgement. Only the admin path passes it, once the migrations are done.
+    if (load?.held() && !(migrated && load.routes && loadPaths.test(c.req.path))) return unavailable();
     if (off) return slackPaths.test(c.req.path) ? c.body(null, 200) : unavailable();
-    if (readiness.migrations() !== "done") return unavailable();
+    if (!migrated) return unavailable();
     return next();
   });
+
+  if (load?.routes) app.route("/admin/load", load.routes);
 
   if (testSecret) mountTestingTime(app, testSecret, clock, worker, timeBudgetMs);
 

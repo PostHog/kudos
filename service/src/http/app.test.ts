@@ -95,7 +95,7 @@ describe("request logs", () => {
 describe("while the load holds", () => {
   test("every route but /healthz answers 503, Slack's too, even with HEDGEHUG_OFF", async () => {
     for (const off of [false, true]) {
-      const app = createApp({ commit: "0123abc", readiness: { migrations: () => "done", held: () => true }, off, log: jsonLog(() => {}), clock: createClock() });
+      const app = createApp({ commit: "0123abc", readiness: { migrations: () => "done" }, load: { held: () => true }, off, log: jsonLog(() => {}), clock: createClock() });
 
       expect((await app.request("/healthz")).status, `health, off ${off}`).toBe(200);
       expect((await app.request("/slack/events", { method: "POST", body: "{}" })).status, `Slack, off ${off}`).toBe(503);

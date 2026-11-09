@@ -56,5 +56,17 @@ Peer recognition for Slack on one Convex deployment per workspace; the product r
   handler: mountTestingTime in service/src/http/app.ts
   trust: browser
   control: none — it is mounted only when HEDGEHUG_TEST_SECRET is set, which production and the sandbox never set, and a request whose x-hedgehug-test-secret doesn't match, compared in constant time, gets the 404 of an unknown path (service/src/http/testingTime.test.ts)
+- route GET /admin/load: the operator holding HEDGEHUG_ADMIN_TOKEN reads a load's phase, its staged chunks, each entry's checkpoint and the reported -0 and NaN, never row content
+  handler: createLoadControl in service/src/load/control.ts
+  trust: browser
+- route POST /admin/load: the operator holding HEDGEHUG_ADMIN_TOKEN stages one numbered chunk of a Convex snapshot ZIP into an empty database
+  handler: createLoadControl in service/src/load/control.ts
+  trust: browser
+- route POST /admin/load/finish: the operator holding HEDGEHUG_ADMIN_TOKEN starts the load of the staged snapshot, or resumes a stopped one
+  handler: createLoadControl in service/src/load/control.ts
+  trust: browser
+- route POST /admin/load/reset: the operator holding HEDGEHUG_ADMIN_TOKEN empties every table a load wrote, before the load is done
+  handler: createLoadControl in service/src/load/control.ts
+  trust: browser
 
 ## invariants

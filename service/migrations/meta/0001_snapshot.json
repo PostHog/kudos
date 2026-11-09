@@ -1,5 +1,5 @@
 {
-  "id": "c31a403a-3996-4750-96a3-404d2f3db761",
+  "id": "461e165d-683c-419c-a03c-895d4a3a6386",
   "prevId": "4a1f6c16-6923-4dd0-bdb4-6ba09b8c61cf",
   "version": "7",
   "dialect": "postgresql",
@@ -15461,31 +15461,6 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.crons": {
-      "name": "crons",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text COLLATE \"C\"",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "nextRun": {
-          "name": "nextRun",
-          "type": "double precision",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
     "public.files": {
       "name": "files",
       "schema": "",
@@ -15535,106 +15510,116 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.jobs": {
-      "name": "jobs",
+    "public.loadCheckpoints": {
+      "name": "loadCheckpoints",
       "schema": "",
       "columns": {
-        "_id": {
-          "name": "_id",
-          "type": "text COLLATE \"C\"",
+        "entry": {
+          "name": "entry",
+          "type": "text",
           "primaryKey": true,
           "notNull": true
         },
-        "_creationTime": {
-          "name": "_creationTime",
-          "type": "double precision",
+        "lines": {
+          "name": "lines",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true
         },
-        "name": {
-          "name": "name",
-          "type": "text COLLATE \"C\"",
+        "done": {
+          "name": "done",
+          "type": "boolean",
           "primaryKey": false,
           "notNull": true
         },
-        "args": {
-          "name": "args",
+        "reports": {
+          "name": "reports",
           "type": "jsonb",
           "primaryKey": false,
           "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.loadChunks": {
+      "name": "loadChunks",
+      "schema": "",
+      "columns": {
+        "number": {
+          "name": "number",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true
         },
-        "runAt": {
-          "name": "runAt",
-          "type": "double precision",
+        "sha256": {
+          "name": "sha256",
+          "type": "text",
           "primaryKey": false,
           "notNull": true
         },
-        "kind": {
-          "name": "kind",
-          "type": "text COLLATE \"C\"",
+        "bytes": {
+          "name": "bytes",
+          "type": "bytea",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.loadState": {
+      "name": "loadState",
+      "schema": "",
+      "columns": {
+        "key": {
+          "name": "key",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "phase": {
+          "name": "phase",
+          "type": "text",
           "primaryKey": false,
           "notNull": true
         },
-        "state": {
-          "name": "state",
-          "type": "text COLLATE \"C\"",
+        "tokenHash": {
+          "name": "tokenHash",
+          "type": "text",
           "primaryKey": false,
           "notNull": true
+        },
+        "chunks": {
+          "name": "chunks",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "sha256": {
+          "name": "sha256",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         },
         "error": {
           "name": "error",
-          "type": "text COLLATE \"C\"",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "completedAt": {
-          "name": "completedAt",
-          "type": "double precision",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "deadline": {
-          "name": "deadline",
-          "type": "double precision",
+          "type": "text",
           "primaryKey": false,
           "notNull": false
         }
       },
-      "indexes": {
-        "jobs_by_state_and_runAt": {
-          "name": "jobs_by_state_and_runAt",
-          "columns": [
-            {
-              "expression": "state",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "runAt",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "_creationTime",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
+      "indexes": {},
       "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},

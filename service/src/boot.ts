@@ -6,6 +6,7 @@ import { createPool } from "./db/pool.ts";
 import { createApp, type Migrations } from "./http/app.ts";
 import type { JobRegistry } from "./jobs/define.ts";
 import { createWorker, type Worker } from "./jobs/worker.ts";
+import { createLoadControl } from "./load/control.ts";
 import { errorFields, jsonLog, type Log } from "./log.ts";
 import { createOperations, type Operations } from "./operations.ts";
 
@@ -60,19 +61,21 @@ export async function boot({
   const clock = createClock();
   const pool = databaseUrl ? createPool(databaseUrl, { connectTimeoutMs }) : undefined;
   pool?.on("error", (error) => log.error("database connection lost", errorFields(error)));
+  const load = pool ? createLoadControl({ pool, token: env.HEDGEHUG_ADMIN_TOKEN || undefined, log }) : undefined;
   const operations = pool ? createOperations({ pool, clock, log }) : undefined;
-  const held = () => false; // the load's hold: S18's load control (PostHog/kudos#903) answers this
-  const worker = operations ? createWorker({ operations, log, registry, held, ...(pollMs ? { pollMs } : {}) }) : undefined;
+  // While a load holds, no cron is written or fired and no job starts.
+  const worker = operations && load ? createWorker({ operations, log, registry, held: load.held, ...(pollMs ? { pollMs } : {}) }) : undefined;
 
   const testSecret = env.HEDGEHUG_TEST_SECRET || undefined;
   const app = createApp({
     commit: readCommit(env),
-    readiness: { migrations: () => migrations, held },
+    readiness: { migrations: () => migrations },
     off,
     log,
     clock,
     ...(testSecret ? { testSecret } : {}),
     ...(worker ? { worker } : {}),
+    ...(load ? { load } : {}),
   });
   const server = await listen(app.fetch, Number(env.PORT ?? 8080));
   const port = (server.address() as { port: number }).port;
@@ -83,8 +86,12 @@ export async function boot({
     const attempt = async () => {
       if (stopping) return;
       try {
+        // Reads the load's state first, so a held copy holds while it migrates, even with HEDGEHUG_OFF.
+        await load!.refresh();
         await runMigrations(pool);
+        await load!.refresh();
         migrations = "done";
+        load!.resume();
         log.info("migrations done");
         resolve();
         if (worker && !off) startWorker(worker);
@@ -116,6 +123,7 @@ export async function boot({
     worker,
     async stop() {
       stopping = true;
+      load?.stop();
       // Take no new job, and let the running ones finish while the connections are still open.
       await worker?.stop(jobGraceMs);
       await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));

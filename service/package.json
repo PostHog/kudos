@@ -17,11 +17,13 @@
     "drizzle-orm": "0.45.4",
     "hono": "4.13.14",
     "pg": "8.23.1",
+    "yauzl": "3.4.0",
     "zod": "4.6.7"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",
     "@types/pg": "8.23.1",
+    "@types/yauzl": "2.10.3",
     "drizzle-kit": "0.31.11",
     "embedded-postgres": "18.6.0-beta.19",
     "typescript": "^7.0.2",

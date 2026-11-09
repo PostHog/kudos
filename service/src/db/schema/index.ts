@@ -48,6 +48,7 @@ export * from "./website.ts";
 export * from "./welcome.ts";
 export * from "./workspace.ts";
 export * from "./service.ts";
+export * from "./load.ts";
 
 /** Every table's document type, by table name. */
 export type Documents = AchievementsDocuments &
