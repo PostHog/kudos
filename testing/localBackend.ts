@@ -13,14 +13,16 @@ const run = promisify(execFile);
 
 export type LocalBackend = { cloud: string; site: string; envFile: string; stop: () => Promise<void> };
 
-export type LocalBackendOptions = { instanceName: string; variables: (site: string) => Record<string, string> };
+// `signal` cancels startup: it aborts the download, the deploy and the wait, and stops whatever had started.
+export type LocalBackendOptions = { instanceName: string; variables: (site: string) => Record<string, string>; signal?: AbortSignal };
 
-export async function startLocalBackend({ instanceName, variables }: LocalBackendOptions): Promise<LocalBackend> {
+export async function startLocalBackend({ instanceName, variables, signal }: LocalBackendOptions): Promise<LocalBackend> {
+  const binary = await backendBinary(signal);
+  signal?.throwIfAborted();
   const directory = await mkdtemp(join(tmpdir(), `${instanceName}-`));
   const [cloudPort, sitePort] = [await freePort(), await freePort()];
   const cloud = `http://127.0.0.1:${cloudPort}`;
   const site = `http://127.0.0.1:${sitePort}`;
-  const binary = await backendBinary();
   const instanceSecret = randomBytes(32).toString("hex");
   const backend = spawn(binary, [
     ...["--instance-name", instanceName, "--instance-secret", instanceSecret],
@@ -35,13 +37,13 @@ export async function startLocalBackend({ instanceName, variables }: LocalBacken
     await rm(directory, { recursive: true, force: true });
   };
   try {
-    await untilAnswering(`${cloud}/version`, backend);
+    await untilAnswering(`${cloud}/version`, backend, signal);
     const envFile = join(directory, "deployment.env");
-    await writeFile(envFile, `CONVEX_SELF_HOSTED_URL=${cloud}\nCONVEX_SELF_HOSTED_ADMIN_KEY=${await adminKey(binary, instanceName, instanceSecret)}\n`);
+    await writeFile(envFile, `CONVEX_SELF_HOSTED_URL=${cloud}\nCONVEX_SELF_HOSTED_ADMIN_KEY=${await adminKey(binary, instanceName, instanceSecret, signal)}\n`);
     const variablesFile = join(directory, "variables.env");
     await writeFile(variablesFile, envLines({ ...(await signingKeys()), ...variables(site) }));
-    await convex(["env", "set", "--from-file", variablesFile, "--env-file", envFile]);
-    await convex(["deploy", "--yes", "--typecheck", "disable", "--codegen", "disable", "--env-file", envFile]);
+    await convex(["env", "set", "--from-file", variablesFile, "--env-file", envFile], signal);
+    await convex(["deploy", "--yes", "--typecheck", "disable", "--codegen", "disable", "--env-file", envFile], signal);
     return { cloud, site, envFile, stop };
   } catch (failure) {
     await stop();
@@ -63,17 +65,17 @@ function envLines(variables: Record<string, string>) {
     .join("\n");
 }
 
-async function backendBinary() {
+async function backendBinary(signal?: AbortSignal) {
   if (process.env.CONVEX_LOCAL_BACKEND) return process.env.CONVEX_LOCAL_BACKEND;
   const directory = join(homedir(), ".cache", "convex", "binaries", backendVersion);
   const binary = join(directory, "convex-local-backend");
   if (existsSync(binary)) return binary;
   await mkdir(directory, { recursive: true });
   const archive = join(directory, "backend.zip");
-  const download = await fetch(`https://github.com/get-convex/convex-backend/releases/download/${backendVersion}/convex-local-backend-${targetTriple()}.zip`);
+  const download = await fetch(`https://github.com/get-convex/convex-backend/releases/download/${backendVersion}/convex-local-backend-${targetTriple()}.zip`, { signal });
   if (!download.ok) throw new Error(`the local backend ${backendVersion} didn't download: ${download.status}`);
   await writeFile(archive, Buffer.from(await download.arrayBuffer()));
-  await run("unzip", ["-o", archive, "-d", directory]);
+  await run("unzip", ["-o", archive, "-d", directory], { signal });
   await rm(archive);
   await chmod(binary, 0o755);
   return binary;
@@ -84,13 +86,13 @@ function targetTriple() {
   return process.platform === "darwin" ? `${cpu}-apple-darwin` : `${cpu}-unknown-linux-gnu`;
 }
 
-async function adminKey(binary: string, instanceName: string, instanceSecret: string) {
-  const { stdout } = await run(binary, ["keygen", "admin-key", "--instance-name", instanceName, "--instance-secret", instanceSecret]);
+async function adminKey(binary: string, instanceName: string, instanceSecret: string, signal?: AbortSignal) {
+  const { stdout } = await run(binary, ["keygen", "admin-key", "--instance-name", instanceName, "--instance-secret", instanceSecret], { signal });
   return stdout.trim().split("\n").at(-1)!;
 }
 
-async function convex(args: string[]) {
-  await run("npx", ["--no", "--", "convex", ...args], { maxBuffer: 16 * 1024 * 1024 });
+async function convex(args: string[], signal?: AbortSignal) {
+  await run("npx", ["--no", "--", "convex", ...args], { maxBuffer: 16 * 1024 * 1024, signal });
 }
 
 export function freePort() {
@@ -102,9 +104,10 @@ export function freePort() {
   });
 }
 
-async function untilAnswering(url: string, backend: ChildProcess, withinMs = 30_000) {
+async function untilAnswering(url: string, backend: ChildProcess, signal: AbortSignal | undefined, withinMs = 30_000) {
   const deadline = Date.now() + withinMs;
   while (Date.now() < deadline) {
+    signal?.throwIfAborted();
     if (backend.exitCode !== null) throw new Error(`the local backend exited with ${backend.exitCode}`);
     if (await fetch(url).then((response) => response.ok, () => false)) return;
     await new Promise((resolve) => setTimeout(resolve, 250));

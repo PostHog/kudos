@@ -12,10 +12,12 @@ const workspace = "T1";
 const cleanups: (() => Promise<unknown>)[] = [];
 let runner: ChildProcess | undefined;
 let interrupted: NodeJS.Signals | undefined;
+const startup = new AbortController();
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {
     interrupted = signal;
+    startup.abort();
     runner?.kill(signal);
   });
 }
@@ -27,6 +29,7 @@ try {
   const signingSecret = randomBytes(24).toString("hex");
   const backend = await startLocalBackend({
     instanceName: "kudos-e2e",
+    signal: startup.signal,
     variables: (site) => ({
       SITE_URL: site,
       SLACK_API_URL: `${fakes.url}/api`,
@@ -50,7 +53,7 @@ try {
 
   if (interrupted === undefined) exitCode = await runJourneys(targetFile);
 } catch (failure) {
-  console.error(failure);
+  if (interrupted === undefined) console.error(failure);
 } finally {
   for (const cleanup of cleanups.reverse()) await cleanup().catch((failure: unknown) => console.error(failure));
 }
