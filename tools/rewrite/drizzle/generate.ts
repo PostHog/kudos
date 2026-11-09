@@ -248,7 +248,7 @@ export function generate(schema: ExportedSchema, domainOf: (table: string) => st
       `import { nullValued } from "../documents.ts";`,
     ].filter((line) => {
       const names = /import (?:type )?\{ ([^}]+) \}/.exec(line)![1]!.split(", ").map((name) => name.replace(/^type /, ""));
-      return names.some((name) => new RegExp(`\\b${name.replace("$", "\\$")}\\b`).test(`${body}\n${tables.map((t) => t.docType).join("\n")}`));
+      return names.some((name) => new RegExp(`\\b${escapeRegExp(name)}\\b`).test(`${body}\n${tables.map((t) => t.docType).join("\n")}`));
     });
     const docs = `export interface ${pascal(domain)}Documents {\n${tables.map(({ name, docType }) => `  ${name}: ${docType};`).join("\n")}\n}\n`;
     files[`${domain}.ts`] = `// Generated once from convex/schema.ts by tools/rewrite/drizzle; owned by hand from here on.\n${imports.join("\n")}\n\n${body}\n${docs}`;
@@ -278,4 +278,8 @@ function key(name: string): string {
 
 function pascal(name: string): string {
   return name.charAt(0).toUpperCase() + name.slice(1);
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
