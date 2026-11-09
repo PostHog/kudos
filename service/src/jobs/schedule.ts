@@ -1,0 +1,32 @@
+// `ctx.jobs` in a mutation: jobs are rows written in the caller's transaction, so they commit or roll back with it.
+import { and, eq } from "drizzle-orm";
+import { encodeStored, type Value } from "../db/codec.ts";
+import { jobs } from "../db/schema/service.ts";
+import type { NewRow, Transaction } from "../operations.ts";
+import type { Job } from "./define.ts";
+
+/** When a job becomes due: at an instant, or after a delay from the operation's `now`. */
+export type When = { at: number } | { after: number };
+
+export interface Scheduler {
+  /** Schedules `job` with `args`, checked by its schema, and answers the job's ID. Due now unless `when` says. */
+  enqueue<Args>(job: Job<Args>, args: Args, when?: When): Promise<string>;
+  /** Cancels a job that hasn't started; one that runs or ran keeps its state. */
+  cancel(id: string): Promise<void>;
+}
+
+export function createScheduler(tx: Transaction, now: number, newRow: () => NewRow): Scheduler {
+  return {
+    async enqueue(job, args, when = { after: 0 }) {
+      const runAt = "at" in when ? when.at : now + when.after;
+      if (!Number.isFinite(runAt)) throw new RangeError(`A job runs at a finite instant, not ${runAt}`);
+      const checked = job.args.parse(args) as Value;
+      const { _id, _creationTime } = newRow();
+      await tx.insert(jobs).values({ _id, _creationTime, name: job.name, args: encodeStored(checked), runAt, kind: job.kind, state: "pending" });
+      return _id;
+    },
+    async cancel(id) {
+      await tx.update(jobs).set({ state: "canceled", completedAt: now }).where(and(eq(jobs._id, id), eq(jobs.state, "pending")));
+    },
+  };
+}
