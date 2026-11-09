@@ -127,6 +127,24 @@ describe("mutation jobs", () => {
     expect(await jobRows()).toEqual([{ name: "album.packs.open", state: "failed", error: "TypeError: no such pack" }]);
   });
 
+  test("a mutation job that reaches for the network is marked failed like any app error, its writes rolled back, and never runs again", async () => {
+    let runs = 0;
+    const call = mutationJob("analytics.flags.call", z.object({}), async (ctx) => {
+      runs += 1;
+      await effect(ctx, "call");
+      await fetch("http://127.0.0.1:9/never");
+    });
+    const { worker, enqueue } = setUp([call]);
+    await enqueue(call, {});
+
+    await worker().settle(2_000);
+    await worker().settle(500);
+
+    expect(runs).toBe(1);
+    expect(await effects("call"), "its write rolled back").toBe(0);
+    expect(await jobRows()).toEqual([{ name: "analytics.flags.call", state: "failed", error: expect.stringContaining("never reaches the network") }]);
+  });
+
   test("an app error is marked failed before the job's claim ends: a copy that looks the moment it ends never runs it", async () => {
     let runs = 0;
     const open = mutationJob("album.packs.open", z.object({}), async (ctx) => {

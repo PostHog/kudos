@@ -155,6 +155,11 @@ export function createOperations({ pool, clock, log, maxAttempts = 10, retryDela
     const tracked = {
       query: (...args: Parameters<pg.PoolClient["query"]>) => {
         if (!scope.open) return Promise.reject(operationEnded(name));
+        // After a refused network call the attempt stands as Postgres stands a failed statement: nothing more runs
+        // until a rollback to a savepoint, which must predate the refusal and so undoes everything after it.
+        if (scope.network !== undefined && statementKind(typeof args[0] === "string" ? args[0] : (args[0] as pg.QueryConfig).text) !== "rollback to savepoint") {
+          return Promise.reject(scope.network);
+        }
         const [query, values] = args as unknown as [string | pg.QueryConfig, unknown[] | undefined];
         const config: pg.QueryConfig = typeof query === "string" ? { text: query } : { ...query };
         if (values !== undefined) config.values = values;
@@ -163,7 +168,7 @@ export function createOperations({ pool, clock, log, maxAttempts = 10, retryDela
         return client.query({ ...config, queryMode: "extended" } as pg.QueryConfig).then(
           (result) => {
             // The transaction is usable again; what failed inside the savepoint no longer aborts it.
-            if (kind === "rollback to savepoint") aborted = undefined;
+            if (kind === "rollback to savepoint") (aborted = undefined), (scope.network = undefined);
             return result;
           },
           (error: unknown) => {

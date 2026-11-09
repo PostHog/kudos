@@ -19,13 +19,14 @@ const property = z
     key: z.string(),
     type: z.string().nullish(),
     operator: z.string().nullish(),
-    // Core's matcher also takes a list of booleans, as the flags service does.
-    value: z.union([scalar, z.array(scalar)]),
+    // Core's matcher also takes a list of booleans, as the flags service does. `is_set` and `is_not_set` read none.
+    value: z.union([scalar, z.array(scalar)]).nullish(),
     negation: z.boolean().nullish(),
     dependency_chain: z.array(z.string()).optional(),
   })
   // A cohort tells a nested group from a property by a `values` field (match-property.ts, matchPropertyGroup).
-  .refine((fields) => !("values" in fields));
+  .refine((fields) => !("values" in fields))
+  .refine((fields) => fields.value != null || fields.operator === "is_set" || fields.operator === "is_not_set");
 type Group = { type: "AND" | "OR"; values: Group[] | z.infer<typeof property>[] };
 // A cohort's values are all groups or all properties: a mixed list would be read as whichever its first one is.
 const group: z.ZodType<Group> = z.lazy(() => z.looseObject({ type: z.enum(["AND", "OR"]), values: z.union([z.array(group), z.array(property)]) }));

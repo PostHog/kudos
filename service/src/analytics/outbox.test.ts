@@ -173,6 +173,22 @@ describe("the drain's wake", () => {
     expect((await drainJobs()).length, "a drain job per request, and one for the waiting rows").toBe(requests + 1);
   });
 
+  test("a request never reads or writes the drain's state: it records while another transaction holds the drain's table locked against every read", async () => {
+    const alice = await aMember();
+    const holder = await database.pool.connect();
+    await holder.query("begin");
+    await holder.query(`lock table "analyticsDrain" in access exclusive mode`);
+    try {
+      const recorded = operations.mutation("test.request", (ctx) => record(ctx, "T1", [{ event: "kudos given", subject: { member: alice }, at: now, properties: {} }]));
+      const outcome = await Promise.race([recorded.then(() => "recorded"), new Promise((resolve) => setTimeout(() => resolve("waited on the drain's state"), 2_000))]);
+
+      expect(outcome).toBe("recorded");
+    } finally {
+      await holder.query("rollback");
+      holder.release();
+    }
+  });
+
   test("a request that rolls back leaves no drain job and wakes nobody; one that commits does both", async () => {
     const alice = await aMember();
     const listener = await database.pool.connect();

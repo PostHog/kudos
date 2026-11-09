@@ -66,6 +66,9 @@ describe("the definitions check", () => {
       "nullable fields sent as null": {
         flags: [{ key: "a", active: true, ensure_experience_continuity: null, bucketing_identifier: null, filters: { groups: [{ properties: null, rollout_percentage: null, variant: null }], multivariate: null, payloads: null } }],
       },
+      "a property set or unset, whatever its value": {
+        flags: [{ key: "a", active: true, filters: { groups: [{ properties: [{ key: "plan", type: "person", operator: "is_set", value: null }, { key: "trial", type: "person", operator: "is_not_set" }] }] } }],
+      },
       "a payload that is already JSON": { flags: [{ key: "a", active: true, filters: { groups: [], payloads: { true: { columns: 2 } } } }] },
     };
 
@@ -84,6 +87,7 @@ describe("the definitions check", () => {
   test("refuses an answer with any field the evaluator reads malformed, however deep", () => {
     const malformed: Record<string, (body: Body) => void> = {
       "a string negation": (body) => (firstProperty(body).negation = "false"),
+      "no value for an operator that compares one": (body) => (firstProperty(body).value = null),
       "a non-numeric condition rollout percentage": (body) => (flag(body).filters.groups[0].rollout_percentage = "100"),
       "a rollout percentage above 100": (body) => (flag(body).filters.groups[1].rollout_percentage = 150),
       "a malformed property deep in a cohort": (body) => (deepCohortProperty(body).negation = "true"),
