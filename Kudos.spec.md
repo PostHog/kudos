@@ -15,6 +15,10 @@ Peer recognition for Slack on one Convex deployment per workspace; the product r
   handler: slack-app/render-manifest.ts
   trust: operator
   control: none — it reads only its two arguments and prints a manifest that holds no secret; it reaches no deployment
+- run e2e: a maintainer or CI runs the E2E suite against today's app on a disposable local backend
+  handler: e2e/local/run.ts
+  trust: operator
+  control: none — it starts its own local backend and fakes on loopback ports with fresh synthetic secrets, and reaches no other deployment
 - action signIn: a browser starts a Slack sign-in, redeems the one-time code with its verifier, or refreshes a session
   handler: signIn in convex/auth.ts
   trust: browser

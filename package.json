@@ -11,14 +11,17 @@
     "coherence": "coherence spec --check && coherence lexicon --check",
     "gate": "pnpm typecheck && pnpm test && pnpm coherence",
     "website:build": "pnpm --dir website build",
-    "test:handshake": "vitest run --config vitest.handshake.config.ts"
+    "test:handshake": "vitest run --config vitest.handshake.config.ts",
+    "e2e": "node e2e/local/run.ts"
   },
   "packageManager": "pnpm@12.11.2",
   "devDependencies": {
+    "@e2e-dev/web": "0.15.4",
     "@edge-runtime/vm": "^5.0.0",
     "@posthog/coherence": "^1.7.2",
     "@types/node": "^26.6.5",
     "convex-test": "^0.0.61",
+    "e2e": "0.22.0",
     "jose": "^6.2.12",
     "typescript": "^7.0.2",
     "typescript5": "npm:typescript@5.9.3",

@@ -1,0 +1,33 @@
+import { readFileSync } from "node:fs";
+import { parseEnv } from "node:util";
+
+export type Target = {
+  appUrl: string;
+  signingSecret: string;
+  workspace: string;
+  appId: string;
+  fakesUrl: string;
+};
+
+const names = {
+  appUrl: "KUDOS_APP_URL",
+  signingSecret: "KUDOS_SLACK_SIGNING_SECRET",
+  workspace: "KUDOS_SLACK_WORKSPACE",
+  appId: "KUDOS_SLACK_APP_ID",
+  fakesUrl: "KUDOS_FAKES_URL",
+} as const satisfies Record<keyof Target, string>;
+
+export function targetLines(target: Target) {
+  return (Object.keys(names) as Array<keyof Target>).map((key) => `${names[key]}=${target[key]}\n`).join("");
+}
+
+export function targetOf(file = process.env.E2E_TARGET): Target {
+  if (!file) throw new Error("E2E_TARGET names no target file: run `pnpm e2e` for the local app, or set E2E_TARGET to a target's env file (see e2e/README.md)");
+  const variables = parseEnv(readFileSync(file, "utf8"));
+  const read = (key: keyof Target) => {
+    const value = variables[names[key]];
+    if (!value) throw new Error(`the target file ${file} sets no ${names[key]}`);
+    return value;
+  };
+  return { appUrl: read("appUrl"), signingSecret: read("signingSecret"), workspace: read("workspace"), appId: read("appId"), fakesUrl: read("fakesUrl") };
+}

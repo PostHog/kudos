@@ -1,8 +1,6 @@
 packages:
   - website
   - service
-# A newly published version waits a week before an install may pick it.
-minimumReleaseAge: 10080
 allowBuilds:
   # Restores the symlinks of the Postgres binaries the service's tests start.
   "@embedded-postgres/darwin-arm64": true
@@ -12,3 +10,4 @@ allowBuilds:
   esbuild: false
 patchedDependencies:
   convex-test@0.0.61: patches/convex-test@0.0.61.patch
+minimumReleaseAge: 10080

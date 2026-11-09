@@ -4,3 +4,6 @@ node_modules/
 
 # Written by the image build.
 service/COMMIT
+
+# The E2E runner's reports, traces and logs
+e2e/.e2e/
