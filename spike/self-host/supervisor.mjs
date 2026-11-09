@@ -109,13 +109,22 @@ const adminKey = (await run("/convex/convex-local-backend", ["keygen", "admin-ke
 // The push runs in a short-lived child so the memory it takes to read and send the push request is returned.
 await new Promise((resolve, reject) => {
   const child = spawn("node", ["/app/spike/push.mjs"], {
-    stdio: ["ignore", "inherit", "inherit"],
+    stdio: ["ignore", "inherit", "inherit", "ipc"],
     env: { ...process.env, SPIKE_SKIP_PUSH: skipPush ? "1" : "", SPIKE_STARTED_AT: String(startedAt), SPIKE_LOCAL: local, SPIKE_ADMIN_KEY: adminKey, SPIKE_PUBLIC_URL: publicUrl },
+  });
+  // The push asks for a mirrored, read-back copy of every blob before finish_push commits the module rows that point at
+  // them, so no crash can leave committed references to blobs only the lost disk held.
+  child.on("message", (message) => {
+    if (message?.type !== "mirror-before-commit") return;
+    syncing = syncing.then(() => mirror.sync(storageDir));
+    syncing.then((result) => { mark("blobs-mirrored", { why: "before-commit", ...result }); child.send({ ok: true }); }, (error) => child.send({ ok: false, error: String(error) }));
   });
   child.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`the push exited with ${code}`))));
 });
 for (const name of Object.keys(process.env)) if (name.startsWith("CONVEX_ENV_")) delete process.env[name];
-await syncBlobs("push");
+// Fail closed: the digest is recorded only once every blob is mirrored and read back.
+syncing = syncing.then(() => mirror.sync(storageDir));
+mark("blobs-mirrored", { why: "push", ...(await syncing) });
 if (!skipPush) await mirror.markDeployed(digest);
 setInterval(() => syncBlobs("interval"), 5000).unref();
 

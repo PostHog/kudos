@@ -13,7 +13,8 @@ COPY . .
 RUN pnpm --dir website build
 RUN mkdir /pgclient && cd /pgclient && printf '{"name":"spike-pg","private":true}' > package.json && pnpm add pg@8.16.3
 ARG EMBED_FONTS=1
-RUN if [ "$EMBED_FONTS" = 1 ]; then node spike/self-host/embed-fonts.mjs; fi
+ARG CARD_RENDER=executor
+RUN if [ "$CARD_RENDER" = outside ]; then node spike/self-host/card-render-outside.mjs; elif [ "$EMBED_FONTS" = 1 ]; then node spike/self-host/embed-fonts.mjs; fi
 
 # Bundle at build time: run the CLI once against a throwaway backend and keep the push request it would send,
 # with every module in it, so the running container replays it without the CLI or esbuild.

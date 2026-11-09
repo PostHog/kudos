@@ -6,6 +6,7 @@ on:
     branches: [prototype/self-host-convex]
     paths: [spike/**, .github/workflows/spike-measure.yml]
 
+
 permissions:
   contents: read
 
@@ -13,6 +14,16 @@ jobs:
   measure:
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: executor
+            build_args: ""
+            serve_knobs: ""
+          - variant: outside
+            build_args: --build-arg CARD_RENDER=outside
+            serve_knobs: SCHEDULED_JOB_EXECUTION_PARALLELISM=2
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -31,11 +42,13 @@ jobs:
       - run: spike/self-host/measure.sh
         env:
           OUT: ${{ runner.temp }}/measure
+          BUILD_ARGS: ${{ matrix.build_args }}
+          SERVE_KNOBS: ${{ matrix.serve_knobs }}
 
       - if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: measure-amd64
+          name: measure-amd64-${{ matrix.variant }}
           path: |
             ${{ runner.temp }}/measure
             !${{ runner.temp }}/measure/app-*.env

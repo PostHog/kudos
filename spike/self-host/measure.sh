@@ -4,6 +4,7 @@
 #   1. first boot on an empty database (the push), with 4 isolate workers, the count whose push fits in 512 MiB;
 #   2. restart from the blob mirror (push skipped), with 8 workers, then a signed burst of team_join and kudos;
 #   3. overlap: a second copy starts while the first serves a kudos stream; the first stops 5 s after the second listens.
+# BUILD_ARGS passes docker build flags (e.g. --build-arg CARD_RENDER=outside); SERVE_KNOBS adds backend knobs to step 2.
 # Every number lands in $OUT. Needs docker, node 24 with this repo's node_modules (for jose), curl and openssl.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -14,12 +15,12 @@ mkdir -p "$OUT"
 uname -m > "$OUT/arch.txt"
 dmesg_from=$(sudo -n dmesg 2>/dev/null | wc -l || echo 0)
 
-docker build -f $here/Dockerfile -t "$IMAGE" . > "$OUT/build.log" 2>&1
+docker build ${BUILD_ARGS:-} -f $here/Dockerfile -t "$IMAGE" . > "$OUT/build.log" 2>&1
 $here/run.sh pg > "$OUT/pg.log" 2>&1
 
 common="APPLICATION_MAX_CONCURRENT_NODE_ACTIONS=2 INDEX_CACHE_SIZE=33554432 UDF_CACHE_MAX_SIZE=16777216 SHARED_UDF_CACHE_MAX_SIZE=33554432 FUNRUN_MODULE_CACHE_SIZE=33554432 FUNRUN_CODE_CACHE_SIZE=33554432 FUNRUN_INDEX_CACHE_SIZE=16777216 SOURCE_MAP_CACHE_MAX_SIZE_BYTES=16777216 INDEX_BACKFILL_WORKERS=1"
 printf '%s\n' MAX_ISOLATE_WORKERS=4 APPLICATION_MAX_CONCURRENT_V8_ACTIONS=4 $common > "$OUT/knobs-push.env"
-printf '%s\n' MAX_ISOLATE_WORKERS=8 APPLICATION_MAX_CONCURRENT_V8_ACTIONS=8 $common > "$OUT/knobs-serve.env"
+printf '%s\n' MAX_ISOLATE_WORKERS=8 APPLICATION_MAX_CONCURRENT_V8_ACTIONS=8 $common ${SERVE_KNOBS:-} > "$OUT/knobs-serve.env"
 
 step() { echo "== $*"; }
 snapshot() { $here/run.sh stats "$1" > "$OUT/stats-$2.txt" 2>&1 || true; docker logs "spike-$1" > "$OUT/$1-$2.log" 2>&1 || true; }

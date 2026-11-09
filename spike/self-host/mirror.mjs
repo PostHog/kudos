@@ -39,6 +39,8 @@ export async function openMirror(databaseUrl, ssl) {
       const local = new Map();
       for (const file of await filesUnder(root)) local.set(relative(root, file), file);
       const { rows } = await client.query("SELECT path, size FROM blob_mirror");
+      // An empty listing beside a non-empty mirror is a read failure or a wiped disk, never a reason to delete.
+      if (local.size === 0 && rows.length > 0) throw new Error(`the storage directory lists no files but the mirror holds ${rows.length}`);
       const mirrored = new Map(rows.map((row) => [row.path, Number(row.size)]));
       let added = 0;
       let removed = 0;
@@ -54,6 +56,10 @@ export async function openMirror(databaseUrl, ssl) {
         await client.query("DELETE FROM blob_mirror WHERE path = $1", [path]);
         removed += 1;
       }
+      // Read back what the mirror holds for every local file, so a caller can rely on it before it commits references.
+      const { rows: after } = await client.query("SELECT path, size FROM blob_mirror");
+      const held = new Map(after.map((row) => [row.path, Number(row.size)]));
+      for (const [path, file] of local) if (held.get(path) !== (await stat(file)).size) throw new Error(`the mirror does not hold ${path}`);
       return { added, removed, files: local.size };
     },
     close: () => client.end(),
@@ -61,6 +67,9 @@ export async function openMirror(databaseUrl, ssl) {
 }
 
 async function filesUnder(root) {
-  const entries = await readdir(root, { withFileTypes: true, recursive: true }).catch(() => []);
+  const entries = await readdir(root, { withFileTypes: true, recursive: true }).catch((error) => {
+    if (error.code === "ENOENT") return [];
+    throw error;
+  });
   return entries.filter((entry) => entry.isFile()).map((entry) => join(entry.parentPath, entry.name));
 }

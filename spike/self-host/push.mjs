@@ -53,6 +53,11 @@ if (process.env.SPIKE_SKIP_PUSH) {
     if (status.type !== "inProgress") throw new Error(`schema ${status.type}: ${JSON.stringify(status).slice(0, 500)}`);
   }
   mark("schema-ready");
+  if (process.send) {
+    const answer = await new Promise((resolve) => { process.once("message", resolve); process.send({ type: "mirror-before-commit" }); });
+    if (!answer.ok) throw new Error(`the blob mirror failed before commit: ${answer.error}`);
+    mark("blobs-mirrored-before-commit");
+  }
   await admin("/api/deploy2/finish_push", { adminKey, startPush: started, dryRun: false }, true);
   mark("functions-deployed", counts);
 }
@@ -60,3 +65,4 @@ if (!envSet) await setEnv();
 
 for (const requestDestination of ["convexCloud", "convexSite"]) await admin("/api/update_canonical_url", { requestDestination, url: publicUrl });
 mark("canonical-urls-set", { publicUrl });
+process.disconnect?.();
