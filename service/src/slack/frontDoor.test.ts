@@ -262,6 +262,7 @@ describe("/slack/interactivity", () => {
     expect(answered.status).toBe(200);
     expect(await answered.json()).toEqual({ options: [{ value: `ta@${clock.now()}` }] });
     expect(await (await ask("another-select")).json()).toEqual({ options: [] });
+    for (const inherited of ["toString", "constructor", "__proto__", "hasOwnProperty"]) expect(await (await ask(inherited)).json(), inherited).toEqual({ options: [] });
   });
 
   test("a member's click runs its handlers in order in one transaction, once per trigger", async () => {

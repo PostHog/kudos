@@ -119,7 +119,7 @@ export function createFrontDoor({ signingSecret, clock, off, log, operations, ha
     if (body === null || off) return acknowledged();
     const payload = payloadOf(body);
     if (isOptionsRequest(payload)) {
-      const options = handlers.options?.[payload.action_id];
+      const options = handlers.options && Object.hasOwn(handlers.options, payload.action_id) ? handlers.options[payload.action_id] : undefined;
       return c.json({ options: options ? await database().query(`slack.options.${payload.action_id}`, (ctx) => options(ctx, payload)) : [] });
     }
     if (!isMemberClick(payload)) return acknowledged();

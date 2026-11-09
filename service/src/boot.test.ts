@@ -2,6 +2,7 @@ import { createHmac } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { createServer, connect, type Server, type Socket } from "node:net";
 import { fileURLToPath } from "node:url";
+import { Hono } from "hono";
 import pg from "pg";
 import { describe, expect, inject, onTestFinished, test } from "vitest";
 import { boot } from "./boot.ts";
@@ -124,6 +125,23 @@ describe("the worker in the service", () => {
     await time({ advance: 60_000 });
     expect(await (await time({ settle: true })).json()).toMatchObject({ ran: ["website.clock.tick"] });
     expect(await (await time({ runCron: "website.clock.tick" })).json()).toMatchObject({ ran: ["website.clock.tick"] });
+  });
+
+  test("a domain's website routes run on the service's operations and clock", async () => {
+    const registry = createRegistry({
+      website: { routes: ({ operations, clock }) => new Hono().get("/api/now", async (c) => c.json({ now: clock.now(), queried: await operations.query("website.test.now", async ({ now }) => now) })) },
+    });
+    const service = await boot({ env: { PORT: "0", DATABASE_URL: database.url, HEDGEHUG_TEST_SECRET: "s3cret" }, log: captureLog().log, registry, pollMs: 3_600_000 });
+    onTestFinished(() => service.stop());
+    await service.migrated;
+    const now = async () => (await (await fetch(`http://127.0.0.1:${service.port}/api/now`)).json()) as { now: number; queried: number };
+
+    const before = await now();
+    await fetch(`http://127.0.0.1:${service.port}/testing/time`, { method: "POST", headers: { "x-hedgehug-test-secret": "s3cret" }, body: JSON.stringify({ advance: 3_600_000 }) });
+    const after = await now();
+
+    expect(after.now - before.now).toBeGreaterThanOrEqual(3_600_000);
+    expect(after.queried - before.queried).toBeGreaterThanOrEqual(3_600_000);
   });
 
   test("while a load holds, no cron is written and no due job runs", async () => {

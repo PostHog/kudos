@@ -80,7 +80,8 @@ export async function boot({
     ...(worker ? { worker } : {}),
     ...(load ? { load } : {}),
     slack,
-    routes: registry.routes,
+    // Without a database no domain route could answer: the gate holds every one at 503.
+    routes: operations ? registry.routes.map((routes) => routes({ operations, clock, log })) : [],
   });
   const server = await listen(app.fetch, Number(env.PORT ?? 8080));
   const port = (server.address() as { port: number }).port;

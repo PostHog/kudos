@@ -4,7 +4,7 @@ import type { Clock } from "../clock.ts";
 import { isCronId } from "../jobs/crons.ts";
 import type { Settled, Worker } from "../jobs/worker.ts";
 import type { LoadControl } from "../load/control.ts";
-import type { Log } from "../log.ts";
+import { errorFields, type Log } from "../log.ts";
 
 /**
  * Where the database is on its way to serving: `no-database` until a `DATABASE_URL` is set (the host's first boot),
@@ -35,7 +35,7 @@ export interface AppOptions {
   load?: Pick<LoadControl, "held" | "routes">;
   /** Slack's front door, mounted at `/slack`. Without it, Slack's routes answer only `HEDGEHUG_OFF`'s 200. */
   slack?: Hono;
-  /** The domains' website routes, mounted at the root behind the gate. */
+  /** The domains' website routes, mounted at the root behind the gate, after the app's own paths. */
   routes?: Hono[];
 }
 
@@ -76,7 +76,16 @@ export function createApp({ commit, readiness, off, log, clock, testSecret, work
   if (testSecret) mountTestingTime(app, testSecret, clock, worker, timeBudgetMs);
 
   if (slack) app.route("/slack", slack);
+  // The app's own paths: a domain's route never answers them, whatever the front door, the seam or the load mounted.
+  for (const reserved of ["/healthz", "/slack", "/slack/*", "/testing/*", "/admin/load", "/admin/load/*"]) app.all(reserved, (c) => c.notFound());
   for (const domainRoutes of routes) app.route("/", domainRoutes);
+
+  // A failure answers 500; the log names the path and the error's class and code, never its message, which may quote
+  // SQL parameters or a member's words. Hono's default would print the whole error.
+  app.onError((error, c) => {
+    log.error("request failed", { path: c.req.path, ...errorFields(error) });
+    return c.text("Internal Server Error", 500);
+  });
 
   return app;
 }
