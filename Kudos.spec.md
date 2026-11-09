@@ -52,5 +52,17 @@ Peer recognition for Slack on one Convex deployment per workspace; the product r
   handler: createApp in service/src/http/app.ts
   trust: browser
   control: none — it reads no row and no secret; it answers the commit the image was built from and two states
+- route GET /admin/load: the operator holding HEDGEHUG_ADMIN_TOKEN reads a load's phase, its staged chunks, each entry's checkpoint and the reported -0 and NaN, never row content
+  handler: createLoadControl in service/src/load/control.ts
+  trust: browser
+- route POST /admin/load: the operator holding HEDGEHUG_ADMIN_TOKEN stages one numbered chunk of a Convex snapshot ZIP into an empty database
+  handler: createLoadControl in service/src/load/control.ts
+  trust: browser
+- route POST /admin/load/finish: the operator holding HEDGEHUG_ADMIN_TOKEN starts the load of the staged snapshot, or resumes a stopped one
+  handler: createLoadControl in service/src/load/control.ts
+  trust: browser
+- route POST /admin/load/reset: the operator holding HEDGEHUG_ADMIN_TOKEN empties every table a load wrote, before the load is done
+  handler: createLoadControl in service/src/load/control.ts
+  trust: browser
 
 ## invariants
