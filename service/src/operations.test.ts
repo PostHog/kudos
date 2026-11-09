@@ -154,7 +154,7 @@ describe("the transaction", () => {
           // holds the client, its error is this override's to catch.
           const meanwhile = () => {};
           client.on("error", meanwhile);
-          await pool.query("select pg_terminate_backend($1, 5000)", [client.processID]);
+          await pool.query("select pg_terminate_backend($1, 5000)", [(client as pg.PoolClient & { processID: number }).processID]);
           client.removeListener("error", meanwhile);
         }
         return client;
