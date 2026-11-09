@@ -573,6 +573,31 @@ describe("no network inside a mutation or query", () => {
     }
   });
 
+  test("a refusal outside the fence fails the mutation even while the fence undoes its own", async () => {
+    const { operations } = setUp();
+    let refuseOutside!: () => void;
+    const outsideRefused = new Promise<void>((resolve) => (refuseOutside = resolve));
+    let insideRefused!: () => void;
+    const refusedInside = new Promise<void>((resolve) => (insideRefused = resolve));
+
+    await expect(
+      operations.mutation("both refused", async ({ tx }) => {
+        await tx.insert(counters).values({ id: "before", n: 1 });
+        const fenced = fence(async () => {
+          await fetchesOk().catch(() => "swallowed");
+          insideRefused();
+          await outsideRefused; // the call outside is refused while the fence is still pending
+        }).catch(() => "marked failed");
+        await refusedInside;
+        await fetchesOk().catch(() => "swallowed outside");
+        refuseOutside();
+        await fenced;
+        await tx.insert(counters).values({ id: "after", n: 1 }).catch(() => "swallowed too");
+      }),
+    ).rejects.toMatchObject({ name: "NetworkInOperationError" });
+    expect((await pool.query("select * from counters")).rows, "nothing commits").toEqual([]);
+  });
+
   test("one fence per attempt: never twice, never nested, never outside an operation", async () => {
     const { operations } = setUp();
 

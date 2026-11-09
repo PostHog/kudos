@@ -83,6 +83,9 @@ interface Scope {
   name: string;
   open: boolean;
   network?: Error;
+  /** A refusal behind the operation's fence: it fails the operation unless the fence undoes it. Apart from `network`, so
+   *  the fence never clears a refusal of the operation's own. */
+  networkBehind?: Error;
   parent?: Scope;
   /** A fence's scope once the fence undid it: whatever it left running writes nothing more. */
   undone?: boolean;
@@ -102,7 +105,7 @@ export function refuseNetworkInOperation(what: string): void {
   error.name = "NetworkInOperationError";
   scope.network ??= error;
   // Behind the fence, the operation fails too, unless the fence undoes it first: a stray refusal after that fails it.
-  if (scope.parent) scope.parent.network ??= error;
+  if (scope.parent) scope.parent.networkBehind ??= error;
   throw error;
 }
 
@@ -197,7 +200,7 @@ export function createOperations({ pool, clock, log, maxAttempts = 10, retryDela
         // refused.
         const current = running.getStore();
         const behind = current?.parent === scope ? current : undefined;
-        const refused = scope.network ?? behind?.network;
+        const refused = scope.network ?? scope.networkBehind ?? behind?.network;
         if (refused !== undefined) return Promise.reject(refused);
         if (behind?.undone) return Promise.reject(operationEnded(name));
         const [query, values] = args as unknown as [string | pg.QueryConfig, unknown[] | undefined];
@@ -247,7 +250,7 @@ export function createOperations({ pool, clock, log, maxAttempts = 10, retryDela
       if (!scope.open) throw failure.error;
       await client.query(`rollback to savepoint ${savepoint}`);
       aborted = undefined;
-      if (scope.network === behind.network) scope.network = undefined;
+      scope.networkBehind = undefined;
       throw failure.error;
     }
     try {
@@ -258,11 +261,12 @@ export function createOperations({ pool, clock, log, maxAttempts = 10, retryDela
       let result: T;
       try {
         result = await running.run(scope, () => handler(drizzle({ client: tracked as unknown as pg.PoolClient })));
-        if (scope.network) throw scope.network;
+        const refused = scope.network ?? scope.networkBehind;
+        if (refused) throw refused;
       } catch (error) {
         scope.open = false;
         await client.query("ROLLBACK").catch((rollbackError: unknown) => (broken ??= rollbackError));
-        throw scope.network ?? error;
+        throw scope.network ?? scope.networkBehind ?? error;
       }
       scope.open = false;
       const commit = await client.query("COMMIT").catch((error: unknown) => {
