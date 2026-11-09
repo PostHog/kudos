@@ -42,17 +42,20 @@ const withSlack = base.extend<{ slack: Slack; website: Website }>({
 });
 
 export const test = withSlack.extend<{ time: AppTime }>({
-  // Each step tells Slack the app's new time, since Slack's clock is the app's.
+  // Each step tells Slack the app's new time, since Slack's clock is the app's. The runner sets up every fixture for
+  // every journey, so a target without a time seam, such as a hosted one, fails only a journey that moves the clock.
   time: async ({ slack }, use) => {
     const { timeUrl, testSecret } = targetOf();
-    if (testSecret === undefined) throw new Error("the target sets no KUDOS_TEST_SECRET, so the app's clock can't move: run journeys tagged @time only against a target with a time seam");
-    const seam = appTime(timeUrl!, testSecret);
+    const seam = () => {
+      if (testSecret === undefined) throw new Error("the target sets no KUDOS_TEST_SECRET, so the app's clock can't move: run journeys tagged @time only against a target with a time seam");
+      return appTime(timeUrl!, testSecret);
+    };
     const followed = (step: () => Promise<number>) => step().then((now) => (slack.followClock(now), now));
     await use({
-      now: () => followed(() => seam.now()),
-      advance: (ms) => followed(() => seam.advance(ms)),
-      runCron: (id) => followed(() => seam.runCron(id)),
-      settle: () => followed(() => seam.settle()),
+      now: () => followed(() => seam().now()),
+      advance: (ms) => followed(() => seam().advance(ms)),
+      runCron: (id) => followed(() => seam().runCron(id)),
+      settle: () => followed(() => seam().settle()),
     });
   },
 });

@@ -16,6 +16,11 @@ export type Target = {
   // move, so its journeys tagged @time can't run.
   timeUrl?: string;
   testSecret?: string;
+  // A target on the hosting platform, as the promotion gate runs (see journeys tagged @sandbox): its real edge in front,
+  // real Slack behind, and no fakes, so it names no KUDOS_FAKES_URL and runs only journeys that need none.
+  hosted?: boolean;
+  // Where a hosted edge sends a visitor who hasn't signed in: the start of its sign-in URL.
+  edgeSignInUrl?: string;
 };
 
 export const targetKinds = ["oracle", "rewrite"] as const;
@@ -36,6 +41,8 @@ const names = {
   signIn: "KUDOS_SIGN_IN",
   timeUrl: "KUDOS_TIME_URL",
   testSecret: "KUDOS_TEST_SECRET",
+  hosted: "KUDOS_HOSTED",
+  edgeSignInUrl: "KUDOS_EDGE_SIGN_IN_URL",
 } as const satisfies Record<keyof Target, string>;
 
 export function targetLines(target: Target) {
@@ -56,6 +63,7 @@ export function targetOf(file = process.env.E2E_TARGET): Target {
   const appUrl = read("appUrl");
   const kind = variables[names.kind] ?? "oracle";
   if (!(targetKinds as readonly string[]).includes(kind)) throw new Error(`the target file ${file} sets ${names.kind}=${kind}, but a target runs only ${targetKinds.join(" or ")}`);
+  const hosted = variables[names.hosted] === "true";
   const signIn = variables[names.signIn] ?? "slack-openid";
   if (!(signInMechanisms as readonly string[]).includes(signIn)) throw new Error(`the target file ${file} sets ${names.signIn}=${signIn}, but journeys sign in only by ${signInMechanisms.join(", ")}`);
   return {
@@ -64,10 +72,12 @@ export function targetOf(file = process.env.E2E_TARGET): Target {
     signingSecret: read("signingSecret"),
     workspace: read("workspace"),
     appId: read("appId"),
-    fakesUrl: read("fakesUrl"),
+    fakesUrl: hosted ? "" : read("fakesUrl"),
     signIn: signIn as SignInMechanism,
     // The rewrite serves the seam beside its other routes; the local runner serves today's app's seam itself.
     timeUrl: variables[names.timeUrl] || `${appUrl}/testing/time`,
     testSecret: variables[names.testSecret] || undefined,
+    hosted,
+    edgeSignInUrl: variables[names.edgeSignInUrl] || undefined,
   };
 }

@@ -6,7 +6,7 @@ import { expect, test } from "../test.ts";
 
 const onlyTheRewrite = targetOf().kind === "rewrite" ? false : "today's app has no health check; only the rewrite answers /healthz";
 
-test("the rewrite answers its health check with the commit it runs, its migrations done", { skip: onlyTheRewrite }, async () => {
+test("the rewrite answers its health check with the commit it runs, its migrations done", { skip: onlyTheRewrite, tags: ["@sandbox"] }, async () => {
   const answer = await fetch(`${targetOf().appUrl}/healthz`);
 
   expect(answer.status).toBe(200);

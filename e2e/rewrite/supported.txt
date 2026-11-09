@@ -7,3 +7,4 @@
 # merges second. A journey only the rewrite can pass skips on today's app (see journeys/health.e2e.ts).
 journeys/health.e2e.ts
 journeys/frontDoor.e2e.ts
+journeys/sandbox.e2e.ts
