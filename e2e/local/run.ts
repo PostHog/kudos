@@ -1,10 +1,12 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { constants, tmpdir } from "node:os";
 import { join } from "node:path";
+import { parseEnv } from "node:util";
 import { flagsKey, projectToken } from "../../testing/fakePostHog.ts";
-import { killGroup, startLocalBackend } from "../../testing/localBackend.ts";
+import { killGroup, startLocalBackend, type LocalBackend } from "../../testing/localBackend.ts";
+import { clientId, clientSecret } from "../../testing/slackOpenId.ts";
 import { startFakes } from "../fakes/server.ts";
 import { startClock } from "./clock.ts";
 import { targetLines, type Target } from "../target.ts";
@@ -26,14 +28,18 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
 
 let exitCode = 1;
 try {
-  const fakes = await startFakes();
+  let backend: LocalBackend | undefined;
+  const fakes = await startFakes({ flagsChanged: () => loadFlags(backend!) });
   cleanups.push(fakes.stop);
   const signingSecret = randomBytes(24).toString("hex");
-  const backend = await startLocalBackend({
+  backend = await startLocalBackend({
     instanceName: "kudos-e2e",
     signal: startup.signal,
     variables: (site) => ({
       SITE_URL: site,
+      SLACK_OIDC_ISSUER: fakes.url,
+      AUTH_SLACK_ID: clientId,
+      AUTH_SLACK_SECRET: clientSecret,
       SLACK_API_URL: `${fakes.url}/api`,
       SLACK_SIGNING_SECRET: signingSecret,
       SLACK_BOT_TOKEN: "xoxb-e2e",
@@ -47,9 +53,13 @@ try {
   });
   cleanups.push(backend.stop);
   // The flags component loads definitions only when its supervising cron first runs, minutes after a deploy, so the
-  // app would read every flag as off until then. Load them now, before the first journey.
-  const loaded = await backend.run("lib:refreshFlagDefinitions", { component: "posthog" });
-  if (!loaded.includes('"updated"')) throw new Error(`the app didn't load the fakes' flag definitions: ${loaded}`);
+  // app would read every flag as off until then. Load them now, before the first journey, and again whenever a
+  // journey changes them.
+  await loadFlags(backend);
+  // The website reads its flag for the workspace, which needs the workspace's analytics key; production's workspace
+  // had one long before it was paused, and a fresh backend makes it at its first kudos. Make it now.
+  await backend.run("website/flag:prepareWebsiteFlag");
+  await publishWebsite(backend, startup.signal);
 
   const directory = await mkdtemp(join(tmpdir(), "kudos-e2e-target-"));
   cleanups.push(() => rm(directory, { recursive: true, force: true }));
@@ -58,7 +68,7 @@ try {
   const testSecret = randomBytes(24).toString("hex");
   const clock = await startClock(backend, { secret: testSecret, components: ["posthog", "staticHosting"] });
   cleanups.push(clock.stop);
-  const target: Target = { appUrl: backend.site, signingSecret, workspace, appId, fakesUrl: fakes.url, timeUrl: clock.url, testSecret };
+  const target: Target = { appUrl: backend.site, signingSecret, workspace, appId, fakesUrl: fakes.url, signIn: "slack-openid", timeUrl: clock.url, testSecret };
   await writeFile(targetFile, targetLines(target), { mode: 0o600 });
 
   // Moving the clock restarts the backend and catches every cron up at once, so with no filter of the caller's the
@@ -74,6 +84,34 @@ try {
   for (const cleanup of cleanups.reverse()) await cleanup().catch((failure: unknown) => console.error(failure));
 }
 process.exit(interrupted === undefined ? exitCode : 128 + constants.signals[interrupted]);
+
+async function loadFlags(backend: LocalBackend) {
+  const loaded = await backend.run("lib:refreshFlagDefinitions", { component: "posthog" });
+  if (!loaded.includes('"updated"')) throw new Error(`the app didn't load the fakes' flag definitions: ${loaded}`);
+}
+
+// Builds the website against this backend and uploads it to the backend's static hosting, as a deploy does.
+async function publishWebsite(backend: LocalBackend, signal: AbortSignal) {
+  const dist = await mkdtemp(join(tmpdir(), "kudos-e2e-website-"));
+  cleanups.push(() => rm(dist, { recursive: true, force: true }));
+  const deployment = parseEnv(await readFile(backend.envFile, "utf8"));
+  await finished(["pnpm", "--dir", "website", "exec", "vite", "build", "--logLevel", "warn", "--outDir", dist, "--emptyOutDir"], { VITE_CONVEX_URL: backend.cloud }, signal);
+  await finished(["npx", "--no", "--", "static-hosting", "upload", "--dist", dist], deployment, signal);
+}
+
+function finished([command, ...args]: string[], env: Record<string, string | undefined>, signal: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    const child = spawn(command!, args, { stdio: ["ignore", "ignore", "inherit"], detached: true, env: { ...process.env, ...env } });
+    const abort = () => killGroup(child);
+    signal.addEventListener("abort", abort, { once: true });
+    child.once("error", reject);
+    child.once("exit", (code) => {
+      signal.removeEventListener("abort", abort);
+      if (code === 0) resolve();
+      else reject(new Error(`${command} ${args.join(" ")} exited with ${code}`));
+    });
+  });
+}
 
 function runJourneys(targetFile: string, filters: string[]) {
   return new Promise<number>((resolve) => {
