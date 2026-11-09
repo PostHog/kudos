@@ -6,21 +6,21 @@ Every user-facing behaviour of HedgeHug, inventoried from the code and the specs
 
 - [x] A thank-you with the kudos emoji marks the message and tells the giver privately what's left today (`giving.e2e.ts`)
 - [x] The last kudos of the day says so, and a thank-you beyond the allowance waits under an hourglass (`giving.e2e.ts`)
-- [ ] Several people in one message, and a repeated emoji, each get their share
-- [ ] A thank-you in a thread answers in the thread
-- [ ] A private channel counts like a public one; direct messages, group DMs and bots' messages don't count
-- [ ] Mentions that can't receive kudos are skipped with a reason: yourself, a bot, someone who left, `@here`, `@channel` and user groups
-- [ ] Editing a message that gave nothing gives kudos; editing one that gave kudos changes nothing and says so
-- [ ] Editing a message over the allowance down to what's left swaps the hourglass for the kudos emoji
-- [ ] Deleting a message takes its mark away
-- [ ] A redelivered event gives nothing twice
-- [ ] A giver or recipient the app doesn't know yet is looked up, and the kudos lands when Slack answers
-- [ ] Slack's rate limit delays the mark, never loses it
+- [x] Several people in one message, and a repeated emoji, each get their share (`giving.e2e.ts`)
+- [x] A thank-you in a thread answers in the thread (`giving.e2e.ts`)
+- [x] A private channel counts like a public one; direct messages, group DMs and bots' messages don't count (`where.e2e.ts`)
+- [x] Mentions that can't receive kudos are skipped with a reason: yourself, a bot, someone who left, `@here`, `@channel` and user groups (`mentions.e2e.ts`)
+- [x] Editing a message that gave nothing gives kudos; editing one that gave kudos changes nothing and says so (`edits.e2e.ts`)
+- [x] Editing a message over the allowance down to what's left swaps the hourglass for the kudos emoji (`edits.e2e.ts`)
+- [x] A redelivered event gives nothing twice (`giving.e2e.ts`)
+- [x] A giver or recipient the app doesn't know yet is looked up, and the kudos lands when Slack answers (every journey: its members are new to the app)
+- [ ] A member Slack doesn't know yet at first lands at a later lookup (clock: the next lookup is a minute on)
+- [x] Slack's rate limit delays the mark, never loses it (`giving.e2e.ts`)
 - [ ] The allowance refills at the giver's midnight (clock)
 
 ## Slash commands
 
-- [ ] `/hedgehug` in a channel joins it, and says so when it is already in, can't join a private channel, stays out of shared and customer channels, or is run in a direct message
+- [x] `/hedgehug` in a channel joins it, and says so when it is already in, can't join a private channel, stays out of shared and customer channels, or is run in a direct message (`join.e2e.ts`)
 - [ ] `/hedgehug @someone` shows their profile card, or says why it can't (flags)
 - [ ] `/hedgehug leaderboard`, `month` and `all` show the boards, and a wrong period shows how to ask (flags)
 
@@ -65,6 +65,7 @@ Every user-facing behaviour of HedgeHug, inventoried from the code and the specs
 
 ## Website
 
+- [ ] A deleted message leaves the activity and the spotlight; Slack takes its reactions away itself, and HedgeHug calls Slack for nothing (browser)
 - [ ] A member signs in with Slack and lands where they started, and the refusals the handshake suite proves create no session (browser)
 - [ ] While the website is closed nobody signs in, and an unverified person never reads as a member (browser, flags)
 - [ ] Activity, leaderboard, quests, skills, the book and settings show the member's own data (browser, flags)

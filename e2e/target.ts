@@ -5,6 +5,7 @@ export type Target = {
   appUrl: string;
   signingSecret: string;
   workspace: string;
+  appId: string;
   fakesUrl: string;
 };
 
@@ -12,6 +13,7 @@ const names = {
   appUrl: "KUDOS_APP_URL",
   signingSecret: "KUDOS_SLACK_SIGNING_SECRET",
   workspace: "KUDOS_SLACK_WORKSPACE",
+  appId: "KUDOS_SLACK_APP_ID",
   fakesUrl: "KUDOS_FAKES_URL",
 } as const satisfies Record<keyof Target, string>;
 
@@ -27,5 +29,5 @@ export function targetOf(file = process.env.E2E_TARGET): Target {
     if (!value) throw new Error(`the target file ${file} sets no ${names[key]}`);
     return value;
   };
-  return { appUrl: read("appUrl"), signingSecret: read("signingSecret"), workspace: read("workspace"), fakesUrl: read("fakesUrl") };
+  return { appUrl: read("appUrl"), signingSecret: read("signingSecret"), workspace: read("workspace"), appId: read("appId"), fakesUrl: read("fakesUrl") };
 }

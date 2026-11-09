@@ -1,30 +1,39 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { FakePostHog, type FlagDefinition } from "../../testing/fakePostHog.ts";
-import { FakeSlack, type SlackUser } from "../../testing/fakeSlack.ts";
+import { FakeSlack, rateLimitedFor, type SlackUser } from "../../testing/fakeSlack.ts";
 
 export type Fakes = { url: string; stop: () => Promise<void> };
 
 export async function startFakes(): Promise<Fakes> {
   const slack = new FakeSlack();
   const postHog = new FakePostHog();
-  const server = createServer((request, response) => void route(slack, postHog, request, response).catch((failure) => answer(response, new Response(String(failure), { status: 500 }))));
+  const responses = new Map<string, unknown[]>();
+  const server = createServer((request, response) => void route({ slack, postHog, responses }, request, response).catch((failure) => answer(response, new Response(String(failure), { status: 500 }))));
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const { port } = server.address() as AddressInfo;
   return { url: `http://127.0.0.1:${port}`, stop: () => new Promise((resolve) => server.close(() => resolve())) };
 }
 
-async function route(slack: FakeSlack, postHog: FakePostHog, request: IncomingMessage, response: ServerResponse) {
+type State = { slack: FakeSlack; postHog: FakePostHog; responses: Map<string, unknown[]> };
+
+async function route({ slack, postHog, responses }: State, request: IncomingMessage, response: ServerResponse) {
   const url = new URL(request.url ?? "/", "http://fakes");
   const body = await bodyOf(request);
-  if (url.pathname.startsWith("/_control/")) return answer(response, control(slack, postHog, url, body));
+  if (url.pathname.startsWith("/_control/")) return answer(response, control({ slack, postHog, responses }, url, body));
+  // A slash command's response URL: the app posts its answer to the command here.
+  if (url.pathname.startsWith("/responses/")) {
+    const reply = url.pathname.slice("/responses/".length);
+    responses.set(reply, [...(responses.get(reply) ?? []), JSON.parse(body)]);
+    return answer(response, new Response("ok"));
+  }
   const init = { method: request.method ?? "GET", headers: headersOf(request), ...(body !== "" && { body }) };
   if (url.pathname.startsWith("/api/")) return answer(response, await slack.fetch(url, { ...init, ...(body !== "" && { body: jsonArguments(request, body) }) }));
   if (url.pathname === "/flags/definitions") return answer(response, await postHog.fetch(url, init));
   answer(response, await postHog.fetch(url, init).catch(() => new Response(null, { status: 200 })));
 }
 
-function control(slack: FakeSlack, postHog: FakePostHog, url: URL, body: string) {
+function control({ slack, postHog, responses }: State, url: URL, body: string) {
   const query = (name: string) => url.searchParams.get(name) ?? "";
   switch (url.pathname) {
     case "/_control/members": {
@@ -32,6 +41,22 @@ function control(slack: FakeSlack, postHog: FakePostHog, url: URL, body: string)
       slack.withMember(id, options);
       return Response.json({ ok: true });
     }
+    case "/_control/channels": {
+      const { id, ...options } = JSON.parse(body) as { id: string } & Parameters<FakeSlack["withChannel"]>[1];
+      slack.withChannel(id, options);
+      return Response.json({ ok: true });
+    }
+    case "/_control/rate-limits": {
+      const { method, channel, seconds } = JSON.parse(body) as { method: string; channel: string; seconds: number };
+      slack.answeringIn(method, channel, rateLimitedFor(seconds));
+      return Response.json({ ok: true });
+    }
+    case "/_control/call-times":
+      return Response.json(slack.timesOf(query("method"), (args) => args.channel === query("channel")));
+    case "/_control/joined":
+      return Response.json(slack.hasJoined(query("channel")));
+    case "/_control/responses":
+      return Response.json(responses.get(query("reply")) ?? []);
     case "/_control/flags":
       postHog.withFlags(...(JSON.parse(body) as FlagDefinition[]));
       return Response.json({ ok: true });
