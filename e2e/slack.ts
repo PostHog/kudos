@@ -21,13 +21,16 @@ export type PostOptions = { channel?: string; channelType?: ChannelType; threadT
 
 export type Posted = { channel: string; ts: string; channelType: ChannelType; user: string; elements: RichElement[]; threadTs?: string };
 
-export type MemberOptions = { is_bot?: boolean; deleted?: boolean; is_admin?: boolean };
+export type MemberOptions = { is_bot?: boolean; deleted?: boolean; is_admin?: boolean; real_name?: string };
 
 export type ChannelKind = "public" | "private" | "shared" | "pending-shared";
 
 export type SlackCall = Record<string, unknown>;
 
 export type View = { type: string; blocks: Block[] };
+
+// A message the app posted, as Slack shows it now: after any update, with the ts that names it.
+export type Shown = { channel: string; ts: string; threadTs?: string; text: string; blocks?: Block[] };
 
 export type Block = { type: string; text?: { text: string }; elements?: Element[]; accessory?: Element };
 
@@ -53,6 +56,36 @@ export class Slack {
     const id = uniqueId("C");
     await this.control("channels", { id, name, kind, joined });
     return { id, name };
+  }
+
+  // Someone creates a public channel: Slack tells the app with channel_created. `name` lets a journey name it like a
+  // customer channel or one meant to be shared.
+  async createChannel({ name = `e2e-${uniqueId("").toLowerCase()}` } = {}) {
+    const channel = await this.channel("public", { name });
+    await this.sendEvent({ type: "channel_created", channel: { id: channel.id, name, created: Math.floor(Date.now() / 1000), creator: uniqueId("U") }, event_ts: uniqueTs() });
+    return channel;
+  }
+
+  // A channel the app is in becomes shared with another organization, as Slack tells it.
+  async shareChannel({ id }: { id: string }) {
+    await this.control("share-channel", { id });
+    await this.sendEvent({ type: "channel_shared", connected_team_id: uniqueId("T"), channel: id, event_ts: uniqueTs() });
+  }
+
+  // A channel is renamed, as Slack tells it.
+  async renameChannel({ id }: { id: string }, name: string) {
+    await this.control("rename-channel", { id, name });
+    await this.sendEvent({ type: "channel_rename", channel: { id, name, created: Math.floor(Date.now() / 1000) }, event_ts: uniqueTs() });
+    return { id, name };
+  }
+
+  // Someone creates a user group of `users` in Slack, which tells the app with subteam_created.
+  async userGroup(users: string[]) {
+    const id = uniqueId("S");
+    const handle = `e2e-${id.toLowerCase()}`;
+    await this.control("user-groups", { id, teamId: this.target.workspace, handle, name: `Group ${id}`, users });
+    await this.sendEvent({ type: "subteam_created", subteam: { id, team_id: this.target.workspace, handle, name: `Group ${id}` }, event_ts: uniqueTs() });
+    return id;
   }
 
   // A direct message between members: a D… conversation the app is no part of, so Slack answers its lookups with
@@ -206,6 +239,11 @@ export class Slack {
   // Direct messages the app sent a member: to the member's id as the channel, or to the DM conversations.open gave it.
   async dmsTo(user: string) {
     return (await this.callsTo("chat.postMessage")).filter((call) => call.channel === user || call.channel === directMessageWith(user));
+  }
+
+  // The messages the app posted in a channel, oldest first, each as it shows now. A member's id names their DM.
+  messagesIn(channel: string) {
+    return this.read<Shown[]>("messages", { channel });
   }
 
   // The App Home views the app published for a member, oldest first.

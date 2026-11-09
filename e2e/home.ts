@@ -39,6 +39,14 @@ export function chosen(view: View, about: string) {
   return (block === undefined ? undefined : elementsOf(block).find((element) => element.type === "static_select"))?.initial_option?.text.text;
 }
 
+// The channel `channel` picked in the channel picker of the block that reads `about`, as Slack sends it.
+export function channelPick(view: View, about: string, channel: string): Action {
+  const block = view.blocks.find((candidate) => candidate.text?.text.includes(about));
+  const picker = block === undefined ? undefined : elementsOf(block).find((element) => element.type === "channels_select");
+  if (picker?.action_id === undefined) throw new Error(`App Home shows no channel picker for ${about}`);
+  return { type: "channels_select", action_id: picker.action_id, selected_channel: channel };
+}
+
 function buttonsOf(block: Block | undefined) {
   return block === undefined ? [] : elementsOf(block).filter((element) => element.type === "button");
 }
