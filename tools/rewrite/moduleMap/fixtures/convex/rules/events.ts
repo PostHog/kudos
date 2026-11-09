@@ -20,6 +20,7 @@ export const cheerEventValidator = domainEvent({
   tallies: v.record(v.string(), v.union(v.number(), v.record(v.string(), v.boolean()))),
 });
 export type CheerEvent = Infer<typeof cheerEventValidator>;
+export type CheerShape = typeof cheerEventValidator.type;
 
 export const loudnessValidator = v.union(...toneValidator.members, v.literal("quiet"), v.literal(2), v.literal(3n), v.literal(false));
 export const tones: readonly string[] = toneValidator.members.map(({ value }) => value);

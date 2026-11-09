@@ -8,11 +8,13 @@ import { v } from "convex/values";
 import ts from "typescript5";
 import { afterAll, describe, expect, test } from "vitest";
 import { z } from "../../../service/node_modules/zod/index.js";
+import { NotPortedError } from "../../../service/src/notPorted.ts";
 import { zv } from "../../../service/src/values.ts";
 import { closureCheck } from "./closure.ts";
 import { convertModule } from "./codemod.ts";
 import { copyModule, importOnlyDiff } from "./copy.ts";
 import { disagreements } from "./equivalence.ts";
+import { reachedByName, skeletonModule } from "./skeleton.ts";
 
 const repo = fileURLToPath(new URL("../../..", import.meta.url));
 const fixtures = fileURLToPath(new URL("./fixtures", import.meta.url));
@@ -24,6 +26,37 @@ const landed = <T extends object>(result: T | { refusals: string[] }): T => {
   if ("refusals" in result) throw new Error(result.refusals.join("\n"));
   return result;
 };
+const compilerOptions = { strict: true, module: ts.ModuleKind.ESNext, moduleResolution: ts.ModuleResolutionKind.Bundler, noEmit: true, skipLibCheck: true };
+
+/**
+ * A scratch service: tools' output lands beside re-exports of the service's own modules it imports, with the
+ * service's packages, so it typechecks under the service's compiler options and imports for real.
+ */
+function scratchService(serviceModules: string[], output: Array<{ servicePath: string; text: string }>) {
+  const scratch = mkdtempSync(join(tmpdir(), "module-map-"));
+  afterAll(() => rmSync(scratch, { recursive: true, force: true }));
+  symlinkSync(join(repo, "service/node_modules"), join(scratch, "node_modules"));
+  writeFileSync(join(scratch, "package.json"), JSON.stringify({ type: "module" }));
+  const write = (path: string, text: string) => {
+    mkdirSync(dirname(join(scratch, path)), { recursive: true });
+    writeFileSync(join(scratch, path), text);
+  };
+  for (const module of serviceModules) {
+    write(`src/${module}`, `export * from ${JSON.stringify(pathToFileURL(join(repo, "service/src", module)).href.replace("file://", ""))};\n`);
+  }
+  const files = output.map(({ servicePath, text }) => {
+    write(relative("service", servicePath), text);
+    return join(scratch, relative("service", servicePath));
+  });
+  return {
+    path: (servicePath: string) => join(scratch, relative("service", servicePath)),
+    diagnostics: () => {
+      const options = ts.parseJsonConfigFileContent(JSON.parse(readFileSync(join(repo, "service/tsconfig.json"), "utf8")), ts.sys, scratch).options;
+      const diagnostics = ts.getPreEmitDiagnostics(ts.createProgram(files, options)).filter(({ file }) => file && files.includes(file.fileName));
+      return diagnostics.map(({ file, start, messageText }) => `${relative(scratch, file!.fileName)}:${file!.getLineAndCharacterOfPosition(start!).line + 1}: ${ts.flattenDiagnosticMessageText(messageText, "\n")}`);
+    },
+  };
+}
 
 describe("the copy tool", () => {
   const source = read("convex/pure/format.ts");
@@ -100,7 +133,7 @@ describe("the closure check", () => {
 
 describe("the codemod", () => {
   const modules = ["convex/rules/shared.ts", "convex/rules/events.ts", "convex/ctx/unconvertible.ts", "convex/ctx/handler.ts"];
-  const program = ts.createProgram(modules.map(onDisk), { strict: true, module: ts.ModuleKind.ESNext, moduleResolution: ts.ModuleResolutionKind.Bundler, noEmit: true, skipLibCheck: true });
+  const program = ts.createProgram(modules.map(onDisk), compilerOptions);
   const convert = (path: string) => convertModule(program, program.getSourceFile(onDisk(path))!, path, exists);
   const shared = landed(convert("convex/rules/shared.ts"));
   const events = landed(convert("convex/rules/events.ts"));
@@ -124,6 +157,7 @@ export const toneValidator = z.union([z.literal("warm"), z.literal("loud")]);
       "  note: z.union([z.string(), z.null()]),",
       "  tallies: z.record(z.string(), z.union([zv.number(), z.record(z.string(), z.boolean())])),",
       "export type CheerEvent = z.infer<typeof cheerEventValidator>;",
+      "export type CheerShape = z.infer<typeof cheerEventValidator>;",
       'export const loudnessValidator = z.union([...toneValidator.options, z.literal("quiet"), z.literal(2), z.literal(3n), z.literal(false)]);',
       "export const tones: readonly string[] = toneValidator.options.map(({ value }) => value);",
       "export const nothingValidator = z.never();",
@@ -143,36 +177,23 @@ export const toneValidator = z.union([z.literal("warm"), z.literal("loud")]);
         "convex/ctx/unconvertible.ts:3: v.any has no zod counterpart here",
         "convex/ctx/unconvertible.ts:4: reads kind of a Convex validator, which zod has no counterpart for",
         "convex/ctx/unconvertible.ts:5: uses v other than as a call or a type",
+        "convex/ctx/unconvertible.ts:7: reads isOptional of a Convex validator, which zod has no counterpart for",
+        "convex/ctx/unconvertible.ts:8: reads fields of a Convex validator, which zod has no counterpart for",
       ],
     });
     expect(convert("convex/ctx/handler.ts")).toEqual({ refusals: ["convex/ctx/handler.ts: imports ../_generated/server, which the service has no counterpart for"] });
   });
 
   describe("its output in the service", () => {
-    // The output lands in a scratch tree beside the service's own modules it imports, with the service's packages.
-    const scratch = mkdtempSync(join(tmpdir(), "module-map-"));
-    afterAll(() => rmSync(scratch, { recursive: true, force: true }));
-    symlinkSync(join(repo, "service/node_modules"), join(scratch, "node_modules"));
-    writeFileSync(join(scratch, "package.json"), JSON.stringify({ type: "module" }));
-    const write = (path: string, text: string) => {
-      mkdirSync(dirname(join(scratch, path)), { recursive: true });
-      writeFileSync(join(scratch, path), text);
-    };
-    for (const module of ["values.ts", "db/columns.ts", "db/schema/index.ts"]) {
-      write(`src/${module}`, `export * from ${JSON.stringify(pathToFileURL(join(repo, "service/src", module)).href.replace("file://", ""))};\n`);
-    }
-    for (const { servicePath, text } of [shared, events]) write(relative("service", servicePath), text);
+    const scratch = scratchService(["values.ts", "db/columns.ts", "db/schema/index.ts"], [shared, events]);
 
     test("typechecks under the service's compiler options", () => {
-      const options = ts.parseJsonConfigFileContent(JSON.parse(readFileSync(join(repo, "service/tsconfig.json"), "utf8")), ts.sys, scratch).options;
-      const files = [join(scratch, "src/rules/events.ts"), join(scratch, "src/rules/shared.ts")];
-      const diagnostics = ts.getPreEmitDiagnostics(ts.createProgram(files, options)).filter(({ file }) => file && files.includes(file.fileName));
-      expect(diagnostics.map(({ messageText }) => ts.flattenDiagnosticMessageText(messageText, "\n"))).toEqual([]);
+      expect(scratch.diagnostics()).toEqual([]);
     }, 60_000); // a whole program: seconds alone, longer beside the gate's other workers
 
     test("accepts and rejects what each Convex validator does", async () => {
       const convexModules = { shared: await import("./fixtures/convex/rules/shared.ts"), events: await import("./fixtures/convex/rules/events.ts") };
-      const zodModules = { shared: await import(join(scratch, "src/rules/shared.ts")), events: await import(join(scratch, "src/rules/events.ts")) };
+      const zodModules = { shared: await import(scratch.path(shared.servicePath)), events: await import(scratch.path(events.servicePath)) };
       const compared: string[] = [];
       for (const name of ["shared", "events"] as const) {
         for (const [exported, validator] of Object.entries(convexModules[name]).filter(([key]) => key.endsWith("Validator"))) {
@@ -192,5 +213,125 @@ describe("the equivalence check", () => {
     );
     expect(disagreements(v.id("members"), zv.id("members"))).toEqual([]);
     expect(disagreements(v.int64(), z.bigint())).toEqual(['"9223372036854775808n": Convex rejects, zod accepts']);
+  });
+});
+
+describe("the skeleton generator", () => {
+  const modules = ["convex/skeleton/awards.ts", "convex/skeleton/caller.ts", "convex/skeleton/tangled.ts"];
+  const program = ts.createProgram(modules.map(onDisk), compilerOptions);
+  const sourceFiles = modules.map((module) => program.getSourceFile(onDisk(module))!);
+  const reached = reachedByName(sourceFiles);
+  const skeleton = (index: number) => skeletonModule(program, sourceFiles[index]!, modules[index]!, reached, exists);
+  const awards = landed(skeleton(0));
+
+  test("finds every function reached by name: run in place by an action, or later by the scheduler, a cron or the bus", () => {
+    expect(Object.fromEntries([...reached].map(([path, how]) => [path, [...how]]))).toEqual({
+      "skeleton.awards.notifyAll": ["job"],
+      "skeleton.awards.sweepAwards": ["job"],
+      "skeleton.awards.memberOf": ["run"],
+      "skeleton.awards.recordAward": ["run"],
+    });
+  });
+
+  test("lands what needs no context as it is, and every other export another module reaches as a stub in the service's types", () => {
+    expect(awards.servicePath).toBe("service/src/skeleton/awards.ts");
+    expect(awards.text).toBe(`// The module map's skeleton of convex/skeleton/awards.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
+// notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
+import { z } from "zod";
+import { zv } from "../values.ts";
+import type { Id } from "../db/columns.ts";
+import type { Doc } from "../db/schema/index.ts";
+import type { ActionContext, MutationContext, QueryContext } from "../operations.ts";
+import { notPorted, notPortedValue } from "../notPorted.ts";
+import { mutationJob, actionJob } from "../jobs/define.ts";
+
+export const awardIdValidator = z.union([z.literal("first"), z.literal("tenth")]);
+export type AwardId = z.infer<typeof awardIdValidator>;
+
+const DAY = 86_400_000;
+
+/** The day an award counts on. */
+export function dayOf(at: number): number {
+  return Math.floor(at / DAY);
+}
+
+type Tally = { member: Id<"members">; count: number };
+
+export type Hook = { claims: (ctx: QueryContext, text: string) => Promise<boolean> };
+
+export const awardHook: Hook = notPortedValue("skeleton.awards.awardHook");
+
+export async function tallyOf(ctx: QueryContext, member: Id<"members">): Promise<Tally> {
+  throw notPorted("skeleton.awards.tallyOf");
+}
+
+export async function grant(ctx: MutationContext, member: Id<"members">, award: AwardId): Promise<void> {
+  throw notPorted("skeleton.awards.grant");
+}
+
+export function kindOf(): string {
+  throw notPorted("skeleton.awards.kindOf");
+}
+
+export const recordAwardArgs = z.strictObject({ member: zv.id("members"), award: awardIdValidator });
+export async function recordAward(ctx: MutationContext, args: z.infer<typeof recordAwardArgs>): Promise<null> {
+  throw notPorted("skeleton.awards.recordAward");
+}
+
+export const sweepAwardsArgs = z.strictObject({ before: z.optional(zv.number()) });
+export async function sweepAwards(ctx: MutationContext, args: z.infer<typeof sweepAwardsArgs>): Promise<void> {
+  throw notPorted("skeleton.awards.sweepAwards");
+}
+export const sweepAwardsJob = mutationJob("skeleton.awards.sweepAwards", sweepAwardsArgs, sweepAwards);
+
+export const memberOfArgs = z.strictObject({ member: zv.id("members") });
+export async function memberOf(ctx: QueryContext, args: z.infer<typeof memberOfArgs>): Promise<null | Doc<"members">> {
+  throw notPorted("skeleton.awards.memberOf");
+}
+
+export const notifyAllArgs = z.strictObject({ note: z.string() });
+export async function notifyAll(ctx: ActionContext, args: z.infer<typeof notifyAllArgs>): Promise<null | Doc<"members">> {
+  throw notPorted("skeleton.awards.notifyAll");
+}
+export const notifyAllJob = actionJob("skeleton.awards.notifyAll", notifyAllArgs, notifyAll);
+`);
+    expect(awards.omitted).toEqual(["nobodyCalls: a registered query no module reaches by name"]);
+  });
+
+  test("leaves out Convex's machinery and what nobody reaches, and refuses an export that needs either", () => {
+    expect(landed(skeleton(1)).omitted).toEqual(["scheduled: Convex's machinery, not a function or value over a context", "kickOff: a registered action no module reaches by name"]);
+    expect(skeleton(2)).toEqual({
+      refusals: [
+        "convex/skeleton/tangled.ts:4: Target is over a context or Convex's machinery, and an export that lands needs it",
+        "convex/skeleton/tangled.ts:8: reads kind of a Convex validator, which zod has no counterpart for",
+      ],
+    });
+  });
+
+  describe("its output in the service", () => {
+    const serviceModules = ["values.ts", "notPorted.ts", "operations.ts", "jobs/define.ts", "db/columns.ts", "db/schema/index.ts", "db/page.ts"];
+    const scratch = scratchService(serviceModules, [awards]);
+
+    test("typechecks under the service's compiler options", () => {
+      expect(scratch.diagnostics()).toEqual([]);
+    }, 60_000);
+
+    test("runs: the real exports work, a stub fails by its Convex path, and a job carries its name, kind and args", async () => {
+      const module = await import(scratch.path(awards.servicePath));
+      expect(module.dayOf(2 * 86_400_000 + 1)).toBe(2);
+      expect(module.awardIdValidator.parse("tenth")).toBe("tenth");
+
+      await expect(module.recordAward({}, { member: "m", award: "first" })).rejects.toThrow(new NotPortedError("skeleton.awards.recordAward"));
+      await expect(module.tallyOf({}, "m")).rejects.toMatchObject({ path: "skeleton.awards.tallyOf" });
+      expect(() => module.kindOf()).toThrow(NotPortedError);
+      expect(() => module.awardHook.claims).toThrow("skeleton.awards.awardHook is not ported yet");
+
+      expect(module.sweepAwardsJob).toMatchObject({ name: "skeleton.awards.sweepAwards", kind: "mutation", handler: module.sweepAwards });
+      expect(module.notifyAllJob).toMatchObject({ name: "skeleton.awards.notifyAll", kind: "action", handler: module.notifyAll });
+      expect(module.sweepAwardsJob.args.safeParse({ before: Number.NaN }).success).toBe(true);
+      expect(module.sweepAwardsJob.args.safeParse({ after: 1 }).success).toBe(false);
+      expect(module.memberOfJob).toBeUndefined(); // a query runs in place, never later
+      expect(module.recordAwardJob).toBeUndefined(); // only run in place
+    });
   });
 });

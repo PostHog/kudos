@@ -44,14 +44,49 @@ const members: Record<string, Record<string, string>> = {
   VLiteral: { value: "value" },
   VArray: { element: "element" },
 };
-const validatorClasses = /^V(Object|Union|Literal|Array|String|Float64|Int64|Boolean|Null|Any|Id|Bytes|Record|Optional)$/;
+const validatorClasses = /^V(Object|Union|Literal|Array|String|Float64|Int64|Boolean|Null|Any|Id|Bytes|Record|Optional|CommitTs)$/;
+
+export interface Edit {
+  start: number;
+  end: number;
+  text: string;
+}
+
+/** The codemod's edits to a module's validators and their types, and what it refused, each by where it starts. */
+export interface ValidatorEdits {
+  edits: Edit[];
+  refusals: Array<{ start: number; message: string }>;
+  valuesImport?: ts.ImportDeclaration;
+}
 
 export function convertModule(program: ts.Program, sourceFile: ts.SourceFile, convexPath: string, exists: (path: string) => boolean): Landed {
-  const checker = program.getTypeChecker();
-  const text = sourceFile.text;
-  const refusals: string[] = [];
-  const at = (node: ts.Node) => `${convexPath}:${sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1}`;
-  const edits: Array<{ start: number; end: number; text: string }> = [];
+  const { edits, refusals, valuesImport } = validatorEdits(program.getTypeChecker(), sourceFile, convexPath);
+  const servicePath = servicePathOf(convexPath);
+  const plan = planImports(sourceFile, convexPath, exists, (specifier) =>
+    specifier === "convex/values" ? true : convexPackage.test(specifier) ? "a converted module declares validators only; rewrite it" : true,
+  );
+  const refused = [...refusals.map(({ message }) => message), ...plan.refusals];
+  if (refused.length > 0) return { refusals: refused };
+  if (valuesImport) edits.push({ start: valuesImport.getStart(sourceFile), end: valuesImport.getEnd(), text: zodImports(servicePath, edits, valuesImport.importClause?.isTypeOnly) });
+  else if (edits.some(({ text }) => /^zv?\./.test(text))) {
+    // A module that only reads another module's validators: `typeof x.type` is `z.infer` now.
+    const first = sourceFile.statements[0]!.getStart(sourceFile);
+    edits.push({ start: first, end: first, text: `${zodImports(servicePath, edits, true)}\n` });
+  }
+  return { servicePath, text: applyEdits(sourceFile.text, [...plan.edits, ...edits]) };
+}
+
+/** The imports a converted text needs in place of convex/values: zod, and the service's `zv` when an edit uses it. */
+export function zodImports(servicePath: string, edits: readonly Edit[], typeOnly = false): string {
+  const usesZv = edits.some(({ text }) => text.startsWith("zv."));
+  return [`import ${typeOnly ? "type " : ""}{ z } from "zod";`, ...(usesZv ? [`import { zv } from "${specifierFrom(servicePath, `${serviceRoot}/values.ts`)}";`] : [])].join("\n");
+}
+
+export function validatorEdits(checker: ts.TypeChecker, sourceFile: ts.SourceFile, convexPath: string): ValidatorEdits {
+  const refusals: ValidatorEdits["refusals"] = [];
+  const refuse = (node: ts.Node, message: string) =>
+    refusals.push({ start: node.getStart(sourceFile), message: `${convexPath}:${sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1}: ${message}` });
+  const edits: Edit[] = [];
   const replace = (start: number, end: number, replacement: string) => edits.push({ start, end, text: replacement });
 
   // The names this module takes from convex/values, by their symbols, so a local of the same name isn't touched.
@@ -62,12 +97,12 @@ export function convertModule(program: ts.Program, sourceFile: ts.SourceFile, co
     valuesImport = statement;
     const named = statement.importClause?.namedBindings;
     if (statement.importClause?.name || !named || !ts.isNamedImports(named)) {
-      refusals.push(`${at(statement)}: a default or namespace import of convex/values`);
+      refuse(statement, `a default or namespace import of convex/values`);
       continue;
     }
     for (const element of named.elements) {
       const name = (element.propertyName ?? element.name).text;
-      if (name !== "v" && !(name in types)) refusals.push(`${at(element)}: imports ${name} from convex/values, which has no zod counterpart here`);
+      if (name !== "v" && !(name in types)) refuse(element, `imports ${name} from convex/values, which has no zod counterpart here`);
       imported.set(checker.getSymbolAtLocation(element.name)!, name);
     }
   }
@@ -76,18 +111,16 @@ export function convertModule(program: ts.Program, sourceFile: ts.SourceFile, co
     return symbol ? imported.get(symbol) : undefined;
   };
 
-  let usesZv = false;
   const visit = (node: ts.Node): void => {
     if (ts.isImportDeclaration(node)) return;
     if (ts.isIdentifier(node) && (node.text === "z" || node.text === "zv") && !convexName(node)) {
-      refusals.push(`${at(node)}: names ${node.text}, which the converted module imports`);
+      refuse(node, `names ${node.text}, which the converted module imports`);
     } else if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && ts.isIdentifier(node.expression.expression) && convexName(node.expression.expression) === "v") {
       const kind = node.expression.name.text;
       const target = calls[kind];
-      if (!target) refusals.push(`${at(node)}: v.${kind} has no zod counterpart here`);
+      if (!target) refuse(node, `v.${kind} has no zod counterpart here`);
       else if (kind === "union" && node.arguments.length === 0) replace(node.getStart(sourceFile), node.getEnd(), "z.never()");
       else {
-        usesZv ||= target.startsWith("zv.");
         replace(node.expression.getStart(sourceFile), node.expression.getEnd(), target);
         if (kind === "union") {
           replace(node.arguments.pos, node.arguments.pos, "[");
@@ -99,7 +132,7 @@ export function convertModule(program: ts.Program, sourceFile: ts.SourceFile, co
     } else if (ts.isTypeReferenceNode(node) && ts.isIdentifier(node.typeName) && convexName(node.typeName)) {
       const name = convexName(node.typeName)!;
       const convert = types[name];
-      if (!convert) refusals.push(`${at(node)}: ${name} is no type`);
+      if (!convert) refuse(node, `${name} is no type`);
       else {
         // Type arguments are converted in place, then wrapped: their own edits stay inside their ranges.
         const args = node.typeArguments ?? ts.factory.createNodeArray<ts.TypeNode>();
@@ -111,18 +144,24 @@ export function convertModule(program: ts.Program, sourceFile: ts.SourceFile, co
         return;
       }
     } else if (ts.isIdentifier(node) && convexName(node) && !(ts.isPropertyAccessExpression(node.parent) && node.parent.name === node)) {
-      refusals.push(`${at(node)}: uses ${convexName(node)} other than as a call or a type`);
+      refuse(node, `uses ${convexName(node)} other than as a call or a type`);
+    } else if (ts.isTypeQueryNode(node) && ts.isQualifiedName(node.exprName) && validatorClassOf(checker.getTypeAtLocation(node.exprName.left))) {
+      // `typeof validator.type` is the type it accepts, `z.infer` of the schema.
+      const { left, right } = node.exprName;
+      if (right.text !== "type") refuse(node, `reads ${right.text} of a Convex validator, which zod has no counterpart for`);
+      else replace(node.getStart(sourceFile), node.getEnd(), `z.infer<typeof ${left.getText(sourceFile)}>`);
+      return;
     } else if (ts.isPropertyAccessExpression(node)) {
-      const validatorClass = checker.getTypeAtLocation(node.expression).getSymbol()?.getName();
-      if (validatorClass && validatorClasses.test(validatorClass)) {
+      const validatorClass = validatorClassOf(checker.getTypeAtLocation(node.expression));
+      if (validatorClass) {
         const renamed = members[validatorClass]?.[node.name.text];
-        if (!renamed) refusals.push(`${at(node)}: reads ${node.name.text} of a Convex validator, which zod has no counterpart for`);
+        if (!renamed) refuse(node, `reads ${node.name.text} of a Convex validator, which zod has no counterpart for`);
         else if (renamed !== node.name.text) replace(node.name.getStart(sourceFile), node.name.getEnd(), renamed);
         else if (renamed === "omit" || renamed === "pick") {
           // Convex names the fields as arguments, zod as the keys of a mask.
           const call = node.parent;
           const names = ts.isCallExpression(call) && call.expression === node ? call.arguments : undefined;
-          if (!names || names.length === 0 || !names.every(ts.isStringLiteral)) refusals.push(`${at(node)}: ${renamed}s fields it doesn't name as strings`);
+          if (!names || names.length === 0 || !names.every(ts.isStringLiteral)) refuse(node, `${renamed}s fields it doesn't name as strings`);
           else replace(names.pos, names.end, `{ ${names.map((name) => `${name.getText(sourceFile)}: true`).join(", ")} }`);
         }
       }
@@ -130,19 +169,18 @@ export function convertModule(program: ts.Program, sourceFile: ts.SourceFile, co
     ts.forEachChild(node, visit);
   };
   visit(sourceFile);
+  return { edits, refusals, valuesImport };
+}
 
-  const servicePath = servicePathOf(convexPath);
-  const plan = planImports(sourceFile, convexPath, exists, (specifier) =>
-    specifier === "convex/values" ? true : convexPackage.test(specifier) ? "a converted module declares validators only; rewrite it" : true,
-  );
-  refusals.push(...plan.refusals);
-  if (refusals.length > 0) return { refusals };
-  if (valuesImport) {
-    const typeOnly = valuesImport.importClause?.isTypeOnly ? "type " : "";
-    const zod = [`import ${typeOnly}{ z } from "zod";`, ...(usesZv ? [`import { zv } from "${specifierFrom(servicePath, `${serviceRoot}/values.ts`)}";`] : [])];
-    replace(valuesImport.getStart(sourceFile), valuesImport.getEnd(), zod.join("\n"));
-  }
-  return { servicePath, text: applyEdits(text, [...plan.edits, ...edits]) };
+/**
+ * The Convex validator class a value's type is, such as `VUnion`, or `Validator` for a value that may be any of
+ * several (`GenericValidator`), whose members the codemod renames none of.
+ */
+function validatorClassOf(type: ts.Type): string | undefined {
+  const name = type.getSymbol()?.getName();
+  if (name && validatorClasses.test(name)) return name;
+  if (type.isUnion() && type.types.every((member) => validatorClasses.test(member.getSymbol()?.getName() ?? ""))) return "Validator";
+  return undefined;
 }
 
 /** The text before the first marker and after the last, around the type arguments kept in place between them. */
