@@ -1,5 +1,8 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { parseDefinitions } from "../../service/src/analytics/definitions.ts";
+import { flagsKey, projectToken } from "../../service/testing/fakePostHog.ts";
+import { productionFlagKeys } from "./productionFlags.ts";
 import { startFakes, type Fakes } from "./server.ts";
 
 describe("the fakes server's Slack Web API", () => {
@@ -52,6 +55,18 @@ describe("the fakes server's other roles", () => {
       expect(back.origin + back.pathname).toBe("http://app.test/api/auth/callback/slack");
       expect(back.searchParams.get("state")).toBe("s");
       expect(claims).toMatchObject({ iss: fakes.url, nonce: "n", "https://slack.com/team_id": "T1", "https://slack.com/user_id": "U_NEXT" });
+    } finally {
+      await fakes.stop();
+    }
+  });
+
+  test("as PostHog, it serves production's flags in a shape the service's refresh accepts", async () => {
+    const fakes = await startFakes();
+    try {
+      const answer = await fetch(`${fakes.url}/flags/definitions?token=${projectToken}&send_cohorts`, { headers: { authorization: `Bearer ${flagsKey}` } });
+      const definitions = parseDefinitions(await answer.json());
+
+      expect(definitions?.flags.map(({ key }) => key)).toEqual([...productionFlagKeys]);
     } finally {
       await fakes.stop();
     }

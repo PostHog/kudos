@@ -6,8 +6,13 @@
 // A mutation or query never runs another: the inner one would commit on its own, outside the outer's transaction.
 // The transaction is the runner's: a handler can't begin, commit or roll it back, only use savepoints inside it.
 // A failure is logged with the operation's name; never its message, which may quote SQL.
+// A mutation or query never reaches the network either: it may run again, and it holds its transaction while it waits.
+// Any fetch or http(s) request made while one runs throws, and fails the operation even when its handler catches it.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
+import http from "node:http";
+import https from "node:https";
+import { syncBuiltinESMExports } from "node:module";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { publish, type DomainEvent, type Subscribers } from "./bus/publish.ts";
@@ -72,7 +77,53 @@ const retryable = new Set(["40001", "40P01"]);
 
 // The mutation or query whose transaction is open, so another one started inside it is refused. Work its handler
 // left behind keeps the store after the operation ends; `open` turns false then, and nothing is refused.
-const running = new AsyncLocalStorage<{ name: string; open: boolean }>();
+const running = new AsyncLocalStorage<{ name: string; open: boolean; network?: Error }>();
+
+/**
+ * Throws when a mutation or query is running, and marks it failed, so a handler that catches the error still fails.
+ * Every fetch and http(s) request passes here (installed below); a test's stand-in for the network calls it too.
+ */
+export function refuseNetworkInOperation(what: string): void {
+  const scope = running.getStore();
+  if (!scope?.open) return;
+  const error = new Error(`${what} inside "${scope.name}": a mutation or query never reaches the network; do it in an action, outside its mutations and queries`);
+  error.name = "NetworkInOperationError";
+  scope.network ??= error;
+  throw error;
+}
+
+// The tests' fetch stand-ins find it here without importing the runner (service/testing/fakePostHog.ts).
+(globalThis as { [key: symbol]: unknown })[Symbol.for("kudos.refuseNetworkInOperation")] = refuseNetworkInOperation;
+
+// Installed once, when the runner loads. `fetch` stays assignable: whatever is put in its place is refused the same.
+// `vi.stubGlobal` replaces the property itself, so the tests' fetch stand-ins call `refuseNetworkInOperation` too.
+const guarded = new WeakMap<object, typeof fetch>();
+const unguarded = new WeakMap<object, typeof fetch>();
+function guard(inner: typeof fetch): typeof fetch {
+  const known = guarded.get(inner);
+  if (known) return known;
+  const outer = ((...args: Parameters<typeof fetch>) => {
+    refuseNetworkInOperation("A fetch");
+    return inner(...args);
+  }) as typeof fetch;
+  guarded.set(inner, outer);
+  unguarded.set(outer, inner);
+  return outer;
+}
+let currentFetch = globalThis.fetch;
+Object.defineProperty(globalThis, "fetch", {
+  configurable: true,
+  enumerable: true,
+  get: () => guard(currentFetch),
+  set: (value: typeof fetch) => void (currentFetch = unguarded.get(value) ?? value),
+});
+for (const module of [http, https] as Array<Record<"request" | "get", (...args: unknown[]) => unknown>>) {
+  for (const method of ["request", "get"] as const) {
+    const original = module[method];
+    module[method] = (...args) => (refuseNetworkInOperation("An http request"), original(...args));
+  }
+}
+syncBuiltinESMExports();
 
 export function createOperations({ pool, clock, log, maxAttempts = 10, retryDelayMs = jitteredBackoff, subscribers = new Map() }: OperationsOptions): Operations {
   let lastCreationTime = Number.NEGATIVE_INFINITY;
@@ -100,7 +151,7 @@ export function createOperations({ pool, clock, log, maxAttempts = 10, retryDela
     // refusals, such as a prepared statement's name used twice, never reach Postgres and abort nothing.
     let aborted: unknown;
     // Open while the handler runs; work it left behind then finds its transaction gone, never a pooled connection.
-    const scope = { name, open: true };
+    const scope: { name: string; open: boolean; network?: Error } = { name, open: true };
     const tracked = {
       query: (...args: Parameters<pg.PoolClient["query"]>) => {
         if (!scope.open) return Promise.reject(operationEnded(name));
@@ -133,10 +184,11 @@ export function createOperations({ pool, clock, log, maxAttempts = 10, retryDela
       let result: T;
       try {
         result = await running.run(scope, () => handler(drizzle({ client: tracked as unknown as pg.PoolClient })));
+        if (scope.network) throw scope.network;
       } catch (error) {
         scope.open = false;
         await client.query("ROLLBACK").catch((rollbackError: unknown) => (broken ??= rollbackError));
-        throw error;
+        throw scope.network ?? error;
       }
       scope.open = false;
       const commit = await client.query("COMMIT").catch((error: unknown) => {

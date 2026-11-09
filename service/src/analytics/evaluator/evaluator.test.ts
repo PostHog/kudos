@@ -2,12 +2,17 @@
 // flag kinds kudos uses (boolean and multivariate flags, rollout percentages, person property conditions on email and
 // environment, and the conditions local evaluation can't answer, which kudos reads as the safe default). Payloads,
 // groups, `getAllFlagsAndPayloads` and device-ID bucketing are left out: kudos uses none of them.
+import { readFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
+import { parseDefinitions } from "../definitions.ts";
 import { LocalFeatureFlagEvaluator } from "./evaluator.ts";
 import type { FlagDefinitions, PostHogFeatureFlag } from "./types.ts";
 
+// Every fixture is also an answer PostHog could send, so each one passes the refresh's definitions check.
 function definitions(flags: PostHogFeatureFlag[], extra: Partial<FlagDefinitions> = {}): FlagDefinitions {
-  return { flags, groupTypeMapping: extra.groupTypeMapping ?? {}, cohorts: extra.cohorts ?? {} };
+  const fixture = { flags, groupTypeMapping: extra.groupTypeMapping ?? {}, cohorts: extra.cohorts ?? {} };
+  expect(parseDefinitions({ flags, group_type_mapping: fixture.groupTypeMapping, cohorts: fixture.cohorts }), "the definitions check passes the fixture").toEqual(fixture);
+  return fixture;
 }
 
 function makeFlag(key: string, overrides: Partial<PostHogFeatureFlag> = {}): PostHogFeatureFlag {
@@ -126,6 +131,18 @@ describe("the local evaluator", () => {
     expect(await evaluator.getFeatureFlag("continuity", "user")).toBeUndefined();
     expect(await evaluator.getFeatureFlag("static-cohort", "user")).toBeUndefined();
     expect(await evaluator.getFeatureFlag("cohort-flag", "user", {}, { plan: "pro" })).toBeUndefined();
+  });
+});
+
+describe("the copied evaluator's licence", () => {
+  test("ships beside it: the package's LICENSE file, which each copied file's header points to", () => {
+    const licence = readFileSync(new URL("./LICENSE", import.meta.url), "utf8");
+
+    expect(licence.startsWith("Copyright 2020 Posthog / Hiberly, Inc."), "the package's own LICENSE").toBe(true);
+    expect(licence).toContain("Apache License");
+    for (const file of ["evaluator.ts", "match-property.ts", "types.ts"]) {
+      expect(readFileSync(new URL(`./${file}`, import.meta.url), "utf8").split("\n").slice(0, 8).join("\n"), file).toContain("./LICENSE");
+    }
   });
 });
 

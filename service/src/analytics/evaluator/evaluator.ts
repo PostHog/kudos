@@ -1,7 +1,8 @@
 // Copied from @posthog/convex 2.1.5, src/client/feature-flags/evaluator.ts (https://github.com/PostHog/posthog-js,
-// packages/convex), MIT-licensed by PostHog Inc. per its package.json; the package's LICENSE file is PostHog's
-// Apache-2.0 text, Copyright 2020 Posthog / Hiberly, Inc. Changed only where marked "kudos:": imports end in .ts, and
-// non-null assertions satisfy the service's noUncheckedIndexedAccess. It imports @posthog/core, never Convex.
+// packages/convex). NOTICE: the package's metadata says MIT (its package.json), while the LICENSE file it ships is
+// PostHog's Apache-2.0 text, Copyright 2020 Posthog / Hiberly, Inc.; that file is kept verbatim beside this one, in
+// ./LICENSE. Changed only where marked "kudos:": imports end in .ts, and non-null assertions satisfy the service's
+// noUncheckedIndexedAccess. It imports @posthog/core, never Convex.
 import { getFeatureFlagHash, getFeatureFlagVariant, resolveFeatureFlagPayload } from '@posthog/core'
 import type {
   FeatureFlagCondition,

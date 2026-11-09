@@ -72,3 +72,12 @@ export const flagDefinitions = pgTable("flagDefinitions", {
   definitions: jsonb().$type<FlagDefinitions>().notNull(),
   fetchedAt: doublePrecision().notNull(),
 });
+
+/**
+ * When the refresh last had a good answer, `key = 'posthog'`, changed or not: how stale the definitions are. A row of its
+ * own, so the refresh writes it every minute while a decision, which reads only `flagDefinitions`, never conflicts.
+ */
+export const flagRefreshes = pgTable("flagRefreshes", {
+  key: text().primaryKey(),
+  refreshedAt: doublePrecision().notNull(),
+});

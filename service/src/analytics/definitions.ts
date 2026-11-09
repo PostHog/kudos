@@ -2,42 +2,70 @@
 // transaction. Nothing here reaches the network; only the refresh (refresh.ts) fetches.
 import { eq, sql } from "drizzle-orm";
 import { z } from "zod";
-import { flagDefinitions } from "../db/schema/index.ts";
-import type { MutationContext, Transaction } from "../operations.ts";
+import { flagDefinitions, flagRefreshes } from "../db/schema/index.ts";
+import type { MutationContext, QueryContext, Transaction } from "../operations.ts";
 import type { FlagDefinitions, PostHogFeatureFlag } from "./evaluator/types.ts";
 
 const key = "posthog";
 
-// What the evaluator relies on; any other field PostHog sends is kept for it as it came.
-const property = z.looseObject({ key: z.string() });
-const condition = z.looseObject({ properties: z.array(property).optional(), rollout_percentage: z.number().nullish(), variant: z.string().nullish() });
+// Every field the copied evaluator reads, with the type it reads it as: evaluator.ts, match-property.ts, and the
+// @posthog/core functions they call (matchFeatureFlagProperty, getFeatureFlagVariant, resolveFeatureFlagPayload). One
+// that fails refuses the whole answer, so the last good row stays: a malformed field, such as a string `negation`,
+// would otherwise read as truthy and could turn a flag on. Any other field PostHog sends is kept as it came.
+const percentage = z.number().min(0).max(100);
+const scalar = z.union([z.string(), z.number(), z.boolean()]);
+const property = z
+  .looseObject({
+    key: z.string(),
+    type: z.string().nullish(),
+    operator: z.string().nullish(),
+    // Core's matcher also takes a list of booleans, as the flags service does.
+    value: z.union([scalar, z.array(scalar)]),
+    negation: z.boolean().nullish(),
+    dependency_chain: z.array(z.string()).optional(),
+  })
+  // A cohort tells a nested group from a property by a `values` field (match-property.ts, matchPropertyGroup).
+  .refine((fields) => !("values" in fields));
+type Group = { type: "AND" | "OR"; values: Group[] | z.infer<typeof property>[] };
+// A cohort's values are all groups or all properties: a mixed list would be read as whichever its first one is.
+const group: z.ZodType<Group> = z.lazy(() => z.looseObject({ type: z.enum(["AND", "OR"]), values: z.union([z.array(group), z.array(property)]) }));
+const condition = z.looseObject({
+  properties: z.array(property).nullish(),
+  rollout_percentage: percentage.nullish(),
+  variant: z.string().nullish(),
+  aggregation_group_type_index: z.number().int().nullish(),
+});
 const flag = z.looseObject({
   key: z.string(),
   active: z.boolean(),
+  ensure_experience_continuity: z.boolean().nullish(),
+  bucketing_identifier: z.enum(["distinct_id", "device_id", ""]).nullish(),
   filters: z
     .looseObject({
-      groups: z.array(condition).optional(),
-      multivariate: z.looseObject({ variants: z.array(z.looseObject({ key: z.string(), rollout_percentage: z.number() })) }).nullish(),
+      aggregation_group_type_index: z.number().int().nullish(),
+      groups: z.array(condition).nullish(),
+      multivariate: z.looseObject({ variants: z.array(z.looseObject({ key: z.string(), rollout_percentage: percentage })) }).nullish(),
+      payloads: z.record(z.string(), z.json()).nullish(),
     })
-    .optional(),
+    .nullish(),
 });
 const answer = z.object({
   flags: z.array(flag),
-  group_type_mapping: z.record(z.string(), z.string()).optional(),
-  cohorts: z.record(z.string(), z.looseObject({ type: z.enum(["AND", "OR"]), values: z.array(z.unknown()) })).optional(),
-  property_matching_version: z.number().optional(),
+  group_type_mapping: z.record(z.string(), z.string()).nullish(),
+  cohorts: z.record(z.string(), group).nullish(),
+  property_matching_version: z.number().nullish(),
 });
 
 /** PostHog's answer as the evaluator takes it, or `null` when it isn't a valid one. */
 export function parseDefinitions(body: unknown): FlagDefinitions | null {
   const parsed = answer.safeParse(body);
   if (!parsed.success) return null;
-  const { flags, group_type_mapping = {}, cohorts = {}, property_matching_version } = parsed.data;
+  const { flags, group_type_mapping, cohorts, property_matching_version } = parsed.data;
   return {
     flags: flags as unknown as PostHogFeatureFlag[],
-    groupTypeMapping: group_type_mapping,
-    cohorts: cohorts as FlagDefinitions["cohorts"],
-    ...(property_matching_version !== undefined && { propertyMatchingVersion: property_matching_version }),
+    groupTypeMapping: group_type_mapping ?? {},
+    cohorts: (cohorts ?? {}) as FlagDefinitions["cohorts"],
+    ...(property_matching_version != null && { propertyMatchingVersion: property_matching_version }),
   };
 }
 
@@ -56,6 +84,33 @@ export async function storeDefinitions(ctx: MutationContext, definitions: FlagDe
     })
     .returning({ key: flagDefinitions.key });
   return written.length > 0;
+}
+
+/** What PostHog's empty answer stores: every flag unknown, so every decision its safe default. */
+export const noDefinitions: FlagDefinitions = { flags: [], groupTypeMapping: {}, cohorts: {} };
+
+/**
+ * A good answer from PostHog: replaces the definitions when they changed, as `storeDefinitions`, and records the refresh
+ * either way. Answers whether the definitions changed.
+ */
+export async function refreshDefinitions(ctx: MutationContext, definitions: FlagDefinitions): Promise<boolean> {
+  const replaced = await storeDefinitions(ctx, definitions, ctx.now);
+  await ctx.tx
+    .insert(flagRefreshes)
+    .values({ key, refreshedAt: ctx.now })
+    .onConflictDoUpdate({ target: flagRefreshes.key, set: { refreshedAt: ctx.now } });
+  return replaced;
+}
+
+/**
+ * When the refresh last had a good answer, or `null` before the first. A definitions row with no refresh recorded,
+ * such as one the load copied from today's component, was refreshed when it was fetched.
+ */
+export async function lastRefreshed(ctx: QueryContext): Promise<number | null> {
+  const [refresh] = await ctx.tx.select({ at: flagRefreshes.refreshedAt }).from(flagRefreshes).where(eq(flagRefreshes.key, key));
+  if (refresh !== undefined) return refresh.at;
+  const [row] = await ctx.tx.select({ at: flagDefinitions.fetchedAt }).from(flagDefinitions).where(eq(flagDefinitions.key, key));
+  return row?.at ?? null;
 }
 
 /** The stored definitions, or `null` before the first refresh. */
