@@ -1,7 +1,7 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { constants, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseEnv } from "node:util";
 import { flagsKey, projectToken } from "../../testing/fakePostHog.ts";
@@ -9,32 +9,20 @@ import { killGroup, startLocalBackend, type LocalBackend } from "../../testing/l
 import { clientId, clientSecret } from "../../testing/slackOpenId.ts";
 import { startFakes } from "../fakes/server.ts";
 import { startClock } from "./clock.ts";
+import { runRig, type Rig } from "./rig.ts";
 import { targetLines, type Target } from "../target.ts";
 
 const workspace = "T1";
 const appId = "A_KUDOS";
-const cleanups: (() => Promise<unknown>)[] = [];
-let runner: ChildProcess | undefined;
-let interrupted: NodeJS.Signals | undefined;
-const startup = new AbortController();
 
-for (const signal of ["SIGINT", "SIGTERM"] as const) {
-  process.on(signal, () => {
-    interrupted = signal;
-    startup.abort();
-    if (runner !== undefined) killGroup(runner, signal);
-  });
-}
-
-let exitCode = 1;
-try {
+await runRig(async (rig) => {
   let backend: LocalBackend | undefined;
   const fakes = await startFakes({ flagsChanged: () => loadFlags(backend!) });
-  cleanups.push(fakes.stop);
+  rig.defer(fakes.stop);
   const signingSecret = randomBytes(24).toString("hex");
   backend = await startLocalBackend({
     instanceName: "kudos-e2e",
-    signal: startup.signal,
+    signal: rig.signal,
     variables: (site) => ({
       SITE_URL: site,
       SLACK_OIDC_ISSUER: fakes.url,
@@ -51,7 +39,7 @@ try {
       KUDOS_ENVIRONMENT: "sandbox",
     }),
   });
-  cleanups.push(backend.stop);
+  rig.defer(backend.stop);
   // The flags component loads definitions only when its supervising cron first runs, minutes after a deploy, so the
   // app would read every flag as off until then. Load them now, before the first journey, and again whenever a
   // journey changes them.
@@ -59,16 +47,16 @@ try {
   // The website reads its flag for the workspace, which needs the workspace's analytics key; production's workspace
   // had one long before it was paused, and a fresh backend makes it at its first kudos. Make it now.
   await backend.run("website/flag:prepareWebsiteFlag");
-  await publishWebsite(backend, startup.signal);
+  await publishWebsite(backend, rig);
 
   const directory = await mkdtemp(join(tmpdir(), "kudos-e2e-target-"));
-  cleanups.push(() => rm(directory, { recursive: true, force: true }));
+  rig.defer(() => rm(directory, { recursive: true, force: true }));
   const targetFile = join(directory, "local.env");
   // The app's components keep job queues of their own, which settling waits for too.
   const testSecret = randomBytes(24).toString("hex");
   const clock = await startClock(backend, { secret: testSecret, components: ["posthog", "staticHosting"] });
-  cleanups.push(clock.stop);
-  const target: Target = { appUrl: backend.site, signingSecret, workspace, appId, fakesUrl: fakes.url, signIn: "slack-openid", timeUrl: clock.url, testSecret };
+  rig.defer(clock.stop);
+  const target: Target = { kind: "oracle", appUrl: backend.site, signingSecret, workspace, appId, fakesUrl: fakes.url, signIn: "slack-openid", timeUrl: clock.url, testSecret };
   await writeFile(targetFile, targetLines(target), { mode: 0o600 });
 
   // Moving the clock restarts the backend and catches every cron up at once, so with no filter of the caller's the
@@ -76,14 +64,9 @@ try {
   const asked = process.argv.slice(2).filter((argument) => argument !== "--");
   const passes = asked.length > 0 ? [asked] : [["--exclude-tag", "@time"], ["--tag", "@time"]];
   const results: number[] = [];
-  for (const pass of passes) if (interrupted === undefined) results.push(await runJourneys(targetFile, pass));
-  if (interrupted === undefined) exitCode = Math.max(...results);
-} catch (failure) {
-  if (interrupted === undefined) console.error(failure);
-} finally {
-  for (const cleanup of cleanups.reverse()) await cleanup().catch((failure: unknown) => console.error(failure));
-}
-process.exit(interrupted === undefined ? exitCode : 128 + constants.signals[interrupted]);
+  for (const pass of passes) if (!rig.interrupted()) results.push(await rig.runJourneys(targetFile, pass));
+  return Math.max(...results);
+});
 
 async function loadFlags(backend: LocalBackend) {
   const loaded = await backend.run("lib:refreshFlagDefinitions", { component: "posthog" });
@@ -91,12 +74,12 @@ async function loadFlags(backend: LocalBackend) {
 }
 
 // Builds the website against this backend and uploads it to the backend's static hosting, as a deploy does.
-async function publishWebsite(backend: LocalBackend, signal: AbortSignal) {
+async function publishWebsite(backend: LocalBackend, rig: Rig) {
   const dist = await mkdtemp(join(tmpdir(), "kudos-e2e-website-"));
-  cleanups.push(() => rm(dist, { recursive: true, force: true }));
+  rig.defer(() => rm(dist, { recursive: true, force: true }));
   const deployment = parseEnv(await readFile(backend.envFile, "utf8"));
-  await finished(["pnpm", "--dir", "website", "exec", "vite", "build", "--logLevel", "warn", "--outDir", dist, "--emptyOutDir"], { VITE_CONVEX_URL: backend.cloud }, signal);
-  await finished(["npx", "--no", "--", "static-hosting", "upload", "--dist", dist], deployment, signal);
+  await finished(["pnpm", "--dir", "website", "exec", "vite", "build", "--logLevel", "warn", "--outDir", dist, "--emptyOutDir"], { VITE_CONVEX_URL: backend.cloud }, rig.signal);
+  await finished(["npx", "--no", "--", "static-hosting", "upload", "--dist", dist], deployment, rig.signal);
 }
 
 function finished([command, ...args]: string[], env: Record<string, string | undefined>, signal: AbortSignal) {
@@ -110,20 +93,5 @@ function finished([command, ...args]: string[], env: Record<string, string | und
       if (code === 0) resolve();
       else reject(new Error(`${command} ${args.join(" ")} exited with ${code}`));
     });
-  });
-}
-
-function runJourneys(targetFile: string, filters: string[]) {
-  return new Promise<number>((resolve) => {
-    runner = spawn("npx", ["--no", "--", "e2e", "run", "--config", "e2e/e2e.config.ts", ...filters], {
-      stdio: "inherit",
-      detached: true,
-      env: { ...process.env, E2E_TARGET: targetFile, E2E_TELEMETRY_DISABLED: "1" },
-    });
-    runner.once("error", (failure) => {
-      console.error(failure);
-      resolve(1);
-    });
-    runner.once("exit", (code, signal) => resolve(code ?? (signal === null ? 1 : 128 + constants.signals[signal])));
   });
 }

@@ -1,0 +1,9 @@
+# The journeys the rewrite passes, which every pull request runs against it (`pnpm e2e:rewrite`); every journey still
+# runs against today's app (`pnpm e2e`).
+#
+# One journey file per line, from e2e/, or `<file>:<line>` for a single test of a file whose other tests the rewrite
+# can't pass yet. A stack adds its domain's journeys here once they pass on the rewrite: append the line, run
+# `pnpm e2e:rewrite`, and keep both sides on a merge conflict. A journey that needs two stacks joins with whichever
+# merges second. A journey only the rewrite can pass skips on today's app (see journeys/health.e2e.ts).
+journeys/health.e2e.ts
+journeys/frontDoor.e2e.ts

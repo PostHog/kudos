@@ -287,6 +287,9 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/welcome/welcome.test.ts | S5 | | |
 | convex/workspace/workspaceSettings.test.ts | S3 | | |
 | e2e/fakes/server.test.ts | S20 | | |
+| e2e/local/edge.test.ts | S20 | | |
+| e2e/local/rewrite.test.ts | S20 | | |
+| e2e/target.test.ts | S20 | | |
 | slack-app/manifest.test.ts | S20 | | |
 | testing/privateFolder.test.ts | S20 | | |
 | tools/rewrite/drizzle/generate.test.ts | S20 | | |

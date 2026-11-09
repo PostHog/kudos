@@ -12,7 +12,8 @@
     "gate": "pnpm typecheck && pnpm test && pnpm coherence",
     "website:build": "pnpm --dir website build",
     "test:handshake": "vitest run --config vitest.handshake.config.ts",
-    "e2e": "node e2e/local/run.ts"
+    "e2e": "node e2e/local/run.ts",
+    "e2e:rewrite": "node e2e/local/rewrite.ts"
   },
   "packageManager": "pnpm@12.11.2",
   "devDependencies": {
