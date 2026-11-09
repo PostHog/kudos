@@ -1,4 +1,4 @@
-import { expect, test } from "../test.ts";
+import { expect, staysEqual, test } from "../test.ts";
 import { emoji, mention, text } from "../slack.ts";
 
 test("a thank-you with the kudos emoji marks the message and tells the giver privately what's left today", async ({ slack }) => {
@@ -50,15 +50,19 @@ test("a thank-you in a thread marks the reply and answers the giver in that thre
 });
 
 test("an event Slack delivers twice gives its kudos once", async ({ slack }) => {
-  const [giver, recipient, later] = [await slack.member(), await slack.member(), await slack.member()];
+  const [giver, recipient] = [await slack.member(), await slack.member()];
+  const replies = async () => (await slack.ephemeralsTo(giver)).map((reply) => String(reply.text));
+  // A first thank-you, so the app knows both members and a second give would land within a second.
+  await slack.post(giver, [mention(recipient), text(" "), emoji("taco")]);
+  await expect.poll(async () => (await replies()).length).toBe(1);
 
   await slack.post(giver, [mention(recipient), text(" "), emoji("taco")]);
   await slack.redeliverLast();
-  await slack.post(giver, [mention(later), text(" "), emoji("taco")]);
 
-  await expect.poll(async () => (await slack.ephemeralsTo(giver)).map((reply) => reply.text)).toEqual([
+  await expect.poll(async () => (await replies()).length).toBeGreaterThanOrEqual(2);
+  await staysEqual(replies, [
     `<@${recipient}> got 1 kudos from you. You have 2 kudos left today.`,
-    `<@${later}> got 1 kudos from you. You have 1 kudos left today.`,
+    `<@${recipient}> got 1 kudos from you. You have 1 kudos left today.`,
   ]);
 });
 

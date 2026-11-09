@@ -1,4 +1,4 @@
-import { expect, test } from "../test.ts";
+import { expect, staysEqual, test } from "../test.ts";
 import { broadcast, emoji, groupMention, mention, text } from "../slack.ts";
 
 const groupsSkipped = "`@here`, `@channel` and user groups don't receive kudos, so tag people individually";
@@ -31,5 +31,5 @@ test("a thank-you where nobody can receive kudos gives nothing and says why", as
   await expect.poll(async () => (await slack.ephemeralsTo(giver)).map((reply) => reply.text)).toEqual([
     `Nobody in this message can receive kudos: you can't give kudos to yourself and ${groupsSkipped}. Tag a teammate and edit the message to try again.`,
   ]);
-  expect(await slack.reactionsOn(message)).toEqual([]);
+  await staysEqual(() => slack.reactionsOn(message), []);
 });
