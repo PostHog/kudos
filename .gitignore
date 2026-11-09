@@ -1,3 +1,6 @@
 node_modules/
 
 .env.local
+
+# The E2E runner's reports, traces and logs
+e2e/.e2e/

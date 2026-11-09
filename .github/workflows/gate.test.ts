@@ -58,11 +58,11 @@ test("a pull request waits on one gate check, which runs the suite on the pull r
   for (const result of ["failure", "cancelled", "skipped"]) expect(exitFor(result), result).not.toBe(0);
 });
 
-test("the sign-in handshake runs on every pull request and every push to main, in its own job beside the gate", () => {
-  const handshake = jobRunning("pnpm test:handshake");
+test.each(["pnpm test:handshake", "pnpm e2e"])("%s runs on every pull request and every push to main, in its own job beside the gate", (command) => {
+  const job = jobRunning(command);
 
   expect(workflow.on).toEqual({ pull_request: null, push: { branches: ["main"] } });
-  expect(handshake).toBeDefined();
-  expect(handshake?.[1].uses).toBeUndefined();
-  expect(handshake?.[1].steps?.find((step) => step.uses?.startsWith("actions/checkout@"))?.with).toMatchObject({ "persist-credentials": false });
+  expect(job).toBeDefined();
+  expect(job?.[1].uses).toBeUndefined();
+  expect(job?.[1].steps?.find((step) => step.uses?.startsWith("actions/checkout@"))?.with).toMatchObject({ "persist-credentials": false });
 });
