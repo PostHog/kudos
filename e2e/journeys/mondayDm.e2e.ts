@@ -10,7 +10,7 @@ const hourMs = 60 * 60 * 1000;
 const minuteMs = 60 * 1000;
 
 // The Monday DMs a member got, oldest first, each as it shows now.
-const mondayDmsOf = async (slack: Slack, member: string) => (await slack.messagesIn(member)).filter((message) => message.text.startsWith(":taco: Your week in hugs"));
+const mondayDmsOf = async (slack: Slack, member: string) => (await slack.dmsShownTo(member)).filter((message) => message.text.startsWith(":taco: Your week in hugs"));
 
 // What a member reads in a Monday DM: its opening lines (the hugs recap and the week's heading), its quests, and the
 // buttons under them.

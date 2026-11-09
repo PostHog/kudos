@@ -31,13 +31,14 @@ test("the Monday post names last week's most-hugged kudos in the announcement ch
   await slack.click(admin, option((await lastHome(slack, admin))!, "I post it at 9:00 in this time zone.", "UTC"));
   await time.settle();
 
-  // Two kudos this week: the one teammates hugged most is the one the post quotes.
+  // Two kudos this week: the one teammates hugged most is the one the post quotes, though the other came later and
+  // thanked more people.
   const talk = await slack.channel();
-  const [giver, first, second, other] = [await slack.member(), await slack.member(), await slack.member(), await slack.member()];
+  const [giver, first, second, other, third, fourth] = [await slack.member(), await slack.member(), await slack.member(), await slack.member(), await slack.member(), await slack.member()];
   const huggers = [await slack.member(), await slack.member(), await slack.member()];
   const top = await slack.post(giver, [text("thanks for the launch plan "), mention(first), text(" and "), mention(second), text(" "), emoji("taco")], { channel: talk.id });
   await expect.poll(async () => (await slack.ephemeralsTo(giver)).length).toBe(1);
-  await slack.post(other, [text("thanks for the coffee "), mention(giver), text(" "), emoji("taco")], { channel: talk.id });
+  await slack.post(other, [text("thanks for the coffee "), mention(giver), text(" "), mention(third), text(" "), mention(fourth), text(" "), emoji("taco")], { channel: talk.id });
   await expect.poll(async () => (await slack.ephemeralsTo(other)).length).toBe(1);
   for (const hugger of huggers) await slack.react(hugger, top, "taco");
   await time.settle();

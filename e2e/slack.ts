@@ -278,6 +278,13 @@ export class Slack {
     return this.read<Shown[]>("messages", { channel });
   }
 
+  // The direct messages the app sent a member, oldest first, each as it shows now: to the member's id as the channel,
+  // or to the DM conversations.open gave it. Each keeps the channel it went to, so a click on it names that channel.
+  async dmsShownTo(user: string) {
+    const shown = [...(await this.messagesIn(user)), ...(await this.messagesIn(directMessageWith(user)))];
+    return shown.sort((a, b) => Number(a.ts) - Number(b.ts));
+  }
+
   // The App Home views the app published for a member, oldest first.
   async homesOf(user: string) {
     return (await this.callsTo("views.publish")).filter((call) => call.user_id === user).map((call) => call.view as View);

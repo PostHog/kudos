@@ -12,6 +12,7 @@ function untilDayOfMonth(now: number, months: number, day: number) {
 test("the week and month boards stop counting hugs once their period ends, and the all-time board keeps them", { tags: ["@time"] }, async ({ slack, time }) => {
   // The hug lands at noon on the 10th, so eight days on is another week of the same month, whatever day weeks start on.
   await time.advance(untilDayOfMonth(await time.now(), 1, 10));
+  await time.settle();
   // A new member's day sits at noon, so this one's clock is UTC's.
   const [hugger, author] = [await slack.member(), await slack.member()];
   const channel = await slack.channel();
@@ -25,11 +26,13 @@ test("the week and month boards stop counting hugs once their period ends, and t
   await ask("leaderboard all", true);
 
   await time.advance(8 * dayMs);
+  await time.settle();
   await ask("leaderboard", false);
   await ask("leaderboard month", true);
   await ask("leaderboard all", true);
 
   await time.advance(untilDayOfMonth(await time.now(), 1, 3));
+  await time.settle();
   await ask("leaderboard month", false);
   await ask("leaderboard all", true);
 });

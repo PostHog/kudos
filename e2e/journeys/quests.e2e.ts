@@ -37,6 +37,7 @@ test("onboarding quests and then a quest drawn each week show their progress in 
   expect(await give(first)).toEqual(["Done: Give a kudos to someone · +50 XP and an unidentified Hoggie", "Thank someone on two different days · 🟩⬜ 1 of 2 days"]);
   expect(await give(second)).toEqual(["Done: Thank someone new · +50 XP and an unidentified Hoggie"]);
   await time.advance(24 * hourMs);
+  await time.settle();
   expect(await give(first)).toEqual(["Done: Thank someone on two different days · +50 XP and an unidentified Hoggie"]);
 
   // With onboarding done, the next week draws a quest, and the reply says when it's done.
@@ -45,6 +46,7 @@ test("onboarding quests and then a quest drawn each week show their progress in 
   const [third, fourth, fifth] = [await slack.member(), await slack.member(), await slack.member()];
   const monday = await give(third, fourth, fifth);
   await time.advance(24 * hourMs);
+  await time.settle();
   const tuesday = await give(third);
   expect([...monday, ...tuesday]).toEqual([expect.stringMatching(drawnQuestDone)]);
 });
