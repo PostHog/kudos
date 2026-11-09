@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
+import { connect } from "node:net";
 import { constants } from "node:os";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
@@ -43,6 +44,21 @@ describe("the rewrite as an E2E target", () => {
     }
 
     expect(health).toEqual({ commit: expect.stringMatching(/^[0-9a-f]{40}$/), migrations: "done", off: false });
+    expect(await leftBehind({ folder: rewrite.folder, urls: [rewrite.appUrl, rewrite.serviceUrl] })).toEqual(nothing);
+  }, 120_000);
+
+  test("stops even while the service waits on a request whose body never comes", async () => {
+    const rewrite = await startRewrite();
+    const service = new URL(rewrite.serviceUrl);
+    const client = connect(Number(service.port), service.hostname);
+    await new Promise((resolve) => client.once("connect", resolve));
+    client.write("POST /slack/events HTTP/1.1\r\nHost: service\r\nContent-Type: application/json\r\nContent-Length: 100000\r\n\r\n{");
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    const stopped = await Promise.race([rewrite.stop().then(() => "stopped"), new Promise((resolve) => setTimeout(() => resolve("still stopping"), 30_000))]);
+    client.destroy();
+
+    expect(stopped).toBe("stopped");
     expect(await leftBehind({ folder: rewrite.folder, urls: [rewrite.appUrl, rewrite.serviceUrl] })).toEqual(nothing);
   }, 120_000);
 

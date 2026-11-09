@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { startPostgres } from "../../service/testing/embeddedPostgres.ts";
-import { startServiceProcess } from "../../service/testing/serviceProcess.ts";
+import { startServiceProcess, type ServiceProcess } from "../../service/testing/serviceProcess.ts";
 import { startFakes } from "../fakes/server.ts";
 import { targetLines } from "../target.ts";
 import { startEdge } from "./edge.ts";
@@ -40,7 +40,7 @@ export async function startRewrite(signal?: AbortSignal): Promise<RewriteTarget>
     const signingSecret = randomBytes(24).toString("hex");
     const testSecret = randomBytes(24).toString("hex");
     const service = await startServiceProcess({ DATABASE_URL: postgres.url, SLACK_SIGNING_SECRET: signingSecret, HEDGEHUG_TEST_SECRET: testSecret, HEDGEHUG_COMMIT: head() });
-    stops.push(() => (service.signal("SIGTERM"), service.exited));
+    stops.push(() => stopped(service));
     await migrated(service.url, signal);
     const edge = await startEdge(service.url);
     stops.push(edge.stop);
@@ -51,6 +51,18 @@ export async function startRewrite(signal?: AbortSignal): Promise<RewriteTarget>
   } catch (failure) {
     await stop();
     throw failure;
+  }
+}
+
+// The service drains its requests when told to stop, and a request whose body never comes would keep it waiting, so it
+// is killed once `graceMs` passes.
+async function stopped(service: ServiceProcess, graceMs = 5_000) {
+  service.signal("SIGTERM");
+  const force = setTimeout(() => service.signal("SIGKILL"), graceMs);
+  try {
+    await service.exited;
+  } finally {
+    clearTimeout(force);
   }
 }
 
