@@ -1,5 +1,5 @@
 import { button, chosen, headerOf, option, tabsOf } from "../home.ts";
-import { expect, receipt, staysEqual, test } from "../test.ts";
+import { expect, isBoard, receipt, staysEqual, test } from "../test.ts";
 import { emoji, mention, text, type Slack } from "../slack.ts";
 
 const lastHome = async (slack: Slack, member: string) => (await slack.homesOf(member)).at(-1);
@@ -20,7 +20,7 @@ test("App Home's tabs and the leaderboard switch publish it again, and the switc
   const channel = await slack.channel();
   // Few members hug, so a hug puts the member on the hugs board that everyone sees.
   await slack.react(member, await slack.post(author, [text("a win")]), "taco");
-  await expect.poll(() => slack.ask(onlooker, channel, "leaderboard")).toContain(`<@${member}> · 1 hug`);
+  await slack.askUntil(onlooker, channel, "leaderboard", (answer) => answer.includes(`<@${member}> · 1 hug`));
   await slack.openHome(member);
   await expect.poll(async () => (await lastHome(slack, member)) !== undefined).toBe(true);
 
@@ -28,8 +28,8 @@ test("App Home's tabs and the leaderboard switch publish it again, and the switc
   await expect.poll(async () => headerOf((await lastHome(slack, member))!)).toBe("Settings");
   await slack.click(member, button((await lastHome(slack, member))!, "Off", "Show me on the leaderboards"));
 
-  await expect.poll(() => slack.ask(member, channel, "leaderboard")).toContain("You're not on the leaderboards.");
-  await expect.poll(() => slack.ask(onlooker, channel, "leaderboard")).not.toContain(`<@${member}>`);
+  await slack.askUntil(member, channel, "leaderboard", (answer) => answer.includes("You're not on the leaderboards."));
+  await slack.askUntil(onlooker, channel, "leaderboard", (answer) => isBoard(answer) && !answer.includes(`<@${member}>`));
 });
 
 test("the reply to a kudos goes where the member's message settings put it", async ({ slack }) => {

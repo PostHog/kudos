@@ -162,17 +162,23 @@ export class Slack {
     return [...(immediate === undefined ? [] : [immediate]), ...posted].map((shown): Record<string, unknown> => ({ response_type: "ephemeral", ...shown }));
   }
 
-  // The command's first answer as the member sees it, whether the app answered the request or later at its response
-  // URL.
-  async ask(user: string, channel: { id: string; name: string }, text: string) {
-    const reply = await this.command(user, channel, text);
-    let shown: Record<string, unknown> | undefined;
-    const until = Date.now() + 10_000;
-    while ((shown = (await this.responsesTo(reply))[0]) === undefined) {
-      if (Date.now() > until) throw new Error(`the app never answered /hedgehug ${text}`);
-      await new Promise((resolve) => setTimeout(resolve, 250));
+  // Asks with the command, then watches that one command's answers until one is accepted, since an app may answer
+  // first with a placeholder and then with what was asked for, in the request or later at the response URL. When one
+  // command's answers settle with none accepted, it asks again: what it asks about may not have happened yet.
+  async askUntil(user: string, channel: { id: string; name: string }, text: string, accept: (answer: string) => boolean, { perAskMs = 5_000, withinMs = 15_000 } = {}) {
+    const until = Date.now() + withinMs;
+    let answers: string[] = [];
+    while (Date.now() < until) {
+      const reply = await this.command(user, channel, text);
+      const askedUntil = Math.min(until, Date.now() + perAskMs);
+      do {
+        answers = (await this.responsesTo(reply)).map((shown) => String(shown.text));
+        const accepted = answers.find(accept);
+        if (accepted !== undefined) return accepted;
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      } while (Date.now() < askedUntil);
     }
-    return String(shown.text);
+    throw new Error(`no answer to /hedgehug ${text} was accepted; the last command's answers were ${JSON.stringify(answers)}`);
   }
 
   hasJoined(channel: string) {
