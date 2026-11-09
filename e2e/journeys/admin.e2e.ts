@@ -6,7 +6,7 @@ test("an admin picks the announcement channel, and switches public celebrations 
   const admin = await slack.member({ is_admin: true });
   const channel = await slack.channel("public", { joined: true });
   // The Monday post ranks groups or quotes kudos, so App Home offers it only once the workspace has a user group.
-  await slack.userGroup([admin]);
+  await slack.createdUserGroup(`Group ${admin}`, [admin]);
   const adminTab = () => adminTabOf(slack, admin);
   await leavingSettingsAsFound(slack, admin, async () => {
     await openAdminTab(slack, admin);

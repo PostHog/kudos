@@ -1,6 +1,7 @@
 import { createHmac, randomBytes } from "node:crypto";
 import { directMessageWith } from "../testing/fakeSlack.ts";
 import type { Target } from "./target.ts";
+import { appTime } from "./time.ts";
 
 export type RichElement =
   | { type: "user"; user_id: string }
@@ -34,7 +35,14 @@ export type Shown = { channel: string; ts: string; threadTs?: string; text: stri
 
 export type Block = { type: string; text?: { text: string }; elements?: Element[]; accessory?: Element };
 
-export type Element = { type: string; action_id?: string; value?: string; text?: { text: string }; options?: Array<{ text: { text: string }; value: string }>; initial_option?: { text: { text: string }; value: string } };
+export type Element = {
+  type: string;
+  action_id?: string;
+  value?: string;
+  text?: { text: string };
+  options?: Array<{ text: { text: string }; value: string }>;
+  initial_option?: { text: { text: string }; value: string };
+};
 
 export type Action = { action_id: string; value?: string; type?: string; selected_option?: { value: string }; selected_channel?: string };
 
@@ -45,11 +53,58 @@ export class Slack {
     this.target = target;
   }
 
+  private offsetMs: number | undefined;
+
+  // Slack's clock, which is the app's: a journey tagged @time moves both, so what Slack signs, stamps and sends keeps
+  // the time the app expects, and a new member's day sits where the app says it does.
+  async now() {
+    if (this.offsetMs === undefined) {
+      const { timeUrl, testSecret } = this.target;
+      this.followClock(testSecret === undefined ? Date.now() : await appTime(timeUrl!, testSecret).now());
+    }
+    return Date.now() + this.offsetMs!;
+  }
+
+  followClock(appNow: number) {
+    this.offsetMs = appNow - Date.now();
+  }
+
   async member(options: MemberOptions = {}) {
     const id = uniqueId("U");
-    await this.control("members", { id, team_id: this.target.workspace, tz: noonZone(), real_name: `Member ${id}`, ...options });
+    await this.enrol(id, options);
     return id;
   }
+
+  // Slack learns of a member, in a fixed-offset zone where the app's clock reads about noon, so a journey's messages
+  // never straddle their midnight and the daily allowance never refills mid-journey.
+  private async enrol(id: string, options: MemberOptions) {
+    const hoursAhead = 12 - new Date(await this.now()).getUTCHours();
+    await this.control("members", { id, team_id: this.target.workspace, tz: zoneAhead(hoursAhead), real_name: `Member ${id}`, ...options });
+    this.hoursAhead.set(id, hoursAhead);
+  }
+
+  // Someone Slack doesn't know yet: it answers users.info about them with user_not_found until they join.
+  stranger() {
+    const id = uniqueId("U");
+    return { id, join: (options: MemberOptions = {}) => this.enrol(id, options) };
+  }
+
+  // A user group in Slack, which the app reads only when it syncs them. Groups are workspace-wide, so a journey names
+  // its own.
+  async userGroup(name: string, users: string[]) {
+    const id = uniqueId("S");
+    await this.control("user-groups", { id, team_id: this.target.workspace, handle: name.toLowerCase().replaceAll(/[^a-z0-9]+/g, "-"), name, users });
+    return id;
+  }
+
+  // How many hours a member's clock runs ahead of UTC: their zone has a fixed offset, so it never changes.
+  hoursAheadOf(member: string) {
+    const hours = this.hoursAhead.get(member);
+    if (hours === undefined) throw new Error(`${member} is no member this journey made`);
+    return hours;
+  }
+
+  private readonly hoursAhead = new Map<string, number>();
 
   // A channel only this journey uses, so what the app does in it is this journey's alone.
   async channel(kind: ChannelKind = "public", { name = `e2e-${uniqueId("").toLowerCase()}`, joined = false } = {}) {
@@ -62,29 +117,28 @@ export class Slack {
   // customer channel or one meant to be shared.
   async createChannel({ name = `e2e-${uniqueId("").toLowerCase()}` } = {}) {
     const channel = await this.channel("public", { name });
-    await this.sendEvent({ type: "channel_created", channel: { id: channel.id, name, created: Math.floor(Date.now() / 1000), creator: uniqueId("U") }, event_ts: uniqueTs() });
+    await this.sendEvent({ type: "channel_created", channel: { id: channel.id, name, created: Math.floor((await this.now()) / 1000), creator: uniqueId("U") }, event_ts: uniqueTs(await this.now()) });
     return channel;
   }
 
   // A channel the app is in becomes shared with another organization, as Slack tells it.
   async shareChannel({ id }: { id: string }) {
     await this.control("share-channel", { id });
-    await this.sendEvent({ type: "channel_shared", connected_team_id: uniqueId("T"), channel: id, event_ts: uniqueTs() });
+    await this.sendEvent({ type: "channel_shared", connected_team_id: uniqueId("T"), channel: id, event_ts: uniqueTs(await this.now()) });
   }
 
   // A channel is renamed, as Slack tells it.
   async renameChannel({ id }: { id: string }, name: string) {
     await this.control("rename-channel", { id, name });
-    await this.sendEvent({ type: "channel_rename", channel: { id, name, created: Math.floor(Date.now() / 1000) }, event_ts: uniqueTs() });
+    await this.sendEvent({ type: "channel_rename", channel: { id, name, created: Math.floor((await this.now()) / 1000) }, event_ts: uniqueTs(await this.now()) });
     return { id, name };
   }
 
   // Someone creates a user group of `users` in Slack, which tells the app with subteam_created.
-  async userGroup(users: string[]) {
-    const id = uniqueId("S");
-    const handle = `e2e-${id.toLowerCase()}`;
-    await this.control("user-groups", { id, teamId: this.target.workspace, handle, name: `Group ${id}`, users });
-    await this.sendEvent({ type: "subteam_created", subteam: { id, team_id: this.target.workspace, handle, name: `Group ${id}` }, event_ts: uniqueTs() });
+  async createdUserGroup(name: string, users: string[]) {
+    const id = await this.userGroup(name, users);
+    const handle = name.toLowerCase().replaceAll(/[^a-z0-9]+/g, "-");
+    await this.sendEvent({ type: "subteam_created", subteam: { id, team_id: this.target.workspace, handle, name }, event_ts: uniqueTs(await this.now()) });
     return id;
   }
 
@@ -97,7 +151,7 @@ export class Slack {
   }
 
   async post(user: string, elements: RichElement[], { channel = "C_E2E_GENERAL", channelType = "channel", threadTs, fromBot = false }: PostOptions = {}): Promise<Posted> {
-    const ts = uniqueTs();
+    const ts = uniqueTs(await this.now());
     await this.sendEvent({
       type: "message",
       channel,
@@ -114,7 +168,7 @@ export class Slack {
 
   // Slack sends an edit as a message_changed event that carries the whole new message and when it was edited.
   async edit(posted: Posted, elements: RichElement[]): Promise<Posted> {
-    const editedTs = uniqueTs();
+    const editedTs = uniqueTs(await this.now());
     const { user, ts, threadTs } = posted;
     const message = { type: "message", user, ts, team: this.target.workspace, ...(threadTs !== undefined && { thread_ts: threadTs }) };
     await this.sendEvent({
@@ -132,26 +186,33 @@ export class Slack {
 
   // A member adds a reaction to someone's message.
   async react(user: string, { channel, ts, user: author }: Posted, reaction: string) {
-    const eventTs = uniqueTs();
+    const eventTs = uniqueTs(await this.now());
     await this.sendEvent({ type: "reaction_added", user, reaction, item_user: author, item: { type: "message", channel, ts }, event_ts: eventTs });
   }
 
   // A member opens the app's Home tab.
   async openHome(user: string) {
-    await this.sendEvent({ type: "app_home_opened", user, channel: uniqueId("D"), tab: "home", event_ts: uniqueTs() });
+    await this.sendEvent({ type: "app_home_opened", user, channel: uniqueId("D"), tab: "home", event_ts: uniqueTs(await this.now()) });
   }
 
   // A member clicks a button or picks an option on App Home, as Slack posts it: a form with one JSON payload.
   async click(user: string, action: Action, state: Record<string, unknown> = {}) {
+    await this.interact(user, action, { container: { type: "view" }, view: { type: "home" }, state: { values: state } });
+  }
+
+  // A member clicks a button on a message the app posted, such as a direct message.
+  async clickOn(user: string, { channel, ts }: Shown, action: Action) {
+    await this.interact(user, action, { container: { type: "message", channel_id: channel, message_ts: ts }, channel: { id: channel }, message: { ts } });
+  }
+
+  private async interact(user: string, action: Action, where: Record<string, unknown>) {
     const payload = {
       type: "block_actions",
       team: { id: this.target.workspace },
       user: { id: user },
       api_app_id: this.target.appId,
       trigger_id: uniqueId("T"),
-      container: { type: "view" },
-      view: { type: "home" },
-      state: { values: state },
+      ...where,
       actions: [{ type: "button", ...action }],
     };
     const response = await this.signed("/slack/interactivity", new URLSearchParams({ payload: JSON.stringify(payload) }).toString(), "application/x-www-form-urlencoded");
@@ -246,6 +307,13 @@ export class Slack {
     return this.read<Shown[]>("messages", { channel });
   }
 
+  // The direct messages the app sent a member, oldest first, each as it shows now: to the member's id as the channel,
+  // or to the DM conversations.open gave it. Each keeps the channel it went to, so a click on it names that channel.
+  async dmsShownTo(user: string) {
+    const shown = [...(await this.messagesIn(user)), ...(await this.messagesIn(directMessageWith(user)))];
+    return shown.sort((a, b) => Number(a.ts) - Number(b.ts));
+  }
+
   // The App Home views the app published for a member, oldest first.
   async homesOf(user: string) {
     return (await this.callsTo("views.publish")).filter((call) => call.user_id === user).map((call) => call.view as View);
@@ -259,7 +327,7 @@ export class Slack {
   private readonly immediateResponses = new Map<string, Record<string, unknown>>();
 
   private async sendEvent(event: Record<string, unknown>) {
-    this.lastEnvelope = JSON.stringify({ type: "event_callback", team_id: this.target.workspace, event_id: uniqueId("Ev"), event_time: Math.floor(Date.now() / 1000), event });
+    this.lastEnvelope = JSON.stringify({ type: "event_callback", team_id: this.target.workspace, event_id: uniqueId("Ev"), event_time: Math.floor((await this.now()) / 1000), event });
     await this.deliver(this.lastEnvelope);
   }
 
@@ -275,8 +343,8 @@ export class Slack {
     return new Error(reported.length === 0 ? what : `${what}; the app reported:\n${reported.join("\n")}`);
   }
 
-  private signed(path: string, body: string, contentType = "application/json") {
-    const timestamp = Math.floor(Date.now() / 1000).toString();
+  private async signed(path: string, body: string, contentType = "application/json") {
+    const timestamp = Math.floor((await this.now()) / 1000).toString();
     const signature = createHmac("sha256", this.target.signingSecret).update(`v0:${timestamp}:${body}`).digest("hex");
     return fetch(`${this.target.appUrl}${path}`, {
       method: "POST",
@@ -318,14 +386,13 @@ function uniqueId(prefix: string) {
 
 let lastTs = 0;
 
-function uniqueTs() {
-  lastTs = Math.max(lastTs + 1, Date.now() * 1000);
+function uniqueTs(now: number) {
+  lastTs = Math.max(lastTs + 1, now * 1000);
   return `${Math.floor(lastTs / 1_000_000)}.${String(lastTs % 1_000_000).padStart(6, "0")}`;
 }
 
-// A fixed-offset zone where it is now about noon, so a journey's messages never straddle the member's midnight and
-// the daily allowance never refills mid-journey.
-function noonZone() {
-  const offset = 12 - new Date().getUTCHours();
-  return offset === 0 ? "Etc/GMT" : `Etc/GMT${offset > 0 ? "-" : "+"}${Math.abs(offset)}`;
+// A new member's zone has a fixed offset where it is now about noon, so a journey's messages never straddle the
+// member's midnight and the daily allowance never refills mid-journey. Etc/GMT names its offsets with the sign flipped.
+function zoneAhead(hours: number) {
+  return hours === 0 ? "Etc/GMT" : `Etc/GMT${hours > 0 ? "-" : "+"}${Math.abs(hours)}`;
 }

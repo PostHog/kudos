@@ -65,4 +65,7 @@ jobs:
 
       - run: pnpm exec e2e-web install chromium --with-deps
 
+      # The journeys tagged @time move the local app's clock with libfaketime.
+      - run: sudo apt-get install -y faketime
+
       - run: pnpm e2e

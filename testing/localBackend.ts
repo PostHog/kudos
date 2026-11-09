@@ -12,12 +12,23 @@ const backendVersion = "precompiled-2026-10-06-a3538c6";
 const run = promisify(execFile);
 
 // `run` runs one of the deployment's functions as its admin, as `npx convex run` does, and gives back what it printed.
-export type LocalBackend = { cloud: string; site: string; envFile: string; run: (name: string, options?: { component?: string }) => Promise<string>; stop: () => Promise<void> };
+// `adminKey` signs requests as the deployment's admin. `restart` stops the backend and starts it again on the same
+// database, ports and deployment, with `changes` added to its process environment.
+export type LocalBackend = {
+  cloud: string;
+  site: string;
+  envFile: string;
+  adminKey: string;
+  run: (name: string, options?: { component?: string }) => Promise<string>;
+  restart: (changes: Record<string, string>) => Promise<void>;
+  stop: () => Promise<void>;
+};
 
 // `signal` cancels startup: it aborts the download, the deploy and the wait, and stops whatever had started.
-export type LocalBackendOptions = { instanceName: string; variables: (site: string) => Record<string, string>; signal?: AbortSignal };
+// `environment` adds to the backend process's own environment, such as a preloaded library that moves its clock.
+export type LocalBackendOptions = { instanceName: string; variables: (site: string) => Record<string, string>; environment?: Record<string, string>; signal?: AbortSignal };
 
-export async function startLocalBackend({ instanceName, variables, signal }: LocalBackendOptions): Promise<LocalBackend> {
+export async function startLocalBackend({ instanceName, variables, environment, signal }: LocalBackendOptions): Promise<LocalBackend> {
   const binary = await backendBinary(signal);
   signal?.throwIfAborted();
   const directory = await mkdtemp(join(tmpdir(), `${instanceName}-`));
@@ -25,31 +36,43 @@ export async function startLocalBackend({ instanceName, variables, signal }: Loc
   const cloud = `http://127.0.0.1:${cloudPort}`;
   const site = `http://127.0.0.1:${sitePort}`;
   const instanceSecret = randomBytes(32).toString("hex");
-  const backend = spawn(binary, [
-    ...["--instance-name", instanceName, "--instance-secret", instanceSecret],
-    ...["--port", String(cloudPort), "--site-proxy-port", String(sitePort)],
-    ...["--convex-origin", cloud, "--convex-site", site],
-    ...["--local-storage", join(directory, "storage"), "--disable-beacon"],
-    join(directory, "db.sqlite3"),
-  ], { stdio: "ignore", detached: true });
-  const stop = async () => {
+  const launch = () =>
+    spawn(binary, [
+      ...["--instance-name", instanceName, "--instance-secret", instanceSecret],
+      ...["--port", String(cloudPort), "--site-proxy-port", String(sitePort)],
+      ...["--convex-origin", cloud, "--convex-site", site],
+      ...["--local-storage", join(directory, "storage"), "--disable-beacon"],
+      join(directory, "db.sqlite3"),
+    ], { stdio: "ignore", detached: true, env: { ...process.env, ...environment } });
+  let backend = launch();
+  const halt = async () => {
     const exited = new Promise((resolve) => backend.once("exit", resolve));
     const running = backend.exitCode === null && backend.signalCode === null;
     killGroup(backend);
     if (running) await exited;
+  };
+  const stop = async () => {
+    await halt();
     await rm(directory, { recursive: true, force: true });
+  };
+  const restart = async (changes: Record<string, string>) => {
+    await halt();
+    environment = { ...environment, ...changes };
+    backend = launch();
+    await untilAnswering(`${cloud}/version`, backend, undefined);
   };
   try {
     await untilAnswering(`${cloud}/version`, backend, signal);
     const envFile = join(directory, "deployment.env");
-    await writeFile(envFile, `CONVEX_SELF_HOSTED_URL=${cloud}\nCONVEX_SELF_HOSTED_ADMIN_KEY=${await adminKey(binary, instanceName, instanceSecret, signal)}\n`);
+    const key = await adminKey(binary, instanceName, instanceSecret, signal);
+    await writeFile(envFile, `CONVEX_SELF_HOSTED_URL=${cloud}\nCONVEX_SELF_HOSTED_ADMIN_KEY=${key}\n`);
     const variablesFile = join(directory, "variables.env");
     await writeFile(variablesFile, envLines({ ...(await signingKeys()), ...variables(site) }));
     await convex(["env", "set", "--from-file", variablesFile, "--env-file", envFile], signal);
     await convex(["deploy", "--yes", "--typecheck", "disable", "--codegen", "disable", "--env-file", envFile], signal);
     const runFunction = (name: string, { component }: { component?: string } = {}) =>
       convex(["run", ...(component === undefined ? [] : ["--component", component]), name, "--env-file", envFile], signal);
-    return { cloud, site, envFile, run: runFunction, stop };
+    return { cloud, site, envFile, adminKey: key, run: runFunction, restart, stop };
   } catch (failure) {
     await stop();
     throw failure;
