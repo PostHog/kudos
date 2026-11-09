@@ -19,13 +19,13 @@ describe("the fakes server's Slack Web API", () => {
     expect(await reply.json()).toMatchObject({ ok: true, user: { id: "U_FORM" } });
   });
 
-  test("records a form-encoded message with its blocks parsed", async () => {
+  test("records a form-encoded message with its blocks parsed and its text as written", async () => {
     const blocks = [{ type: "section", text: { type: "mrkdwn", text: "Hi" } }];
-    const form = new URLSearchParams({ channel: "C_FORM", text: "Hi", blocks: JSON.stringify(blocks) });
+    const form = new URLSearchParams({ channel: "C_FORM", text: "[Hi] {there}", blocks: JSON.stringify(blocks) });
     await fetch(`${fakes.url}/api/chat.postEphemeral`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: form.toString() });
 
     const calls = await (await fetch(`${fakes.url}/_control/calls?method=chat.postEphemeral`)).json();
 
-    expect(calls).toEqual([{ channel: "C_FORM", text: "Hi", blocks }]);
+    expect(calls).toEqual([{ channel: "C_FORM", text: "[Hi] {there}", blocks }]);
   });
 });

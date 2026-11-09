@@ -45,11 +45,13 @@ function control(slack: FakeSlack, postHog: FakePostHog, url: URL, body: string)
 }
 
 // Slack's Web API takes JSON or form-encoded arguments; the recording fake reads JSON, so form fields become JSON
-// here, with the JSON-valued ones (blocks, view and the like) parsed.
+// here. The fields Slack takes as JSON strings are parsed; every other field stays the text it was sent as.
+const jsonFields = new Set(["blocks", "attachments", "view", "metadata", "unfurls", "profile", "user_auth_blocks"]);
+
 function jsonArguments(request: IncomingMessage, body: string) {
   if (!(request.headers["content-type"] ?? "").startsWith("application/x-www-form-urlencoded")) return body;
-  const fields = Object.fromEntries(new URLSearchParams(body));
-  return JSON.stringify(Object.fromEntries(Object.entries(fields).map(([name, value]) => [name, /^[[{]/.test(value) ? JSON.parse(value) : value])));
+  const fields = Object.entries(Object.fromEntries(new URLSearchParams(body)));
+  return JSON.stringify(Object.fromEntries(fields.map(([name, value]) => [name, jsonFields.has(name) ? JSON.parse(value) : value])));
 }
 
 function headersOf(request: IncomingMessage) {
