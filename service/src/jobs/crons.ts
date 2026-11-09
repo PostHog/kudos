@@ -1,4 +1,5 @@
-// Today's convex/crons.ts, with the same schedules: each cron's id is its job's name and the time seam's CronId.
+// Today's convex/crons.ts, with the same schedules: each cron's id is its job's name and the time seam's CronId. One
+// more is the PostHog component's: its loop refreshes the flags' definitions every minute, a cron here.
 
 export const cronIds = [
   "slack.receipts.deleteExpired",
@@ -17,6 +18,7 @@ export const cronIds = [
   "slack.directory.listSlackMembers",
   "slack.customEmoji.syncCustomEmoji",
   "analytics.person.catchUp",
+  "analytics.flags.refresh",
 ] as const;
 
 export type CronId = (typeof cronIds)[number];
@@ -44,6 +46,7 @@ export const cronSchedules: Record<CronId, Schedule> = {
   "slack.directory.listSlackMembers": daily(4, 20),
   "slack.customEmoji.syncCustomEmoji": daily(4, 30),
   "analytics.person.catchUp": daily(4, 45),
+  "analytics.flags.refresh": minutes(1),
 };
 
 /**

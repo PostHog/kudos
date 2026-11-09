@@ -19,10 +19,11 @@ function convexCrons(): Map<string, Schedule> {
 }
 
 describe("the crons", () => {
-  test("are convex/crons.ts's, each by its function's path, with the same schedule", () => {
+  test("are convex/crons.ts's, each by its function's path, with the same schedule, and the PostHog component's refresh", () => {
     const oracle = convexCrons();
 
     expect(oracle.size, "the oracle parsed").toBe(16);
+    oracle.set("analytics.flags.refresh", { everyMs: 60_000 });
     expect(new Map(Object.entries(cronSchedules))).toEqual(oracle);
     expect([...cronIds].sort()).toEqual([...oracle.keys()].sort());
   });

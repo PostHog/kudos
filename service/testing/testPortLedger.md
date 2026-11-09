@@ -61,7 +61,7 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/analytics/deliveredTwice.test.ts | S14 | | |
 | convex/analytics/drain.test.ts | S14 | | |
 | convex/analytics/errors.test.ts | S14 | | |
-| convex/analytics/flags.test.ts | S14 | | |
+| convex/analytics/flags.test.ts | S14 | service/src/analytics/flags.test.ts | |
 | convex/analytics/hoggieDropped.test.ts | S14 | | |
 | convex/analytics/kudosGiven.test.ts | S14 | | |
 | convex/analytics/leaderboardMembership.test.ts | S14 | | |
