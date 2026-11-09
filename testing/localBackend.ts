@@ -109,7 +109,8 @@ async function untilAnswering(url: string, backend: ChildProcess, signal: AbortS
   while (Date.now() < deadline) {
     signal?.throwIfAborted();
     if (backend.exitCode !== null) throw new Error(`the local backend exited with ${backend.exitCode}`);
-    if (await fetch(url).then((response) => response.ok, () => false)) return;
+    const probe = AbortSignal.any([AbortSignal.timeout(1_000), ...(signal ? [signal] : [])]);
+    if (await fetch(url, { signal: probe }).then((response) => response.ok, () => false)) return;
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   throw new Error(`the local backend didn't answer ${url} within ${withinMs} ms`);
