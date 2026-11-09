@@ -1,8 +1,9 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { Hono } from "hono";
+import { createAppTime, type AppTime, type TimeAnswer } from "../appTime.ts";
 import type { Clock } from "../clock.ts";
 import { isCronId } from "../jobs/crons.ts";
-import type { Settled, Worker } from "../jobs/worker.ts";
+import type { Worker } from "../jobs/worker.ts";
 import type { LoadControl } from "../load/control.ts";
 import { errorFields, type Log } from "../log.ts";
 
@@ -89,7 +90,7 @@ export function createApp({ commit, readiness, off, log, clock, testSecret, work
 
   if (load?.routes) app.route("/admin/load", load.routes);
 
-  if (testSecret) mountTestingTime(app, testSecret, clock, worker, timeBudgetMs);
+  if (testSecret) mountTestingTime(app, testSecret, createAppTime({ clock, worker, budgetMs: timeBudgetMs }), timeBudgetMs);
 
   if (slack) app.route("/slack", slack);
   // The app's own paths: a domain's route never answers them, whatever the front door, the seam or the load mounted.
@@ -107,14 +108,14 @@ export function createApp({ commit, readiness, off, log, clock, testSecret, work
 }
 
 /**
- * The E2E suite's time seam (#95). One of:
+ * The E2E suite's time seam (#95) over HTTP: AppTime, one move per request, one of:
  * - `{"advance": ms}` moves the clock forward; due jobs run on the worker's own time;
  * - `{"runCron": id}` runs the cron's job once at the app's clock, then settles;
  * - `{"settle": true}` runs every job due by the app's clock, and those they make due, until none is due or running.
  * It answers `{"now", "ran"}` once done, or 504 with what ran when the budget runs out first.
  * A request without the secret gets the 404 any unknown path gets, so the route can't be told apart from absent.
  */
-function mountTestingTime(app: Hono, secret: string, clock: Clock, worker: AppOptions["worker"], budgetMs: number): void {
+function mountTestingTime(app: Hono, secret: string, time: AppTime, budgetMs: number): void {
   const expected = digest(secret);
   app.post("/testing/time", async (c) => {
     const given = c.req.header("x-hedgehug-test-secret");
@@ -125,30 +126,28 @@ function mountTestingTime(app: Hono, secret: string, clock: Clock, worker: AppOp
     const refused = (error: string, status: 400 | 409 = 400) => c.json({ error }, status);
     if (keys.length !== 1) return refused('expected {"advance": ms}, {"runCron": id} or {"settle": true}');
 
+    let answer: TimeAnswer | undefined;
     if (keys[0] === "advance") {
       const { advance } = fields;
       if (typeof advance !== "number" || !Number.isFinite(advance) || advance < 0) return refused("advance takes a finite number of milliseconds, zero or more");
       try {
-        return c.json({ now: clock.advance(advance), ran: [] });
+        answer = time.advance(advance);
       } catch (error) {
         if (error instanceof RangeError) return refused("that step takes the clock past the last instant a date can hold");
         throw error;
       }
-    }
-
-    let settled: Settled | undefined;
-    if (keys[0] === "runCron") {
+    } else if (keys[0] === "runCron") {
       const { runCron } = fields;
       if (!isCronId(runCron)) return refused("runCron takes one of the time seam's cron ids");
-      settled = worker ? await worker.runCron(runCron, budgetMs) : undefined;
-      if (!settled) return refused(`no job is registered as ${runCron} yet`, 409);
+      answer = await time.runCron(runCron);
+      if (!answer) return refused(`no job is registered as ${runCron} yet`, 409);
     } else if (keys[0] === "settle" && fields.settle === true) {
-      settled = worker ? await worker.settle(budgetMs) : { ran: [], done: true };
+      answer = await time.settle();
     } else {
       return refused('expected {"advance": ms}, {"runCron": id} or {"settle": true}');
     }
-    const answer = { now: clock.now(), ran: settled.ran };
-    return settled.done ? c.json(answer) : c.json({ ...answer, error: `jobs were still due or running after ${budgetMs} ms` }, 504);
+    const { now, ran, done } = answer;
+    return done ? c.json({ now, ran }) : c.json({ now, ran, error: `jobs were still due or running after ${budgetMs} ms` }, 504);
   });
 }
 

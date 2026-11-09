@@ -1,10 +1,9 @@
-import { createHmac } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
-import type { Hono } from "hono";
 import { describe, expect, test } from "vitest";
 import { z } from "zod";
 import { useTestDatabase } from "../../testing/database.ts";
+import { signedRequest, signingSecret as secret, slackClient } from "../../testing/signedSlack.ts";
 import { createClock } from "../clock.ts";
 import { archive, jobs } from "../db/schema/service.ts";
 import { slackReceipts } from "../db/schema/slack.ts";
@@ -17,7 +16,6 @@ import { createFrontDoor, type EventKind, type SlackHandlers } from "./frontDoor
 const database = useTestDatabase();
 const db = drizzle({ client: database.pool });
 const quiet: Log = { info: () => {}, error: () => {} };
-const secret = "a-signing-secret-for-tests";
 const workspace = "T_TEST";
 
 // A handler's lasting effect: a row in the archive table, which nothing else here touches.
@@ -35,24 +33,7 @@ function setUp(handlers: SlackHandlers, { off = false, noSecret = false } = {}) 
   const operations = createOperations({ pool: database.pool, clock, log: quiet, retryDelayMs: () => 1 });
   const slack = createFrontDoor({ signingSecret, clock, off, log: quiet, operations, handlers });
   const app = createApp({ commit: "test", readiness: { migrations: () => "done" }, off, log: quiet, clock, slack });
-  return { app, clock, ...slackClient(app, () => clock.now()) };
-}
-
-function slackClient(app: Hono, now: () => number) {
-  const send = (path: string, body: string, { at = now(), key = secret, contentType = "application/json" } = {}) => {
-    const timestamp = Math.floor(at / 1000).toString();
-    const signature = createHmac("sha256", key).update(`v0:${timestamp}:${body}`).digest("hex");
-    return app.request(path, { method: "POST", headers: { "content-type": contentType, "x-slack-request-timestamp": timestamp, "x-slack-signature": `v0=${signature}` }, body });
-  };
-  const form = (fields: Record<string, string>) => new URLSearchParams(fields).toString();
-  return {
-    send,
-    event: (event: Record<string, unknown>, eventId = `Ev${Math.random().toString(36).slice(2)}`, signing = {}) =>
-      send("/slack/events", JSON.stringify({ type: "event_callback", team_id: workspace, event_id: eventId, event_time: 1_800_000_000, event }), signing),
-    interaction: (payload: Record<string, unknown>) => send("/slack/interactivity", form({ payload: JSON.stringify(payload) }), { contentType: "application/x-www-form-urlencoded" }),
-    command: (text: string) =>
-      send("/slack/commands", form({ team_id: workspace, user_id: "U_GIVER", channel_id: "C_GENERAL", command: "/hedgehug", text }), { contentType: "application/x-www-form-urlencoded" }),
-  };
+  return { app, clock, ...slackClient(app, { clock, workspace }) };
 }
 
 const click = (trigger: string) => ({
@@ -75,17 +56,17 @@ describe("Slack's signature", () => {
     const { app, send, clock } = setUp(handlers);
     const body = JSON.stringify({ type: "event_callback", team_id: workspace, event_id: "Ev1", event: { type: "message" } });
 
-    expect((await send("/slack/events", body, { key: "another-secret" })).status, "another secret").toBe(401);
-    expect((await send("/slack/events", body, { at: clock.now() - 6 * 60_000 })).status, "signed six minutes ago").toBe(401);
-    expect((await send("/slack/events", body, { at: clock.now() + 6 * 60_000 })).status, "signed six minutes ahead").toBe(401);
+    expect((await send("/events", body, { secret: "another-secret" })).status, "another secret").toBe(401);
+    expect((await send("/events", body, { at: clock.now() - 6 * 60_000 })).status, "signed six minutes ago").toBe(401);
+    expect((await send("/events", body, { at: clock.now() + 6 * 60_000 })).status, "signed six minutes ahead").toBe(401);
     expect((await app.request("/slack/events", { method: "POST", body })).status, "no signature").toBe(401);
     const tampered = await app.request("/slack/events", {
       method: "POST",
-      headers: Object.fromEntries((await signedHeaders(body, clock.now())).entries()),
+      headers: (await signedRequest(body, { signedAt: new Date(clock.now()) })).headers,
       body: body.replace("Ev1", "Ev2"),
     });
     expect(tampered.status, "a body changed after signing").toBe(401);
-    for (const path of ["/slack/interactivity", "/slack/commands"]) expect((await send(path, "payload=%7B%7D", { key: "another-secret" })).status, path).toBe(401);
+    for (const path of ["/interactivity", "/commands"]) expect((await send(path, "payload=%7B%7D", { secret: "another-secret" })).status, path).toBe(401);
     expect(reached).toEqual([]);
     expect(await receipts()).toEqual([]);
   });
@@ -96,8 +77,8 @@ describe("Slack's signature", () => {
     const real = clock.now();
     clock.advance(60 * 60_000);
 
-    expect((await event({ type: "message" }, "Ev-app-time")).status).toBe(200);
-    expect((await event({ type: "message" }, "Ev-real-time", { at: real })).status).toBe(401);
+    expect((await event({ type: "message" }, { eventId: "Ev-app-time" })).status).toBe(200);
+    expect((await event({ type: "message" }, { eventId: "Ev-real-time", at: real })).status).toBe(401);
     expect(kinds).toEqual(["message"]);
   });
 
@@ -107,16 +88,10 @@ describe("Slack's signature", () => {
   });
 });
 
-async function signedHeaders(body: string, at: number) {
-  const timestamp = Math.floor(at / 1000).toString();
-  const signature = createHmac("sha256", secret).update(`v0:${timestamp}:${body}`).digest("hex");
-  return new Headers({ "x-slack-request-timestamp": timestamp, "x-slack-signature": `v0=${signature}` });
-}
-
 describe("/slack/events", () => {
   test("the URL check's challenge is answered in the response", async () => {
     const { send } = setUp({});
-    const response = await send("/slack/events", JSON.stringify({ type: "url_verification", challenge: "a-challenge", token: "t" }));
+    const response = await send("/events", JSON.stringify({ type: "url_verification", challenge: "a-challenge", token: "t" }));
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ challenge: "a-challenge" });
   });
@@ -162,7 +137,7 @@ describe("/slack/events", () => {
       { type: "event_callback", team_id: workspace, event_id: "Ev1" },
       { type: "event_callback", team_id: workspace, event_id: "Ev1", event: { text: "no type" } },
     ];
-    for (const envelope of envelopes) expect((await send("/slack/events", JSON.stringify(envelope))).status).toBe(200);
+    for (const envelope of envelopes) expect((await send("/events", JSON.stringify(envelope))).status).toBe(200);
     expect(taken).toEqual([]);
   });
 
@@ -183,8 +158,8 @@ describe("/slack/events", () => {
       },
     });
 
-    expect((await event({ type: "message", text: "thanks" }, "Ev-twice")).status).toBe(200);
-    expect((await event({ type: "message", text: "thanks" }, "Ev-twice")).status).toBe(200);
+    expect((await event({ type: "message", text: "thanks" }, { eventId: "Ev-twice" })).status).toBe(200);
+    expect((await event({ type: "message", text: "thanks" }, { eventId: "Ev-twice" })).status).toBe(200);
 
     expect(await effects("message")).toBe(1);
     expect(await db.select({ name: jobs.name }).from(jobs)).toEqual([{ name: "test.counted" }]);
@@ -193,7 +168,7 @@ describe("/slack/events", () => {
 
   test("the same event ID in another workspace is another event", async () => {
     const { send } = setUp({ events: { message: async (ctx) => effect(ctx, "message") } });
-    for (const team of ["T_ONE", "T_TWO"]) await send("/slack/events", JSON.stringify({ type: "event_callback", team_id: team, event_id: "Ev-same", event: { type: "message" } }));
+    for (const team of ["T_ONE", "T_TWO"]) await send("/events", JSON.stringify({ type: "event_callback", team_id: team, event_id: "Ev-same", event: { type: "message" } }));
     expect(await effects("message")).toBe(2);
   });
 
@@ -201,8 +176,8 @@ describe("/slack/events", () => {
     let calls = 0;
     const { event } = setUp({ events: { message: async () => (calls++, "ignored") } });
 
-    await event({ type: "message", text: "no kudos here" }, "Ev-ignored");
-    await event({ type: "message", text: "no kudos here" }, "Ev-ignored");
+    await event({ type: "message", text: "no kudos here" }, { eventId: "Ev-ignored" });
+    await event({ type: "message", text: "no kudos here" }, { eventId: "Ev-ignored" });
 
     expect(calls).toBe(2);
     expect(await receipts()).toEqual([]);
@@ -219,10 +194,10 @@ describe("/slack/events", () => {
       },
     });
 
-    expect((await event({ type: "message" }, "Ev-retried")).status).toBe(500);
+    expect((await event({ type: "message" }, { eventId: "Ev-retried" })).status).toBe(500);
     expect(await receipts()).toEqual([]);
     failing = false;
-    expect((await event({ type: "message" }, "Ev-retried")).status).toBe(200);
+    expect((await event({ type: "message" }, { eventId: "Ev-retried" })).status).toBe(200);
 
     expect(await effects("message")).toBe(1);
     expect(await receipts()).toEqual(["Ev-retried"]);
@@ -244,7 +219,7 @@ describe("/slack/events", () => {
       },
     });
 
-    const answers = await Promise.all([event({ type: "message" }, "Ev-race"), event({ type: "message" }, "Ev-race")]);
+    const answers = await Promise.all([event({ type: "message" }, { eventId: "Ev-race" }), event({ type: "message" }, { eventId: "Ev-race" })]);
 
     expect(answers.map(({ status }) => status)).toEqual([200, 200]);
     expect(arrived, "both deliveries reached the handler before either committed").toBeGreaterThanOrEqual(2);
@@ -255,8 +230,8 @@ describe("/slack/events", () => {
 
 describe("/slack/interactivity", () => {
   test("an external select's options are answered in the response, by its action ID", async () => {
-    const { interaction, clock } = setUp({ options: { "emoji-picker": async (ctx, request) => [{ value: `${request.value}@${ctx.now}` }] } });
-    const ask = (action_id: string) => interaction({ type: "block_suggestion", team: { id: workspace }, user: { id: "U1" }, action_id, value: "ta" });
+    const { options, clock } = setUp({ options: { "emoji-picker": async (ctx, request) => [{ value: `${request.value}@${ctx.now}` }] } });
+    const ask = (action_id: string) => options({ action_id, value: "ta" });
 
     const answered = await ask("emoji-picker");
     expect(answered.status).toBe(200);
@@ -301,7 +276,7 @@ describe("/slack/interactivity", () => {
       { ...click("Tr-1"), trigger_id: undefined },
     ];
     for (const payload of notClicks) expect((await interaction(payload)).status).toBe(200);
-    expect((await send("/slack/interactivity", "no-payload=1", { contentType: "application/x-www-form-urlencoded" })).status).toBe(200);
+    expect((await send("/interactivity", "no-payload=1", { contentType: "application/x-www-form-urlencoded" })).status).toBe(200);
     expect(calls).toBe(0);
   });
 });
@@ -356,17 +331,17 @@ describe("HEDGEHUG_OFF", () => {
   test("Slack's routes answer the challenge and 200, check the signature, and reach no handler", async () => {
     let calls = 0;
     const counted = async () => void calls++;
-    const { send, event, interaction, command } = setUp(
+    const { send, event, interaction, options, command } = setUp(
       { events: { message: counted }, clicks: { homeClick: counted }, options: { picker: async () => (calls++, []) }, commands: { addToChannel: async () => (calls++, undefined) } },
       { off: true },
     );
 
-    expect(await (await send("/slack/events", JSON.stringify({ type: "url_verification", challenge: "off-challenge" }))).json()).toEqual({ challenge: "off-challenge" });
+    expect(await (await send("/events", JSON.stringify({ type: "url_verification", challenge: "off-challenge" }))).json()).toEqual({ challenge: "off-challenge" });
     expect((await event({ type: "message" })).status).toBe(200);
     expect((await interaction(click("Tr-off"))).status).toBe(200);
-    expect((await interaction({ type: "block_suggestion", team: { id: workspace }, user: { id: "U1" }, action_id: "picker", value: "" })).status).toBe(200);
+    expect((await options({ action_id: "picker", value: "" })).status).toBe(200);
     expect((await command("")).status).toBe(200);
-    expect((await send("/slack/events", "{}", { key: "another-secret" })).status).toBe(401);
+    expect((await send("/events", "{}", { secret: "another-secret" })).status).toBe(401);
     expect(calls).toBe(0);
     expect(await receipts()).toEqual([]);
   });
