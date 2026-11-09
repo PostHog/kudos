@@ -14,6 +14,13 @@ export async function staysEqual<Value>(read: () => Promise<Value>, expected: Va
     expect(await read()).toEqual(expected);
     await new Promise((resolve) => setTimeout(resolve, 250));
   } while (Date.now() < until);
+  // A read that began inside the window may answer with what was true at its start, so the last one begins after it.
+  expect(await read()).toEqual(expected);
+}
+
+// A leaderboard answer, not a placeholder: under production's flags every board shows hugs, or how to join their board.
+export function isBoard(answer: string) {
+  return /· \d+ hugs?\b|Give a hug/.test(answer);
 }
 
 // A giver's reply opens with what they gave, the XP it earned and what's left today, then any mention it skipped. The

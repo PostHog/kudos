@@ -2,8 +2,9 @@ import type { Action, Block, Element, View } from "./slack.ts";
 
 // App Home as a member sees it: its tab bar, its header, and the buttons and pickers they can use.
 
+// The tab bar is the first row of buttons, wherever the view puts it.
 export function tabsOf(view: View) {
-  return buttonsOf(view.blocks[0]).map((button) => button.text?.text);
+  return buttonsOf(view.blocks.find((block) => block.type === "actions")).map((button) => button.text?.text);
 }
 
 export function headerOf(view: View) {
@@ -30,6 +31,12 @@ export function option(view: View, about: string, label: string): Action {
   const picked = picker?.options?.find((candidate) => candidate.text.text === label);
   if (picker?.action_id === undefined || picked === undefined) throw new Error(`App Home shows no option ${label} for ${about}`);
   return { type: "static_select", action_id: picker.action_id, selected_option: { value: picked.value } };
+}
+
+// The label the picker in the block that reads `about` shows as chosen.
+export function chosen(view: View, about: string) {
+  const block = view.blocks.find((candidate) => candidate.text?.text.includes(about));
+  return (block === undefined ? undefined : elementsOf(block).find((element) => element.type === "static_select"))?.initial_option?.text.text;
 }
 
 // The channel `channel` picked in the channel picker of the block that reads `about`, as Slack sends it.

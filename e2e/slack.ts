@@ -1,4 +1,5 @@
 import { createHmac, randomBytes } from "node:crypto";
+import { directMessageWith } from "../testing/fakeSlack.ts";
 import type { Target } from "./target.ts";
 
 export type RichElement =
@@ -30,7 +31,7 @@ export type View = { type: string; blocks: Block[] };
 
 export type Block = { type: string; text?: { text: string }; elements?: Element[]; accessory?: Element };
 
-export type Element = { type: string; action_id?: string; value?: string; text?: { text: string }; options?: Array<{ text: { text: string }; value: string }> };
+export type Element = { type: string; action_id?: string; value?: string; text?: { text: string }; options?: Array<{ text: { text: string }; value: string }>; initial_option?: { text: { text: string }; value: string } };
 
 export type Action = { action_id: string; value?: string; type?: string; selected_option?: { value: string }; selected_channel?: string };
 
@@ -191,6 +192,25 @@ export class Slack {
     return [...(immediate === undefined ? [] : [immediate]), ...posted].map((shown): Record<string, unknown> => ({ response_type: "ephemeral", ...shown }));
   }
 
+  // Asks with the command, then watches that one command's answers until one is accepted, since an app may answer
+  // first with a placeholder and then with what was asked for, in the request or later at the response URL. When one
+  // command's answers settle with none accepted, it asks again: what it asks about may not have happened yet.
+  async askUntil(user: string, channel: { id: string; name: string }, text: string, accept: (answer: string) => boolean, { perAskMs = 5_000, withinMs = 15_000 } = {}) {
+    const until = Date.now() + withinMs;
+    let answers: string[] = [];
+    while (Date.now() < until) {
+      const reply = await this.command(user, channel, text);
+      const askedUntil = Math.min(until, Date.now() + perAskMs);
+      do {
+        answers = (await this.responsesTo(reply)).map((shown) => String(shown.text));
+        const accepted = answers.find(accept);
+        if (accepted !== undefined) return accepted;
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      } while (Date.now() < askedUntil);
+    }
+    throw new Error(`no answer to /hedgehug ${text} was accepted; the last command's answers were ${JSON.stringify(answers)}`);
+  }
+
   hasJoined(channel: string) {
     return this.read<boolean>("joined", { channel });
   }
@@ -213,9 +233,9 @@ export class Slack {
     return (await this.callsTo("chat.postEphemeral")).filter((call) => call.user === user);
   }
 
-  // Direct messages the app sent a member: Slack takes a member's id as the channel of a DM.
+  // Direct messages the app sent a member: to the member's id as the channel, or to the DM conversations.open gave it.
   async dmsTo(user: string) {
-    return (await this.callsTo("chat.postMessage")).filter((call) => call.channel === user);
+    return (await this.callsTo("chat.postMessage")).filter((call) => call.channel === user || call.channel === directMessageWith(user));
   }
 
   // What the app posted in a channel, oldest first.
