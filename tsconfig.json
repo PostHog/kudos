@@ -11,5 +11,5 @@
     "types": ["node"]
   },
   "include": ["**/*.ts", ".github/**/*.ts"],
-  "exclude": ["node_modules", "website", "service"]
+  "exclude": ["node_modules", "website", "service", "tools/rewrite/moduleMap/fixtures"]
 }
