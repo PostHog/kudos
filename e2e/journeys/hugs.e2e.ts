@@ -5,13 +5,7 @@ test("a hug reaction counts once on every board, and a member's first hug is exp
   const [hugger, author] = [await slack.member(), await slack.member()];
   const channel = await slack.channel();
   const message = await slack.post(author, [text("shipped the release")]);
-  const boards = async () =>
-    Promise.all(
-      ["leaderboard", "leaderboard month", "leaderboard all"].map(async (period) => {
-        const [shown] = await slack.responsesTo(await slack.command(hugger, channel, period));
-        return String(shown?.text).includes(`<@${hugger}> · 1 hug`);
-      }),
-    );
+  const boards = async () => Promise.all(["leaderboard", "leaderboard month", "leaderboard all"].map(async (period) => (await slack.ask(hugger, channel, period)).includes(`<@${hugger}> · 1 hug`)));
 
   await slack.react(hugger, message, "taco");
 
@@ -27,13 +21,16 @@ test("a hug reaction counts once on every board, and a member's first hug is exp
 
 test("a reaction to your own message is no hug", async ({ slack }) => {
   const [member, other] = [await slack.member(), await slack.member()];
+  const channel = await slack.channel();
   const own = await slack.post(member, [text("my own news")]);
   const theirs = await slack.post(other, [text("their news")]);
+  const board = () => slack.ask(member, channel, "leaderboard");
+
+  // The hug that counts lands first, so the count can only grow from here if the own-message reaction counts too.
+  await slack.react(member, theirs, "taco");
+  await expect.poll(async () => (await slack.dmsTo(member)).filter((dm) => dm.text === "Nice, that was your first hug!").length).toBe(1);
+  await expect.poll(board).toContain(`<@${member}> · 1 hug`);
 
   await slack.react(member, own, "taco");
-  await slack.react(member, theirs, "taco");
-
-  await expect.poll(async () => (await slack.dmsTo(member)).filter((dm) => dm.text === "Nice, that was your first hug!").length).toBe(1);
-  const [shown] = await slack.responsesTo(await slack.command(member, await slack.channel(), "leaderboard"));
-  expect(String(shown?.text)).toContain(`<@${member}> · 1 hug`);
+  await staysEqual(async () => (await board()).includes(`<@${member}> · 1 hug`), true);
 });

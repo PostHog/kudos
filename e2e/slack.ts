@@ -1,4 +1,5 @@
 import { createHmac, randomBytes } from "node:crypto";
+import { directMessageWith } from "../testing/fakeSlack.ts";
 import type { Target } from "./target.ts";
 
 export type RichElement =
@@ -30,7 +31,7 @@ export type View = { type: string; blocks: Block[] };
 
 export type Block = { type: string; text?: { text: string }; elements?: Element[]; accessory?: Element };
 
-export type Element = { type: string; action_id?: string; value?: string; text?: { text: string }; options?: Array<{ text: { text: string }; value: string }> };
+export type Element = { type: string; action_id?: string; value?: string; text?: { text: string }; options?: Array<{ text: { text: string }; value: string }>; initial_option?: { text: { text: string }; value: string } };
 
 export type Action = { action_id: string; value?: string; type?: string; selected_option?: { value: string }; selected_channel?: string };
 
@@ -161,6 +162,19 @@ export class Slack {
     return [...(immediate === undefined ? [] : [immediate]), ...posted].map((shown): Record<string, unknown> => ({ response_type: "ephemeral", ...shown }));
   }
 
+  // The command's first answer as the member sees it, whether the app answered the request or later at its response
+  // URL.
+  async ask(user: string, channel: { id: string; name: string }, text: string) {
+    const reply = await this.command(user, channel, text);
+    let shown: Record<string, unknown> | undefined;
+    const until = Date.now() + 10_000;
+    while ((shown = (await this.responsesTo(reply))[0]) === undefined) {
+      if (Date.now() > until) throw new Error(`the app never answered /hedgehug ${text}`);
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    return String(shown.text);
+  }
+
   hasJoined(channel: string) {
     return this.read<boolean>("joined", { channel });
   }
@@ -183,9 +197,9 @@ export class Slack {
     return (await this.callsTo("chat.postEphemeral")).filter((call) => call.user === user);
   }
 
-  // Direct messages the app sent a member: Slack takes a member's id as the channel of a DM.
+  // Direct messages the app sent a member: to the member's id as the channel, or to the DM conversations.open gave it.
   async dmsTo(user: string) {
-    return (await this.callsTo("chat.postMessage")).filter((call) => call.channel === user);
+    return (await this.callsTo("chat.postMessage")).filter((call) => call.channel === user || call.channel === directMessageWith(user));
   }
 
   // The App Home views the app published for a member, oldest first.
