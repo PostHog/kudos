@@ -33,6 +33,9 @@ test("/hedgehug stays out of shared and customer channels", async ({ slack }) =>
   const replies = [await slack.command(member, shared), await slack.command(member, customer)];
 
   for (const reply of replies) await expect.poll(() => slack.responsesTo(reply)).toEqual([{ response_type: "ephemeral", text: staysOut }]);
+  // Never joined, not even for a moment: a join Slack accepted would show here even after a leave.
+  const joins = (await slack.callsTo("conversations.join")).filter((call) => call.channel === shared.id || call.channel === customer.id);
+  expect(joins).toEqual([]);
   expect([await slack.hasJoined(shared.id), await slack.hasJoined(customer.id)]).toEqual([false, false]);
 });
 

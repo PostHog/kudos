@@ -46,7 +46,8 @@ export class Slack {
     return { id, name };
   }
 
-  // Slack's direct message with the app: a D… conversation the app can't join, whose name commands report as below.
+  // A direct message between members: a D… conversation the app is no part of, so Slack answers its lookups with
+  // channel_not_found and refuses a join, and commands name it as below.
   async directMessage() {
     const id = uniqueId("D");
     await this.control("channels", { id, name: id, kind: "private", joined: false });
@@ -111,13 +112,17 @@ export class Slack {
     const response = await this.signed("/slack/commands", form.toString(), "application/x-www-form-urlencoded");
     if (response.status !== 200) throw new Error(`the app answered the command with ${response.status}`);
     const body = await response.text();
-    if (body !== "") this.immediateResponses.set(reply, JSON.parse(body) as Record<string, unknown>);
+    if (body === "") return reply;
+    const isJson = response.headers.get("content-type")?.startsWith("application/json") === true;
+    this.immediateResponses.set(reply, isJson ? (JSON.parse(body) as Record<string, unknown>) : { text: body });
     return reply;
   }
 
+  // What Slack shows for a command, in order; a reply that names no response_type shows only to its member.
   async responsesTo(reply: string) {
     const immediate = this.immediateResponses.get(reply);
-    return [...(immediate === undefined ? [] : [immediate]), ...(await this.read<Record<string, unknown>[]>("responses", { reply }))];
+    const posted = await this.read<Record<string, unknown>[]>("responses", { reply });
+    return [...(immediate === undefined ? [] : [immediate]), ...posted].map((shown) => ({ response_type: "ephemeral", ...shown }));
   }
 
   hasJoined(channel: string) {
