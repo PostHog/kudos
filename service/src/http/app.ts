@@ -46,8 +46,9 @@ export function createApp({ commit, readiness, off, log, load }: AppOptions): Ho
 
   app.use(async (c, next) => {
     const migrated = readiness.migrations() === "done";
-    // A load's hold wins over HEDGEHUG_OFF: Slack hears 503 and retries rather than an acknowledgement.
-    if (migrated && load?.held() && !(load.routes && loadPaths.test(c.req.path))) return unavailable();
+    // A load's hold wins over HEDGEHUG_OFF, before the migrations too: Slack hears 503 and retries rather than an
+    // acknowledgement. Only the admin path passes it, once the migrations are done.
+    if (load?.held() && !(migrated && load.routes && loadPaths.test(c.req.path))) return unavailable();
     if (off) return slackPaths.test(c.req.path) ? c.body(null, 200) : unavailable();
     if (!migrated) return unavailable();
     return next();

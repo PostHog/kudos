@@ -1,13 +1,15 @@
 import { createHash, randomBytes } from "node:crypto";
 import { drizzle } from "drizzle-orm/node-postgres";
 import type { PgTable } from "drizzle-orm/pg-core";
-import { afterEach, describe, expect, test } from "vitest";
+import pg from "pg";
+import { afterEach, describe, expect, inject, test } from "vitest";
 import { chunksOf, zip } from "../../testing/zip.ts";
-import { useTestDatabase } from "../../testing/database.ts";
+import { useTestDatabase, withSearchPath } from "../../testing/database.ts";
 import { decodeStored, printExport, type Value } from "../db/codec.ts";
 import { fromDocument, toDocument } from "../db/documents.ts";
-import { files, hypeReactions, kudosMessages, members, wordDeletionRequests } from "../db/schema/index.ts";
-import { createApp } from "../http/app.ts";
+import { archive, files, hypeReactions, kudosMessages, members, wordDeletionRequests } from "../db/schema/index.ts";
+import { createPool } from "../db/pool.ts";
+import { createApp, type Migrations } from "../http/app.ts";
 import type { Log } from "../log.ts";
 import { createLoadControl, type LoadControl } from "./control.ts";
 import { maxFileBytes } from "./loader.ts";
@@ -29,15 +31,17 @@ const copies: Copy[] = [];
 afterEach(() => copies.splice(0).forEach((copy) => copy.load.stop()));
 
 /** One copy of the service: the app over the test database with the load's control, as boot wires them. */
-async function copy(options: { adminToken?: string | undefined; rows?: number; off?: boolean } = {}): Promise<Copy> {
-  const { rows = 500, off = false } = options;
+async function copy(
+  options: { adminToken?: string | undefined; rows?: number; bytes?: number; off?: boolean; migrations?: Migrations } = {},
+): Promise<Copy> {
+  const { rows = 500, bytes = 1 << 20, off = false, migrations = "done" } = options;
   const adminToken = "adminToken" in options ? options.adminToken : token;
   const logs: string[] = [];
   const log: Log = { info: (message) => logs.push(message), error: (message) => logs.push(message) };
-  const load = createLoadControl({ pool: database.pool, token: adminToken, log, limits: { rows, bytes: 1 << 20 }, pollMs: 50 });
+  const load = createLoadControl({ pool: database.pool, token: adminToken, log, limits: { rows, bytes }, pollMs: 50 });
   await load.refresh();
   load.resume();
-  const app = createApp({ commit: "test", readiness: { migrations: () => "done" }, off, log, load });
+  const app = createApp({ commit: "test", readiness: { migrations: () => migrations }, off, log, load });
   const request: Copy["request"] = (path, { token: given = token, ...init } = {}) =>
     Promise.resolve(app.request(path, { ...init, headers: { ...(given === null ? {} : { "x-hedgehug-admin-token": given }), ...init.headers } }));
   const made = { load, request, logs };
@@ -233,6 +237,40 @@ describe("loading a Convex snapshot", () => {
   });
 });
 
+describe("tables the data model doesn't own", () => {
+  test("a retired table named like one of the service's own is archived verbatim, not loaded into it", async () => {
+    const service = await copy();
+    const retired = { _id: "r1", _creationTime: 1, oldField: "kept" };
+    await finish(service, zip({ "files/documents.jsonl": jsonl([retired]), "archive/documents.jsonl": jsonl([{ ...retired, _id: "r2" }]) }));
+
+    expect(await settled(service), "the load writes them").toMatchObject({ phase: "verifying", error: null });
+    expect(await documents(files), "no stored file").toStrictEqual([]);
+    expect(await documents(archive), "both archived").toStrictEqual([
+      { source: "app", table: "files", _id: "r1", _creationTime: 1, document: retired },
+      { source: "app", table: "archive", _id: "r2", _creationTime: 1, document: { ...retired, _id: "r2" } },
+    ]);
+  });
+
+  test("a component's file bytes count toward the batch limit as the archive stores them", async () => {
+    const bytes = randomBytes(3000);
+    const stored = (id: string, sha256: string): Doc => ({ _id: id, _creationTime: 1, sha256, size: 3000n, contentType: null, internalId: `i-${id}` });
+    // Raw, the first file fits the 3600-byte batch; as the archive stores it, in base64, it doesn't, so it commits alone.
+    const service = await copy({ bytes: 3600 });
+    await finish(
+      service,
+      zip({
+        "_components/c1/_storage/documents.jsonl": jsonl([stored("f1", createHash("sha256").update(bytes).digest("base64")), stored("f2", "AAAA")]),
+        "_components/c1/_storage/f1": bytes,
+        "_components/c1/_storage/f2": bytes,
+      }),
+    );
+
+    const stopped = await settled(service);
+    expect(stopped.error, "the second file stops the load").toBe("Stored file f2 doesn't match its size or sha256");
+    expect(stopped.entries, "the first file committed before it").toStrictEqual([{ entry: "_components/c1/_storage/documents.jsonl", lines: 1, done: false }]);
+  });
+});
+
 describe("what stops a load", () => {
   const stops = async (entries: Record<string, string>) => {
     const service = await copy();
@@ -363,6 +401,35 @@ describe("the admin path and the hold", () => {
     const service = await copy({ off: true });
     const slack = await service.request("/slack/events", { method: "POST", body: "{}", token: null });
     expect(slack.status, "Slack while held and off").toBe(503);
+  });
+
+  test("before the migrations are done the hold wins over HEDGEHUG_OFF too, and without a hold Slack is acknowledged", async () => {
+    const held = await copy({ off: true, migrations: "pending" });
+    expect((await held.request("/slack/events", { method: "POST", body: "{}", token: null })).status, "Slack while held, off and migrating").toBe(503);
+    expect((await held.request("/admin/load", { token })).status, "the admin path waits for the migrations").toBe(503);
+
+    const free = await copy({ adminToken: undefined, off: true, migrations: "pending" });
+    expect((await free.request("/slack/events", { method: "POST", body: "{}", token: null })).status, "Slack while off and migrating").toBe(200);
+  });
+
+  test("a database the migrations haven't reached holds only for a copy with the token", async () => {
+    const schema = `load_fresh_${process.env.VITEST_POOL_ID ?? "0"}`;
+    const admin = new pg.Client({ connectionString: inject("databaseUrl") });
+    await admin.connect();
+    await admin.query(`drop schema if exists "${schema}" cascade; create schema "${schema}"`);
+    await admin.end();
+    const pool = createPool(withSearchPath(inject("databaseUrl"), schema));
+    try {
+      const log: Log = { info: () => {}, error: () => {} };
+      const without = createLoadControl({ pool, token: undefined, log });
+      await without.refresh();
+      expect(without.held(), "no token, no load table").toBe(false);
+      const withToken = createLoadControl({ pool, token, log });
+      await withToken.refresh();
+      expect(withToken.held(), "the token, no load table").toBe(true);
+    } finally {
+      await pool.end();
+    }
   });
 
   test("the hold outlives a restart, token or not, and a finished load refuses its token", async () => {

@@ -48,6 +48,8 @@ export async function boot({ env, log = jsonLog(), retryMs = 5_000, connectTimeo
     const attempt = async () => {
       if (stopping) return;
       try {
+        // Reads the load's state first, so a held copy holds while it migrates, even with HEDGEHUG_OFF.
+        await load!.refresh();
         await runMigrations(pool);
         await load!.refresh();
         migrations = "done";

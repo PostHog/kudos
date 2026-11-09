@@ -62,7 +62,13 @@ export function createLoadControl({ pool, token, log, limits = { rows: 500, byte
   let timer: NodeJS.Timeout | undefined;
 
   const refresh = async () => {
-    state = await readState(pool);
+    try {
+      state = await readState(pool);
+    } catch (error) {
+      // Before the first migration there is no load table, so no load has started.
+      if ((error as { code?: string }).code !== "42P01") throw error;
+      state = undefined;
+    }
   };
 
   /** Runs the load if no other copy owns it: an advisory lock, held on one connection for the whole load. */

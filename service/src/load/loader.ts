@@ -30,7 +30,9 @@ const loadTables = new Set<unknown>([schema.loadState, schema.loadChunks, schema
 export const appTables: PgTable[] = (Object.values(schema) as unknown[]).filter(
   (table): table is PgTable => is(table, PgTable) && !loadTables.has(table),
 );
-const tablesByName = new Map(appTables.map((table) => [getTableName(table), table]));
+/** The data model's tables by name: a root table loads into one of these; `archive` and `files` are the service's own. */
+const serviceTables = new Set<unknown>([schema.archive, schema.files]);
+const tablesByName = new Map(appTables.filter((table) => !serviceTables.has(table)).map((table) => [getTableName(table), table]));
 
 /** A stored file is read whole into one row; one larger than this stops the load rather than the process. */
 export const maxFileBytes = 32 * 1024 * 1024;
@@ -146,9 +148,9 @@ async function loadEntry(client: pg.PoolClient, snapshot: Snapshot, step: Step, 
       throw new LoadError(`Line ${read} of ${step.path} is not a document`);
     }
     refuseNul(doc, `${step.path} line ${read}`);
-    const inserts = step.files ? await storedFile(snapshot, step, doc) : [documentInsert(step, doc, reports)];
+    const { inserts, weight } = step.files ? await storedFile(snapshot, step, doc) : { inserts: [documentInsert(step, doc, reports)], weight: 0 };
     batch.push(...inserts);
-    batchBytes += line.length + inserts.reduce((sum, { row }) => sum + ((row.bytes as Buffer | undefined)?.length ?? 0), 0);
+    batchBytes += line.length + weight;
     if (batch.length >= limits.rows || batchBytes >= limits.bytes) await commit(false);
   }
   await commit(true);
@@ -174,7 +176,7 @@ function archiveInsert(source: string, table: string, doc: Doc): Insert {
  * A `_storage` line: its document verbatim in the archive (it carries Convex's internal ID), and its bytes, checked
  * against the document's size and sha256, as a `files` row for the app, or in the archive for a component.
  */
-async function storedFile(snapshot: Snapshot, step: Step, doc: Doc): Promise<Insert[]> {
+async function storedFile(snapshot: Snapshot, step: Step, doc: Doc): Promise<{ inserts: Insert[]; weight: number }> {
   const _id = doc._id as string;
   const path = step.files!.get(_id);
   if (!path) throw new LoadError(`The snapshot has no bytes for stored file ${_id}`);
@@ -190,11 +192,13 @@ async function storedFile(snapshot: Snapshot, step: Step, doc: Doc): Promise<Ins
   const metadata = archiveInsert(step.source, "_storage", doc);
   if (!step.root) {
     const content = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
-    return [metadata, archiveInsert(step.source, "_storage/bytes", { _id, _creationTime: doc._creationTime!, bytes: content })];
+    // The archive stores the bytes in base64, so they weigh four bytes for every three toward the batch.
+    const weight = Math.ceil(bytes.length / 3) * 4;
+    return { inserts: [metadata, archiveInsert(step.source, "_storage/bytes", { _id, _creationTime: doc._creationTime!, bytes: content })], weight };
   }
   const file: Record<string, unknown> = { _id, _creationTime: doc._creationTime, sha256, size: bytes.length, bytes };
   if (doc.contentType !== null && doc.contentType !== undefined) file.contentType = doc.contentType;
-  return [metadata, { table: schema.files, row: fromDocument(schema.files, file), _id }];
+  return { inserts: [metadata, { table: schema.files, row: fromDocument(schema.files, file), _id }], weight: bytes.length };
 }
 
 /** `_tables` lists every table of its namespace; each one needs its documents in the snapshot. */
