@@ -170,6 +170,30 @@ describe("mutation jobs", () => {
     expect(await jobRows()).toEqual([{ name: "analytics.flags.launder", state: "failed", error: expect.stringContaining("never reaches the network") }]);
   });
 
+  test("a refused job whose failure can't be marked stays pending for a later poll, not rerun at once", async () => {
+    let runs = 0;
+    const call = mutationJob("analytics.flags.unmarked", z.object({}), async () => {
+      runs += 1;
+      await fetch("http://127.0.0.1:9/never");
+    });
+    const { worker, operations, enqueue } = setUp([call]);
+    await enqueue(call, {});
+    const unmarkable = around(operations, {
+      before: (name) => {
+        if (name === "jobs.fail") throw Object.assign(new Error("connection reset while marking"), { code: "ECONNRESET" });
+      },
+    });
+
+    // One tick and no poll for an hour: a slot that counts the unmarked failure as progress starts the job again.
+    const copy = worker({ operations: unmarkable });
+    await copy.tick();
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    await copy.stop(1_000);
+
+    expect(runs, "one run, then it waits for the next poll").toBe(1);
+    expect(await jobRows()).toEqual([{ name: "analytics.flags.unmarked", state: "pending", error: null }]);
+  });
+
   test("an app error is marked failed before the job's claim ends: a copy that looks the moment it ends never runs it", async () => {
     let runs = 0;
     const open = mutationJob("album.packs.open", z.object({}), async (ctx) => {

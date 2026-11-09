@@ -155,8 +155,9 @@ export function createWorker({
       // marked apart. Another copy may take it in between; it is refused the same and writes nothing either.
       if (id !== undefined && isNetworkInOperation(error)) {
         const failedId = id;
-        await operations.mutation("jobs.fail", ({ tx, now }) => markFailed(tx, now, failedId, error)).catch(() => {});
-        return report({ name, outcome: "failed", error }, started);
+        // Unmarked, the job is still pending: it waits for a later poll rather than running again at once.
+        const marked = await operations.mutation("jobs.fail", ({ tx, now }) => markFailed(tx, now, failedId, error)).then(() => true, () => false);
+        return report({ name, outcome: marked ? "failed" : "pending", error }, started);
       }
       return report({ name, outcome: "pending", error }, started);
     }
