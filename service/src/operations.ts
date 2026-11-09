@@ -11,6 +11,7 @@ import { randomUUID } from "node:crypto";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import type { Clock } from "./clock.ts";
+import { createScheduler, type Scheduler } from "./jobs/schedule.ts";
 import { errorFields, type Log } from "./log.ts";
 
 export type Database = NodePgDatabase<Record<string, never>>;
@@ -32,6 +33,8 @@ export interface QueryContext {
 export interface MutationContext extends QueryContext {
   /** Stamps a new row from the operation's instant; each call strictly after the last in this process. */
   newRow(): NewRow;
+  /** Schedules and cancels jobs in this transaction: they commit or roll back with it. */
+  jobs: Scheduler;
 }
 
 export interface ActionContext {
@@ -151,7 +154,10 @@ export function createOperations({ pool, clock, log, maxAttempts = 10, retryDela
       const now = clock.now();
       for (let attempt = 1; ; attempt++) {
         try {
-          return await inTransaction(name, "BEGIN ISOLATION LEVEL SERIALIZABLE", (tx) => handler({ tx, now, newRow: () => newRow(now) }));
+          return await inTransaction(name, "BEGIN ISOLATION LEVEL SERIALIZABLE", (tx) => {
+            const stamp = () => newRow(now);
+            return handler({ tx, now, newRow: stamp, jobs: createScheduler(tx, now, stamp) });
+          });
         } catch (error) {
           const fields = errorFields(error);
           if (!fields.code || !retryable.has(fields.code)) return failed(name, "mutation", error);

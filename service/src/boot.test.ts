@@ -4,7 +4,9 @@ import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { describe, expect, inject, onTestFinished, test } from "vitest";
 import { boot } from "./boot.ts";
+import { z } from "zod";
 import { runMigrations } from "./db/migrate.ts";
+import { actionJob, jobRegistry, mutationJob } from "./jobs/define.ts";
 import { errorFields, type Log, type LogFields } from "./log.ts";
 import { useTestDatabase, withSearchPath } from "../testing/database.ts";
 import { startServiceProcess, type ServiceProcess } from "../testing/serviceProcess.ts";
@@ -38,8 +40,10 @@ describe("booting", () => {
     await service.waitFor((line) => line.message === "migrations done");
     expect(await (await get(service, "/healthz")).json(), "health after the migrations").toMatchObject({ migrations: "done" });
     expect((await get(service, "/nowhere")).status, "an unknown route once migrated").toBe(404);
+    await service.waitFor((line) => line.message === "worker started");
     const messages = service.lines().map((line) => line.message);
     expect(messages.indexOf("listening"), "it listens before it migrates").toBeLessThan(messages.indexOf("migrations done"));
+    expect(messages.indexOf("migrations done"), "the worker starts once the schema is current").toBeLessThan(messages.indexOf("worker started"));
   });
 
   test("while the database can't be reached it keeps answering /healthz, 503s the rest and retries", async () => {
@@ -56,6 +60,8 @@ describe("booting", () => {
 
     expect((await fetch(`${service.url}/slack/events`, { method: "POST", body: "{}" })).status, "Slack while off").toBe(200);
     expect((await get(service, "/")).status, "the website while off").toBe(503);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(service.lines().map((line) => line.message), "no worker, so no job and no cron runs").not.toContain("worker started");
   });
 
   test("/testing/time exists only with HEDGEHUG_TEST_SECRET", async () => {
@@ -78,6 +84,86 @@ describe("booting", () => {
     service.signal("SIGTERM");
 
     expect(await service.exited, "exit code after SIGTERM").toBe(0);
+  });
+});
+
+describe("the worker in the service", () => {
+  const record = mutationJob("website.clock.tick", z.object({}), async () => {});
+
+  test("runs the jobs the service registered; /testing/time settles them and names what ran", async () => {
+    const service = await boot({
+      env: { PORT: "0", DATABASE_URL: database.url, HEDGEHUG_TEST_SECRET: "s3cret" },
+      log: captureLog().log,
+      registry: jobRegistry([record]),
+      pollMs: 3_600_000, // only /testing/time runs jobs here, so what it answers is all that ran
+    });
+    onTestFinished(() => service.stop());
+    await service.migrated;
+    const time = (body: unknown) =>
+      fetch(`http://127.0.0.1:${service.port}/testing/time`, { method: "POST", headers: { "x-hedgehug-test-secret": "s3cret" }, body: JSON.stringify(body) });
+
+    await service.operations!.mutation("schedule", ({ jobs }) => jobs.enqueue(record, {}, { after: 60_000 }));
+    expect(await (await time({ settle: true })).json(), "not due yet").toMatchObject({ ran: [] });
+    await time({ advance: 60_000 });
+    expect(await (await time({ settle: true })).json()).toMatchObject({ ran: ["website.clock.tick"] });
+    expect(await (await time({ runCron: "website.clock.tick" })).json()).toMatchObject({ ran: ["website.clock.tick"] });
+  });
+
+  test("while a load holds, no cron is written and no due job runs", async () => {
+    let runs = 0;
+    const counted = mutationJob("website.clock.tick", z.object({}), async () => {
+      runs += 1;
+    });
+    // A token set and no load started yet: the copy holds until its data arrives.
+    const service = await boot({
+      env: { PORT: "0", DATABASE_URL: database.url, HEDGEHUG_ADMIN_TOKEN: "a-load-token" },
+      log: captureLog().log,
+      registry: jobRegistry([counted]),
+      pollMs: 20,
+    });
+    onTestFinished(() => service.stop());
+    await service.migrated;
+    await database.pool.query(
+      `insert into jobs ("_id", "_creationTime", name, args, "runAt", kind, state) values ('due', 1, 'website.clock.tick', '{}', 0, 'mutation', 'pending')`,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    expect((await database.pool.query("select * from crons")).rows, "no cron written").toEqual([]);
+    expect((await database.pool.query("select state from jobs")).rows, "the due job waits").toEqual([{ state: "pending" }]);
+    expect(runs).toBe(0);
+  });
+
+  test("while a load holds, Slack answers 503 even with HEDGEHUG_OFF", async () => {
+    const service = await boot({ env: { PORT: "0", DATABASE_URL: database.url, HEDGEHUG_ADMIN_TOKEN: "a-load-token", HEDGEHUG_OFF: "1" }, log: captureLog().log });
+    onTestFinished(() => service.stop());
+    await service.migrated;
+
+    expect((await fetch(`http://127.0.0.1:${service.port}/slack/events`, { method: "POST", body: "{}" })).status).toBe(503);
+  });
+
+  test("stop takes no new job and lets a running one finish before the connections close", async () => {
+    let open!: () => void;
+    const opened = new Promise<void>((resolve) => (open = resolve));
+    let reached!: () => void;
+    const arrived = new Promise<void>((resolve) => (reached = resolve));
+    const send = actionJob("slack.delivery.send", z.object({}), async ({ run }) => {
+      reached();
+      await opened;
+      await run.query("still connected", async () => {});
+    });
+    const { log, lines } = captureLog();
+    const service = await boot({ env: { PORT: "0", DATABASE_URL: database.url }, log, registry: jobRegistry([send]), jobGraceMs: 5_000, pollMs: 20 });
+    await service.migrated;
+    await service.operations!.mutation("schedule", ({ jobs }) => jobs.enqueue(send, {}));
+    await arrived;
+
+    const stopped = service.stop();
+    open();
+    await stopped;
+
+    expect(lines.filter((line) => line.message === "job"), "the job finished, its query on an open connection").toEqual([
+      { message: "job", name: "slack.delivery.send", outcome: "success", durationMs: expect.any(Number) },
+    ]);
   });
 });
 
