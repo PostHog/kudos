@@ -1,6 +1,6 @@
 // The test-port ledger: every test file of the root `convex` Vitest project, the stack that ports it, where its port
 // lives once there is one, and the stacks whose bodies that port waits on.
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
@@ -20,7 +20,7 @@ describe("the test-port ledger", () => {
 
     expect(files, "the convex project's own files").toContain(".github/workflows/gate.test.ts");
     expect(files.filter((file) => /^(service|website|node_modules)\//.test(file)), "the other projects' files").toEqual([]);
-    expect(checkLedger(readFileSync(join(repository, ledgerPath), "utf8"), files, (path) => existsSync(join(repository, path)))).toEqual([]);
+    expect(checkLedger(readFileSync(join(repository, ledgerPath), "utf8"), files, (path) => existsSync(join(repository, path)) && statSync(join(repository, path)).isFile())).toEqual([]);
   });
 
   test("the check passes a well-kept ledger", () => {
@@ -43,5 +43,27 @@ describe("the test-port ledger", () => {
     expect(check(ledger(ok, "| convex/a.test.ts | S4 | | |")), "rows out of order").toEqual(["convex/a.test.ts is out of order: rows go by path"]);
     expect(check(ledger("| convex/a.test.ts | S4 | |", ok)), "a row with a column missing").toContain("line 3 isn't a row of four columns");
     expect(check(["| Test | Stack |", ...ledger(ok).split("\n").slice(1)].join("\n")), "another header").toContain("the ledger's table has no header row");
+    expect(check(ledger("| convex/a.test.ts | S4 | | |", ok, "  | convex/c.test.ts | S21 | | S0 |")), "an indented row is a row").toEqual([
+      "convex/c.test.ts is no test of the convex project",
+      "convex/c.test.ts: S21 is no stack from S1 to S20",
+      "convex/c.test.ts: S0 is no stack from S1 to S20",
+      "convex/c.test.ts waits on S0 but has no port",
+    ]);
+  });
+
+  test("every line of the table is a whole row, outer pipes and all, until a blank line ends it", () => {
+    const ok = "| convex/b.test.ts | S20 | | |";
+    expect(check(ledger("| convex/a.test.ts | S4 | | |", ok, "convex/a.test.ts | S21 | README.md | S0 |")), "a row without its outer pipes").toEqual([
+      "line 5 isn't a row of four columns",
+    ]);
+    expect(check(`${ledger("| convex/a.test.ts | S4 | | |", ok)}\n\nA paragraph after the table, with a | in it.`), "text after the table").toEqual([]);
+  });
+
+  test("a port is a service test file by its plain path from the repository's root", () => {
+    const anything = (port: string) => checkLedger(ledger(`| convex/a.test.ts | S4 | ${port} | |`, "| convex/b.test.ts | S20 | | |"), tests, () => true);
+    for (const port of ["README.md", "service/src", "service/src/a.ts", "convex/a.test.ts", "service/../convex/a.test.ts", "service/src/./a.test.ts", "/service/src/a.test.ts", "service\\src\\a.test.ts"]) {
+      expect(anything(port), port).toEqual([`convex/a.test.ts: its port ${port} isn't a test file under service/`]);
+    }
+    expect(anything("service/src/engine/engine.test.ts")).toEqual([]);
   });
 });

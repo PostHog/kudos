@@ -11,7 +11,7 @@ import type { Log } from "../log.ts";
 import { createOperations } from "../operations.ts";
 import { toDocument } from "./documents.ts";
 import { indexOrder, type Direction } from "./indexOrder.ts";
-import { items, kudosMessages, teamStickers, type TableName } from "./schema/index.ts";
+import { items, kudosMessages, teamStickers, users, type TableName } from "./schema/index.ts";
 
 const database = useTestDatabase();
 const db = drizzle({ client: database.pool });
@@ -27,20 +27,36 @@ function kindRank(value: unknown): number {
   return ["bigint", "number", "boolean", "string"].indexOf(typeof value) + 2;
 }
 
+// Float64s in IEEE total order, as Convex orders them: -0 before 0, and NaN (JavaScript's, positive) after Infinity.
+function compareFloats(a: number, b: number): number {
+  if (Number.isNaN(a) || Number.isNaN(b)) return Number(Number.isNaN(a)) - Number(Number.isNaN(b));
+  if (a === 0 && b === 0) return Number(!Object.is(a, -0)) - Number(!Object.is(b, -0));
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 function compareValues(a: unknown, b: unknown): number {
   const byKind = kindRank(a) - kindRank(b);
   if (byKind !== 0) return byKind;
   if (typeof a === "string") return Buffer.compare(Buffer.from(a), Buffer.from(b as string));
+  if (typeof a === "number") return compareFloats(a, b as number);
   return a! < b! ? -1 : a! > b! ? 1 : 0;
 }
 
+// An index field of a nested value, `chatIdentity.workspace`, is the column `chatIdentity$workspace`.
+const fieldOf = (document: Document, field: string) => field.split("$").reduce<unknown>((value, key) => (value as Document | undefined)?.[key], document);
+
 const convexOrder = (fields: readonly string[]) => (a: Document, b: Document) => {
   for (const field of [...fields, "_creationTime", "_id"]) {
-    const compared = compareValues(a[field], b[field]);
+    const compared = compareValues(fieldOf(a, field), fieldOf(b, field));
     if (compared !== 0) return compared;
   }
   return 0;
 };
+
+test("the reference orders float64s in total order", () => {
+  const floats = [Number.NaN, 1, 0, -Infinity, -0, Infinity, -1];
+  expect(floats.toSorted(compareFloats).map((float) => (Object.is(float, -0) ? "-0" : String(float)))).toEqual(["-Infinity", "-1", "-0", "0", "1", "Infinity", "NaN"]);
+});
 
 // Every combination of the fields' values, three documents each: two that tie on `_creationTime`, one created earlier.
 // IDs come from a fixed shuffle, so their order says nothing about the fields'.
@@ -73,7 +89,7 @@ const cases = [
     name: "kudosMessages" as TableName,
     fields: ["state", "nextCheckAt"],
     documents: fixtures(
-      { state: ["watermark", "given"], nextCheckAt: [10, undefined, -3] },
+      { state: ["watermark", "given"], nextCheckAt: [10, undefined, 0, -3, -0, Number.NaN, Infinity, -Infinity] },
       { workspace: "T1", conversation: "C1", message: "1.0", author: "U1", revision: 1n, attempt: 1n, content: { mentions: [], emoji: [] }, annotations: {}, spendsAt: 0, checks: 0 },
     ),
   },
@@ -84,6 +100,16 @@ const cases = [
     name: "teamStickers" as TableName,
     fields: ["workspace", "at"],
     documents: fixtures({ workspace: ["T2", undefined, "T1"], at: [3, 1] }, { member: "m-a", team: "team", name: "Team", art: null, emoji: "hedgehog" }),
+  },
+  {
+    // Nested fields: the index walks `chatIdentity.workspace` and `chatIdentity.user`, each missing in some documents.
+    index: "users_by_chat_identity",
+    table: users as PgTable,
+    name: "users" as TableName,
+    fields: ["chatIdentity$workspace", "chatIdentity$user"],
+    documents: fixtures({ workspace: ["T2", undefined, "T1"], user: ["U2", "U1", undefined] }, {}).map(({ workspace, user, ...rest }) =>
+      workspace === undefined && user === undefined ? rest : { ...rest, chatIdentity: { ...(workspace === undefined ? {} : { workspace }), ...(user === undefined ? {} : { user }) } },
+    ),
   },
 ];
 
@@ -110,7 +136,7 @@ describe.each(cases)("$index", ({ table, name, fields, documents }) => {
 
   test("orders as Convex does: a missing field first, then ties fall to _creationTime and then _id", async () => {
     await seedAll(name, documents);
-    const nullable = fields.find((field) => documents.some((document) => document[field] === undefined))!;
+    const nullable = fields.find((field) => documents.some((document) => fieldOf(document, field) === undefined))!;
 
     const ascending = await select("asc", undefined);
     const descending = await select("desc", undefined);
@@ -118,10 +144,10 @@ describe.each(cases)("$index", ({ table, name, fields, documents }) => {
     expect(ids(ascending), "ascending").toEqual(ids(ordered("asc")));
     expect(ids(descending), "descending, Convex's .order(\"desc\")").toEqual(ids(ordered("desc")));
     const prefix = fields.slice(0, fields.indexOf(nullable));
-    const sameGroup = (a: Document, b: Document) => prefix.every((field) => a[field] === b[field]);
+    const sameGroup = (a: Document, b: Document) => prefix.every((field) => fieldOf(a, field) === fieldOf(b, field));
     for (const [i, row] of ascending.entries()) {
-      const missingLater = ascending.slice(i + 1).some((later) => sameGroup(row, later) && later[nullable] === undefined);
-      expect(row[nullable] !== undefined && missingLater, `a row with ${nullable} before one without`).toBe(false);
+      const missingLater = ascending.slice(i + 1).some((later) => sameGroup(row, later) && fieldOf(later, nullable) === undefined);
+      expect(fieldOf(row, nullable) !== undefined && missingLater, `a row with ${nullable} before one without`).toBe(false);
     }
   });
 
