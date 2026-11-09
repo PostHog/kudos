@@ -1,16 +1,20 @@
 // The worker: runs due jobs, at most `concurrency` at a time so they never starve Slack's acks, and fires the crons.
-// - A mutation job runs in one transaction that also marks it `success`: exactly once. An app error rolls it back,
-//   marks it `failed` in a transaction of its own, and it never runs again.
-// - An action job is marked `running` with a deadline before it starts and never starts again; the sweep marks one
-//   past its deadline `failed`. At most once, as on Convex.
+// - A slot claims the next due job in one transaction, `FOR UPDATE SKIP LOCKED`, so two copies never wait on each
+//   other's job and a job one copy holds never blocks the next.
+// - A mutation job runs in that same transaction, which also marks it `success`: exactly once. An app error rolls the
+//   job's writes back to a savepoint and marks it `failed` before the transaction commits, so no copy can take it in
+//   between; it never runs again. The database's trouble (a serialization failure past its retries, a lost connection)
+//   is not the job's: it rolls everything back and the job stays pending for a later run.
+// - An action job is marked `running` with a deadline in that transaction, before it starts, and never starts again;
+//   the sweep marks one past its deadline `failed`. At most once, as on Convex.
 // - A cron fires in the transaction that moves its next run forward, so of two copies only one fires it; a run
 //   missed while no copy ran fires once, never as a backlog.
-// Two copies share the work through `FOR UPDATE SKIP LOCKED`: neither waits on the other's job, and none runs twice.
-import { and, asc, eq, gt, inArray, lte, notInArray, or } from "drizzle-orm";
+// - While the load holds (S18), nothing here writes: no cron, no claim, no sweep.
+import { and, asc, eq, inArray, lte, or, sql } from "drizzle-orm";
 import { decodeStored } from "../db/codec.ts";
 import { crons, jobs } from "../db/schema/service.ts";
-import type { Log } from "../log.ts";
-import type { Operations } from "../operations.ts";
+import { errorFields, type Log } from "../log.ts";
+import type { MutationContext, Operations, Transaction } from "../operations.ts";
 import { cronIds, cronSchedules, isCronId, nextRun, retiredCrons, type CronId } from "./crons.ts";
 import type { ActionJob, JobRegistry, MutationJob } from "./define.ts";
 
@@ -26,7 +30,7 @@ export interface WorkerOptions {
   actionDeadlineMs?: number;
   /** How often the sweep looks for action jobs past their deadline, in real milliseconds. */
   sweepMs?: number;
-  /** The load's hold (S18): while it holds, no cron is written or fired and no job starts. */
+  /** The load's hold (S18): while it holds, no cron is written or fired, no job starts and nothing is swept. */
   held?: () => boolean;
 }
 
@@ -43,15 +47,28 @@ export interface Worker {
   tick(): Promise<void>;
   /** Runs every job due by the app's clock until none is due or running; jobs they schedule as due run too. */
   settle(budgetMs: number): Promise<Settled>;
-  /** Schedules the cron's job now and settles; a retired cron runs nothing. `undefined` when no job has its name. */
+  /**
+   * Schedules the cron's job now and settles, both within `budgetMs`; a retired cron runs nothing. `undefined` when
+   * no job has its name.
+   */
   runCron(id: CronId, budgetMs: number): Promise<Settled | undefined>;
-  /** Marks action jobs past their deadline `failed`; runs every `sweepMs` once started. */
+  /** Marks action jobs past their deadline `failed`, unless the load holds; runs every `sweepMs` once started. */
   sweep(): Promise<void>;
-  /** Stops taking work, and waits up to `graceMs` for the jobs that run. */
+  /** Stops taking work, and waits up to `graceMs` for a start under way and the jobs that run. */
   stop(graceMs: number): Promise<void>;
 }
 
-type Outcome = "success" | "failed" | "skipped";
+/** `pending`: the database failed the attempt, so the job did nothing and waits for a later run. */
+type Outcome = "success" | "failed" | "pending";
+
+interface Ran {
+  name: string;
+  outcome: Outcome;
+  error?: unknown;
+}
+
+/** What a slot's transaction claimed: a job it finished there, or an action marked running, to run outside it. */
+type Claimed = { outcome: "success" | "failed"; error?: unknown } | { action: ActionJob; id: string; args: string };
 
 export function createWorker({
   operations,
@@ -63,130 +80,140 @@ export function createWorker({
   sweepMs = 60_000,
   held = () => false,
 }: WorkerOptions): Worker {
-  const running = new Map<string, Promise<void>>();
+  const slots = new Set<Promise<void>>();
   const finished = new Set<(name: string) => void>();
+  // Settles waiting for a slot to change; each removes its own when its budget runs out.
+  const waiting = new Set<() => void>();
   const timers: NodeJS.Timeout[] = [];
   let stopping = false;
-  let filling: Promise<void> | undefined;
-  let fillAgain = false;
+  let starting: Promise<void> | undefined;
   let seeded = false;
   let ticking: Promise<void> | undefined;
   let tickAgain = false;
+  // Jobs this copy finished: a settle fills again only after one, so slots that find nothing never spin it.
+  let progress = 0;
 
-  // Starts due jobs until `concurrency` run. A call while one fills makes that one look again when it is done.
-  function fill(): Promise<void> {
-    if (filling) {
-      fillAgain = true;
-      return filling;
-    }
-    filling = (async () => {
-      do {
-        fillAgain = false;
-        const free = concurrency - running.size;
-        if (stopping || held() || free <= 0) return;
-        const due = await operations.query("jobs.due", ({ tx, now }) =>
-          tx
-            .select({ _id: jobs._id, name: jobs.name })
-            .from(jobs)
-            .where(and(eq(jobs.state, "pending"), lte(jobs.runAt, now), notInArray(jobs._id, [...running.keys()])))
-            .orderBy(asc(jobs.runAt), asc(jobs._creationTime), asc(jobs._id))
-            .limit(free),
-        );
-        if (stopping) return;
-        for (const { _id, name } of due) {
-          running.set(
-            _id,
-            run(_id, name).finally(() => {
-              running.delete(_id);
-              void fill();
-            }),
-          );
-        }
-      } while (fillAgain);
-    })()
-      .catch(() => {}) // the query logged it; the next poll tries again
-      .finally(() => (filling = undefined));
-    return filling;
+  function wake(): void {
+    for (const resolve of waiting) resolve();
+    waiting.clear();
   }
 
-  async function run(id: string, name: string): Promise<void> {
+  // Starts slots until `concurrency` run. A slot that ran a job starts the next; one that found none, or whose
+  // database failed it, ends, and the next poll looks again, so a job another copy holds never spins this one.
+  function fill(): void {
+    while (!stopping && !held() && slots.size < concurrency) {
+      const slot: Promise<void> = runNext()
+        .catch(() => undefined)
+        .then((ran) => {
+          slots.delete(slot);
+          const progressed = ran !== undefined && ran.outcome !== "pending";
+          if (progressed) {
+            progress += 1;
+            for (const listener of finished) listener(ran.name);
+          }
+          if (progressed || slots.size === 0) wake();
+          if (progressed) fill();
+        });
+      slots.add(slot);
+    }
+  }
+
+  async function runNext(): Promise<Ran | undefined> {
     const started = performance.now();
-    const job = registry.get(name);
-    let outcome: Outcome;
+    let name: string | undefined;
+    let claimed: Claimed | undefined;
     try {
-      if (!job) outcome = await markFailed(id, new Error(`No job is registered as ${name}`));
-      else outcome = job.kind === "mutation" ? await runMutation(id, job) : await runAction(id, job);
-    } catch {
-      outcome = "failed"; // marking it failed failed too, and was logged; the job keeps its state
-    }
-    log.info("job", { name, outcome, durationMs: Math.round(performance.now() - started) });
-    if (outcome !== "skipped") for (const listener of finished) listener(name);
-  }
-
-  async function runMutation(id: string, job: MutationJob): Promise<Outcome> {
-    try {
-      const ran = await operations.mutation(job.name, async (ctx) => {
+      claimed = await operations.mutation("jobs.run", async (ctx) => {
+        name = undefined;
+        if (stopping || held()) return undefined;
         const [row] = await ctx.tx
-          .select({ args: jobs.args })
+          .select({ _id: jobs._id, name: jobs.name, args: jobs.args })
           .from(jobs)
-          .where(and(eq(jobs._id, id), eq(jobs.state, "pending")))
+          .where(and(eq(jobs.state, "pending"), lte(jobs.runAt, ctx.now)))
+          .orderBy(asc(jobs.runAt), asc(jobs._creationTime), asc(jobs._id))
+          .limit(1)
           .for("update", { skipLocked: true });
-        if (!row) return false; // another copy runs it, or ran it
-        await job.handler(ctx, job.args.parse(decodeStored(row.args)));
-        await ctx.tx.update(jobs).set({ state: "success", completedAt: ctx.now }).where(eq(jobs._id, id));
-        return true;
+        if (!row || stopping || held()) return undefined; // the hold may have begun while it looked
+        name = row.name;
+        const job = registry.get(row.name);
+        if (!job) {
+          const error = new Error(`No job is registered as ${row.name}`);
+          await markFailed(ctx.tx, ctx.now, row._id, error);
+          return { outcome: "failed", error };
+        }
+        if (job.kind === "mutation") return runMutation(ctx, row._id, job, row.args);
+        await ctx.tx.update(jobs).set({ state: "running", deadline: ctx.now + actionDeadlineMs }).where(eq(jobs._id, row._id));
+        return { action: job, id: row._id, args: row.args };
       });
-      return ran ? "success" : "skipped";
     } catch (error) {
-      return markFailed(id, error);
+      // The runner logged it. Whatever the transaction claimed rolled back: the job is still pending.
+      if (name === undefined) return undefined;
+      return report({ name, outcome: "pending", error }, started);
     }
+    if (claimed === undefined || name === undefined) return undefined;
+    if ("outcome" in claimed) return report({ name, ...claimed }, started);
+    return report({ name, ...(await runAction(claimed)) }, started);
   }
 
-  async function runAction(id: string, job: ActionJob): Promise<Outcome> {
-    const claimed = await operations.mutation("jobs.claim", async ({ tx, now }) => {
-      const [row] = await tx
-        .select({ args: jobs.args })
-        .from(jobs)
-        .where(and(eq(jobs._id, id), eq(jobs.state, "pending")))
-        .for("update", { skipLocked: true });
-      if (row) await tx.update(jobs).set({ state: "running", deadline: now + actionDeadlineMs }).where(eq(jobs._id, id));
-      return row?.args;
-    });
-    if (claimed === undefined) return "skipped";
+  // The job's writes run inside a savepoint, so an app error undoes them and leaves the claim and its lock in place.
+  async function runMutation(ctx: MutationContext, id: string, job: MutationJob, stored: string): Promise<Claimed> {
+    await ctx.tx.execute(sql`savepoint job`);
     try {
-      const args = job.args.parse(decodeStored(claimed));
-      await operations.action(job.name, (ctx) => job.handler(ctx, args));
+      await job.handler(ctx, job.args.parse(decodeStored(stored)));
     } catch (error) {
-      return markFailed(id, error);
+      if (databaseTrouble(error)) throw error; // the runner retries it, or the job stays pending
+      await ctx.tx.execute(sql`rollback to savepoint job`);
+      await markFailed(ctx.tx, ctx.now, id, error);
+      return { outcome: "failed", error };
     }
-    const done = await operations.mutation("jobs.finish", ({ tx, now }) =>
-      tx
-        .update(jobs)
-        .set({ state: "success", completedAt: now })
-        .where(and(eq(jobs._id, id), eq(jobs.state, "running")))
-        .returning({ _id: jobs._id }),
-    );
-    return done.length > 0 ? "success" : "failed"; // the sweep failed it first: it ran past its deadline
+    await ctx.tx.update(jobs).set({ state: "success", completedAt: ctx.now }).where(eq(jobs._id, id));
+    return { outcome: "success" };
   }
 
-  async function markFailed(id: string, error: unknown): Promise<Outcome> {
+  async function runAction({ action, id, args }: Extract<Claimed, { action: ActionJob }>): Promise<Omit<Ran, "name">> {
+    try {
+      const parsed = action.args.parse(decodeStored(args));
+      await operations.action(action.name, (ctx) => action.handler(ctx, parsed));
+    } catch (error) {
+      // The job is `running`, so no copy takes it meanwhile; if this fails too, the sweep fails it at its deadline.
+      await operations.mutation("jobs.fail", ({ tx, now }) => markFailed(tx, now, id, error)).catch(() => {});
+      return { outcome: "failed", error };
+    }
+    const done = await operations
+      .mutation("jobs.finish", ({ tx, now }) =>
+        tx
+          .update(jobs)
+          .set({ state: "success", completedAt: now })
+          .where(and(eq(jobs._id, id), eq(jobs.state, "running")))
+          .returning({ _id: jobs._id }),
+      )
+      .catch(() => []);
+    return { outcome: done.length > 0 ? "success" : "failed" }; // else the sweep failed it first, or will
+  }
+
+  function report(ran: Ran, started: number): Ran {
+    const { error, ...fields } = ran;
+    log.info("job", { ...fields, durationMs: Math.round(performance.now() - started), ...(error === undefined ? {} : errorFields(error)) });
+    return ran;
+  }
+
+  async function markFailed(tx: Transaction, now: number, id: string, error: unknown): Promise<void> {
     const message = error instanceof Error ? `${error.name}: ${error.message}` : "A value that is not an Error was thrown";
-    await operations.mutation("jobs.fail", ({ tx, now }) =>
-      tx
-        .update(jobs)
-        .set({ state: "failed", error: message.slice(0, 2_000), completedAt: now })
-        .where(and(eq(jobs._id, id), inArray(jobs.state, ["pending", "running"]))),
-    );
-    return "failed";
+    await tx
+      .update(jobs)
+      .set({ state: "failed", error: message.slice(0, 2_000), completedAt: now })
+      .where(and(eq(jobs._id, id), inArray(jobs.state, ["pending", "running"])));
   }
 
   async function sweep(): Promise<void> {
-    await operations.mutation("jobs.sweep", ({ tx, now }) =>
-      tx
+    if (held()) return;
+    await operations.mutation("jobs.sweep", async ({ tx, now }) => {
+      if (held()) return;
+      await tx
         .update(jobs)
         .set({ state: "failed", error: "The action ran past its deadline", completedAt: now })
-        .where(and(eq(jobs.state, "running"), lte(jobs.deadline, now))),
-    );
+        .where(and(eq(jobs.state, "running"), lte(jobs.deadline, now)));
+    });
   }
 
   async function fireDueCrons(): Promise<void> {
@@ -194,6 +221,7 @@ export function createWorker({
     for (const { id } of due) {
       if (!isCronId(id)) continue;
       await operations.mutation("crons.fire", async ({ tx, now, jobs: scheduler }) => {
+        if (stopping || held()) return;
         const [row] = await tx
           .select({ id: crons.id })
           .from(crons)
@@ -220,7 +248,7 @@ export function createWorker({
         if (stopping || held()) return;
         if (!seeded) await seedCrons();
         await fireDueCrons().catch(() => {}); // logged by the runner; the next tick tries again
-        await fill();
+        fill();
       } while (tickAgain);
     })().finally(() => (ticking = undefined));
     return ticking;
@@ -231,19 +259,27 @@ export function createWorker({
     const listener = (name: string) => ran.push(name);
     finished.add(listener);
     let over = false;
+    let woken: (() => void) | undefined;
     let timer: NodeJS.Timeout | undefined;
     const idle = async (): Promise<boolean> => {
       while (!over) {
-        await fill();
-        if (running.size > 0) {
-          await Promise.race(running.values());
-          continue;
+        const before = progress;
+        fill();
+        while (slots.size > 0 && !over) {
+          await new Promise<void>((resolve) => {
+            woken = resolve;
+            waiting.add(resolve);
+          });
         }
+        if (over) break;
+        if (progress !== before) continue; // a job ran: the jobs it made due run next
+        // Another copy's action past its deadline is failed first: done means every job's row says it is over.
+        await sweep().catch(() => {});
         const busy = await operations.query("jobs.busy", ({ tx, now }) =>
           tx
             .select({ _id: jobs._id })
             .from(jobs)
-            .where(or(and(eq(jobs.state, "pending"), lte(jobs.runAt, now)), and(eq(jobs.state, "running"), gt(jobs.deadline, now))))
+            .where(or(and(eq(jobs.state, "pending"), lte(jobs.runAt, now)), eq(jobs.state, "running")))
             .limit(1),
         );
         if (busy.length === 0) return true;
@@ -255,7 +291,12 @@ export function createWorker({
       const done = await Promise.race([idle(), new Promise<false>((resolve) => (timer = setTimeout(() => resolve(false), budgetMs)))]);
       return { ran, done };
     } finally {
+      // Lets go of the wait, so a settle that ran out of budget keeps nothing alive until the running job ends.
       over = true;
+      if (woken) {
+        waiting.delete(woken);
+        woken();
+      }
       clearTimeout(timer);
       finished.delete(listener);
     }
@@ -263,21 +304,28 @@ export function createWorker({
 
   // Each cron's first run, once per copy; a row another copy wrote stays as it is.
   async function seedCrons(): Promise<void> {
-    await operations.mutation("crons.seed", async ({ tx, now }) => {
+    const wrote = await operations.mutation("crons.seed", async ({ tx, now }) => {
+      if (held()) return false;
       const rows = cronIds.filter((id) => !retiredCrons.has(id)).map((id) => ({ id, nextRun: nextRun(cronSchedules[id], now) }));
       await tx.insert(crons).values(rows).onConflictDoNothing();
+      return true;
     });
-    seeded = true;
+    seeded ||= wrote;
   }
 
   return {
-    async start() {
-      if (!held()) await seedCrons();
-      const waiting = cronIds.filter((id) => !retiredCrons.has(id) && !registry.has(id));
-      if (waiting.length > 0) log.info("crons with no job yet", { crons: waiting.join(" ") });
-      timers.push(setInterval(() => void tick(), pollMs).unref());
-      timers.push(setInterval(() => void sweep().catch(() => {}), sweepMs).unref());
-      void tick();
+    start() {
+      if (stopping) return Promise.resolve();
+      starting = (async () => {
+        if (!held()) await seedCrons();
+        if (stopping) return; // stopped while it wrote the crons: no timer outlives the stop
+        const waitingCrons = cronIds.filter((id) => !retiredCrons.has(id) && !registry.has(id));
+        if (waitingCrons.length > 0) log.info("crons with no job yet", { crons: waitingCrons.join(" ") });
+        timers.push(setInterval(() => void tick(), pollMs).unref());
+        timers.push(setInterval(() => void sweep().catch(() => {}), sweepMs).unref());
+        void tick();
+      })();
+      return starting;
     },
     tick,
     settle,
@@ -285,16 +333,33 @@ export function createWorker({
       if (retiredCrons.has(id)) return { ran: [], done: true };
       const job = registry.get(id);
       if (!job) return undefined;
-      await operations.mutation("crons.run", ({ jobs: scheduler }) => scheduler.enqueue(job, {}));
-      return settle(budgetMs);
+      const deadline = performance.now() + budgetMs;
+      const enqueued = operations.mutation("crons.run", ({ jobs: scheduler }) => scheduler.enqueue(job, {}));
+      let timer: NodeJS.Timeout | undefined;
+      const inTime = await Promise.race([enqueued.then(() => true), new Promise<false>((resolve) => (timer = setTimeout(() => resolve(false), budgetMs)))]);
+      clearTimeout(timer);
+      if (!inTime) {
+        enqueued.catch(() => {}); // logged by the runner; if it commits later, the job runs on a later tick
+        return { ran: [], done: false };
+      }
+      return settle(Math.max(0, deadline - performance.now()));
     },
     sweep,
     async stop(graceMs) {
       stopping = true;
       for (const timer of timers) clearInterval(timer);
       let timer: NodeJS.Timeout | undefined;
-      await Promise.race([Promise.all(running.values()), new Promise((resolve) => (timer = setTimeout(resolve, graceMs)))]);
+      const under = [starting, ticking, ...slots].map((work) => work?.catch(() => {}));
+      await Promise.race([Promise.all(under), new Promise((resolve) => (timer = setTimeout(resolve, graceMs)))]);
       clearTimeout(timer);
     },
   };
+}
+
+// The database's trouble, not the job's: the attempt did nothing, so the job may run again. A serialization failure
+// or deadlock (the runner retries those first), a connection that failed or was refused, a server that is shutting
+// down or out of resources, a lock it could not get in time.
+function databaseTrouble(error: unknown): boolean {
+  const { code } = errorFields(error);
+  return code !== undefined && (/^(08|40|53|57P|58)/.test(code) || code === "55P03" || /^E[A-Z]+$/.test(code) || code.startsWith("DB_"));
 }

@@ -1,12 +1,14 @@
 import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
-import { describe, expect, test } from "vitest";
+import pg from "pg";
+import { describe, expect, test, vi } from "vitest";
 import { z } from "zod";
 import { useTestDatabase } from "../../testing/database.ts";
 import { createClock } from "../clock.ts";
+import { decodeStored } from "../db/codec.ts";
 import { archive, crons, jobs } from "../db/schema/service.ts";
 import type { Log } from "../log.ts";
-import { createOperations, type MutationContext } from "../operations.ts";
+import { createOperations, type MutationContext, type Operations } from "../operations.ts";
 import { retiredCrons } from "./crons.ts";
 import { actionJob, jobRegistry, mutationJob, type Job } from "./define.ts";
 import { createWorker, type WorkerOptions } from "./worker.ts";
@@ -32,9 +34,33 @@ function setUp(registered: Job[], options: Partial<WorkerOptions> = {}) {
   const operations = createOperations({ pool: database.pool, clock, log: quiet, retryDelayMs: () => 1 });
   const registry = jobRegistry(registered);
   const worker = (more: Partial<WorkerOptions> = {}) => createWorker({ operations, log: quiet, registry, pollMs: 3_600_000, ...options, ...more });
-  const enqueue = <Args>(job: Job<Args>, args: Args, when?: { at: number } | { after: number }) =>
+  const enqueue = <Args, Input>(job: Job<Args, Input>, args: Input, when?: { at: number } | { after: number }) =>
     operations.mutation("enqueue", ({ jobs: scheduler }) => scheduler.enqueue(job, args, when));
   return { clock, operations, worker, enqueue };
+}
+
+/** The operations, with a hook before every operation starts and after every mutation ends, by its name. */
+function around(operations: Operations, hooks: { before?: (name: string) => unknown; after?: (name: string) => unknown }): Operations {
+  return {
+    ...operations,
+    async query(name, handler) {
+      await hooks.before?.(name);
+      return operations.query(name, handler);
+    },
+    async mutation(name, handler) {
+      await hooks.before?.(name);
+      try {
+        return await operations.mutation(name, handler);
+      } finally {
+        await hooks.after?.(name);
+      }
+    },
+  };
+}
+
+/** What Postgres answers a SERIALIZABLE transaction that lost a conflict. */
+function serializationFailure(): Error {
+  return Object.assign(new pg.DatabaseError("could not serialize access due to read/write dependencies", 0, "error"), { code: "40001" });
 }
 
 /** A promise a test resolves by hand, and one that says the handler got there. */
@@ -80,7 +106,7 @@ describe("mutation jobs", () => {
     expect(await effects("give")).toBe(1);
   });
 
-  test("an app error rolls the job's writes back, marks it failed in a transaction of its own, and it never runs again", async () => {
+  test("an app error rolls the job's writes back, marks it failed, and it never runs again", async () => {
     let runs = 0;
     const open = mutationJob("album.packs.open", z.object({}), async (ctx) => {
       runs += 1;
@@ -96,6 +122,88 @@ describe("mutation jobs", () => {
     expect(runs).toBe(1);
     expect(await effects("pack"), "its write rolled back").toBe(0);
     expect(await jobRows()).toEqual([{ name: "album.packs.open", state: "failed", error: "TypeError: no such pack" }]);
+  });
+
+  test("an app error is marked failed before the job's claim ends: a copy that looks the moment it ends never runs it", async () => {
+    let runs = 0;
+    const open = mutationJob("album.packs.open", z.object({}), async (ctx) => {
+      runs += 1;
+      await effect(ctx, "pack");
+      throw new TypeError("no such pack");
+    });
+    const { worker, operations, enqueue } = setUp([open]);
+    await enqueue(open, {});
+    const other = worker();
+    let looked = false;
+    // Once the first copy's handler has run, its next step waits until the other copy has looked for work.
+    const first = worker({
+      operations: around(operations, {
+        after: async () => {
+          if (runs === 0 || looked) return;
+          looked = true;
+          await other.settle(5_000);
+        },
+      }),
+    });
+
+    await first.settle(5_000);
+
+    expect(looked).toBe(true);
+    expect(runs).toBe(1);
+    expect(await jobRows()).toEqual([{ name: "album.packs.open", state: "failed", error: "TypeError: no such pack" }]);
+  });
+
+  test("the database's trouble is not the job's: past the runner's retries it stays pending, runs later, and never fails for it", async () => {
+    let calls = 0;
+    const give = mutationJob("engine.give.award", z.object({}), async (ctx) => {
+      calls += 1;
+      if (calls <= 12) throw serializationFailure(); // the runner tries 10 times per run
+      await effect(ctx, "give");
+    });
+    const { worker, enqueue } = setUp([give]);
+    await enqueue(give, {});
+
+    expect(await worker().settle(5_000)).toEqual({ ran: ["engine.give.award"], done: true });
+    expect(calls).toBe(13);
+    expect(await effects("give")).toBe(1);
+    expect(await jobRows()).toEqual([{ name: "engine.give.award", state: "success", error: null }]);
+  });
+
+  test("a database error of the job's own, such as a duplicate key, fails it", async () => {
+    const twice = mutationJob("album.packs.open", z.object({}), async ({ tx }) => {
+      const row = { source: "test", table: "pack", _id: "same", _creationTime: 1, document: "{}" };
+      await tx.insert(archive).values(row);
+      await tx.insert(archive).values(row);
+    });
+    const { worker, enqueue } = setUp([twice]);
+    await enqueue(twice, {});
+
+    expect(await worker().settle(5_000)).toEqual({ ran: ["album.packs.open"], done: true });
+    expect((await jobRows())[0]!.state).toBe("failed");
+    expect(await effects("pack"), "its first write rolled back too").toBe(0);
+  });
+
+  test("jobs another copy holds never block the next one", async () => {
+    let holding = 0;
+    const bothHeld = gate();
+    const release = gate();
+    const slow = mutationJob("slack.delivery.slow", z.object({}), async () => {
+      if (++holding === 2) bothHeld.reached();
+      await release.opened;
+    });
+    const quick = mutationJob("slack.delivery.quick", z.object({}), (ctx) => effect(ctx, "quick"));
+    const { worker, enqueue } = setUp([slow, quick]);
+    await enqueue(slow, {});
+    await enqueue(slow, {});
+    await enqueue(quick, {});
+    const holder = worker();
+    const held = holder.settle(5_000);
+    await bothHeld.arrived;
+
+    expect(await worker().settle(300), "the other copy takes the third job").toEqual({ ran: ["slack.delivery.quick"], done: false });
+    release.open();
+    await held;
+    expect(await effects("quick")).toBe(1);
   });
 });
 
@@ -167,6 +275,19 @@ describe("scheduling", () => {
     expect(states).toEqual([{ _id: "loaded", state: "failed", error: expect.stringMatching(/^ZodError/) }]);
   });
 
+  test("a schema's transform runs once, when the job runs; the row keeps the args as given", async () => {
+    const seen: number[] = [];
+    const bump = mutationJob("slack.directory.check", z.object({ n: z.number().transform((n) => n + 1) }), async (_ctx, { n }) => {
+      seen.push(n);
+    });
+    const { worker, enqueue } = setUp([bump]);
+    await enqueue(bump, { n: 1 });
+
+    expect((await db.select({ args: jobs.args }).from(jobs)).map(({ args }) => decodeStored(args))).toEqual([{ n: 1 }]);
+    await worker().settle(5_000);
+    expect(new Set(seen)).toEqual(new Set([2]));
+  });
+
   test("a job no handler is registered for is marked failed", async () => {
     const { worker } = setUp([]);
     await db.insert(jobs).values({ _id: "orphan", _creationTime: 1, name: "gone.away", args: "{}", runAt: 0, kind: "action", state: "pending" });
@@ -216,9 +337,8 @@ describe("action jobs", () => {
     expect(await survivor.settle(300), "the survivor waits on the running job and never starts it").toEqual({ ran: [], done: false });
 
     clock.advance(600_000);
-    await survivor.sweep();
+    expect(await survivor.settle(5_000), "settle fails it before it answers done").toEqual({ ran: [], done: true });
     expect(await jobRows()).toEqual([{ name: "slack.delivery.send", state: "failed", error: "The action ran past its deadline" }]);
-    expect(await survivor.settle(5_000)).toEqual({ ran: [], done: true });
 
     hold.open(); // the first copy's action ends after the sweep: the job stays failed
     await unfinished;
@@ -313,6 +433,21 @@ describe("crons", () => {
     expect(await copy.runCron("analytics.drain.recover", 5_000)).toBeUndefined();
     expect(fired).toBe(1);
   });
+
+  test("runCron answers within its budget when scheduling the job is slow", async () => {
+    const slowEnqueue = gate();
+    const { worker, operations } = setUp([tickJob(() => {})]);
+    const copy = worker({ operations: around(operations, { before: (name) => (name === "crons.run" ? slowEnqueue.opened : undefined) }) });
+    const started = performance.now();
+
+    const answer = await copy.runCron("website.clock.tick", 100);
+    const took = performance.now() - started;
+    slowEnqueue.open();
+
+    expect(answer).toEqual({ ran: [], done: false });
+    expect(took).toBeLessThan(1_000);
+    await vi.waitFor(async () => expect(await jobRows(), "the late job is written, for a later tick").toHaveLength(1));
+  });
 });
 
 describe("the load's hold", () => {
@@ -342,6 +477,34 @@ describe("the load's hold", () => {
     expect(fired, "the queued job, then the cron").toBe(2);
     await copy.stop(1_000);
   });
+
+  test("a hold that begins while a copy looks for work stops it before the job starts", async () => {
+    let holding = false;
+    let runs = 0;
+    const tick = mutationJob("website.clock.tick", z.object({}), async () => {
+      runs += 1;
+    });
+    const { worker, operations, enqueue } = setUp([tick]);
+    await enqueue(tick, {});
+    const copy = worker({ held: () => holding, operations: around(operations, { before: () => (holding = true) }) });
+
+    expect(await copy.settle(200)).toEqual({ ran: [], done: false });
+    expect(runs).toBe(0);
+    expect((await jobRows()).map((row) => row.state)).toEqual(["pending"]);
+  });
+
+  test("the sweep leaves an action past its deadline alone while the load holds", async () => {
+    let holding = true;
+    const { worker, clock } = setUp([], { held: () => holding });
+    await db.insert(jobs).values({ _id: "stale", _creationTime: 1, name: "slack.delivery.send", args: "{}", runAt: 0, kind: "action", state: "running", deadline: clock.now() - 1 });
+    const copy = worker();
+
+    await copy.sweep();
+    expect((await jobRows())[0]!.state, "untouched while held").toBe("running");
+    holding = false;
+    await copy.sweep();
+    expect((await jobRows())[0]!.state).toBe("failed");
+  });
 });
 
 describe("stopping", () => {
@@ -368,5 +531,21 @@ describe("stopping", () => {
       ["slack.delivery.send", "success"],
       ["website.clock.tick", "pending"],
     ]);
+  });
+
+  test("a stop while start writes the crons leaves no timer running", async () => {
+    const seeding = gate();
+    const { worker, operations, clock } = setUp([], { pollMs: 10, sweepMs: 10 });
+    const copy = worker({ operations: around(operations, { before: (name) => (name === "crons.seed" ? seeding.opened : undefined) }) });
+
+    const starting = copy.start();
+    await copy.stop(50);
+    seeding.open();
+    await starting;
+    // Another copy's action, past its deadline: a sweep timer left running would fail it.
+    await db.insert(jobs).values({ _id: "stale", _creationTime: 1, name: "slack.delivery.send", args: "{}", runAt: 0, kind: "action", state: "running", deadline: clock.now() - 1 });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    expect((await jobRows()).map((row) => row.state), "no sweep after the stop").toEqual(["running"]);
   });
 });
