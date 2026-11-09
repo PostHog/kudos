@@ -1,17 +1,19 @@
-import { expect, test } from "../test.ts";
+import { expect, isBoard, test } from "../test.ts";
 import { emoji, mention, text, type Slack } from "../slack.ts";
+
+// A member's daily hugs, so a member who gives them all tops the week's board, which shows its top three to everyone.
+const hugBudget = 10;
 
 const shown = async (slack: Slack, member: string, channel: { id: string; name: string }) => {
   const [answer] = await slack.responsesTo(await slack.command(member, channel, "leaderboard"));
   return String(answer?.text);
 };
 
-test("switching the leaderboards off on the website takes the member off them in Slack", async ({ slack, website }) => {
-  const [member, friend] = [await slack.member(), await slack.member()];
+test("switching the leaderboards off on the website takes the member off them in Slack, for everyone", async ({ slack, website }) => {
+  const [member, author, onlooker] = [await slack.member(), await slack.member(), await slack.member()];
   const channel = await slack.channel();
-  const thanks = await slack.post(friend, [mention(member), text(" "), emoji("taco")]);
-  await expect.poll(() => slack.reactionsOn(thanks)).toEqual(["taco"]);
-  await expect.poll(() => shown(slack, member, channel)).not.toContain("You're not on the leaderboards.");
+  for (let win = 1; win <= hugBudget; win++) await slack.react(member, await slack.post(author, [text(`win ${win}`)]), "taco");
+  await slack.askUntil(onlooker, channel, "leaderboard", (answer) => answer.includes(`<@${member}> · ${hugBudget} hugs`));
 
   await website.signIn(member, { path: "/settings" });
   await website.pastTheMoments();
@@ -21,6 +23,7 @@ test("switching the leaderboards off on the website takes the member off them in
   await expect(onTheBoards).toBeChecked({ checked: false });
 
   await expect.poll(() => shown(slack, member, channel)).toContain("You're not on the leaderboards.");
+  await slack.askUntil(onlooker, channel, "leaderboard", (answer) => isBoard(answer) && !answer.includes(`<@${member}>`));
   await website.open("/settings");
   await expect(website.screen.getByRole("switch", { name: "Show me on the leaderboards" })).toBeChecked({ checked: false });
 });

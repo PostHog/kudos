@@ -338,10 +338,11 @@ export class Slack {
     return this.read<SlackCall[]>("calls", { method });
   }
 
-  // The calls the app made to Slack about a message: any method, with the message's channel and timestamp.
-  async callsAbout({ channel, ts }: Posted) {
+  // The calls the app made to Slack in a channel, by any method: a journey with a channel of its own reads every call
+  // about its messages, however the call names them (a timestamp, or a range of history).
+  async callsIn(channel: string) {
     const calls = await this.read<Array<{ method: string; args: SlackCall }>>("calls", {});
-    return calls.filter(({ args }) => args.channel === channel && (args.timestamp === ts || args.ts === ts || args.thread_ts === ts));
+    return calls.filter(({ args }) => args.channel === channel);
   }
 
   private lastEnvelope: string | undefined;
