@@ -36,23 +36,35 @@ test("user groups sync from Slack, and a member's group pick on App Home puts th
   // The app knows no group until it syncs, so the member sits on no group's board.
   expect(await leaderboard()).not.toContain(tag);
 
+  // The group pick on App Home's Settings tab, read from a view published after the member opens it.
+  const settingsPick = async () => {
+    const before = (await slack.homesOf(member)).length;
+    await slack.openHome(member);
+    await expect.poll(async () => (await slack.homesOf(member)).length).toBeGreaterThan(before);
+    const opened = (await slack.homesOf(member)).length;
+    await slack.click(member, button((await lastHome(slack, member))!, "Settings"));
+    await expect.poll(async () => (await slack.homesOf(member)).length).toBeGreaterThan(opened);
+    await expect.poll(async () => headerOf((await lastHome(slack, member))!)).toBe("Settings");
+    return pickerOf((await lastHome(slack, member))!, pickQuestion);
+  };
+
   // The sync lists the groups, then reads each group's members a few seconds apart, in batches that each schedule the
   // next. Groups other journeys left in the workspace come first or between, so the clock moves a minute at a time until
-  // the member counts for a group, for at most ten.
+  // App Home offers the member both groups, for at most ten.
   await time.runCron("slack.userGroups.syncUserGroups");
-  for (let minutes = 0; minutes < 10 && (await groupBoard(ferns)).length === 0 && (await groupBoard(oaks)).length === 0; minutes++) {
+  const bothRead = async () => {
+    const options = (await settingsPick())?.options ?? [];
+    return options.includes(ferns) && options.includes(oaks);
+  };
+  for (let minutes = 0; minutes < 10 && !(await bothRead()); minutes++) {
     await time.advance(minuteMs);
     await time.settle();
   }
 
   // A member counts for the smallest of their groups until they pick another, and their leaderboard shows its board.
+  expect(await settingsPick()).toEqual({ options: [ferns, oaks], picked: ferns });
   expect(await groupBoard(ferns)).toEqual([`*${ferns}*`, "Give kudos this week to join the board."]);
   expect(await groupBoard(oaks)).toEqual([]);
-  await slack.openHome(member);
-  await expect.poll(async () => (await lastHome(slack, member)) !== undefined).toBe(true);
-  await slack.click(member, button((await lastHome(slack, member))!, "Settings"));
-  await expect.poll(async () => headerOf((await lastHome(slack, member))!)).toBe("Settings");
-  expect(pickerOf((await lastHome(slack, member))!, pickQuestion)).toEqual({ options: [ferns, oaks], picked: ferns });
 
   await slack.click(member, option((await lastHome(slack, member))!, pickQuestion, oaks));
   await expect.poll(async () => pickerOf((await lastHome(slack, member))!, pickQuestion)?.picked).toBe(oaks);
