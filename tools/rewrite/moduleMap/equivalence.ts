@@ -1,6 +1,7 @@
 // The equivalence check between a Convex validator and the zod schema the codemod made of it: while both exist, they
 // must accept and reject alike. Values come from the validator's own shape: every kind of value it accepts, then each
-// one broken at every position by a probe of every other kind, a missing field and an unknown one.
+// one broken at every position by a probe of every other kind, `undefined`, a missing field, an unknown one, and a
+// record key Convex refuses.
 // What Convex accepts is read from its validator's documented fields (kind, isOptional, fields, members, element,
 // key, value), with one deliberate difference: an ID is any string, as the rewrite's IDs are (service/src/values.ts).
 import type { GenericValidator } from "convex/values";
@@ -20,6 +21,11 @@ type Node = GenericValidator & {
 };
 
 const int64 = { min: -(2n ** 63n), max: 2n ** 63n - 1n };
+
+// Convex's documented rule for a record's keys: ASCII, non-empty, not starting with "$" or "_" (and, as every field
+// name, printable and at most 1024 characters). Written out here apart from service/src/values.ts on purpose.
+const recordKey = (key: string) => /^[^$_][\x20-\x7e]{0,1023}$/.test(key) && /^[\x20-\x7e]+$/.test(key);
+const refusedKeys = ["", "$dollar", "_underscore", "é", "tab\t", "k".repeat(1025)];
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value) && [Object.prototype, null].includes(Object.getPrototypeOf(value));
@@ -51,7 +57,7 @@ export function convexAccepts(validator: GenericValidator, value: unknown): bool
         Object.entries(node.fields!).every(([key, field]) => convexAccepts(field, value[key]))
       );
     case "record":
-      return isPlainObject(value) && Object.entries(value).every(([key, field]) => convexAccepts(node.key!, key) && convexAccepts(required(node.value as Node), field));
+      return isPlainObject(value) && Object.entries(value).every(([key, field]) => recordKey(key) && convexAccepts(node.key!, key) && convexAccepts(required(node.value as Node), field));
     case "union":
       return node.members!.some((member) => convexAccepts(member, value));
     default:
@@ -93,7 +99,7 @@ export function samples(validator: GenericValidator): unknown[] {
       return [base, ...varied, ...optional];
     }
     case "record": {
-      const keys = samples(node.key!).filter((key): key is string => typeof key === "string");
+      const keys = samples(node.key!).filter((key): key is string => typeof key === "string" && recordKey(key));
       const values = samples(required(node.value as Node));
       return [{}, Object.fromEntries(keys.map((key, index) => [key, values[index % values.length]])), ...optional];
     }
@@ -114,10 +120,10 @@ function withField(object: Record<string, unknown>, key: string, value: unknown)
 /** Each sample broken once per position: a probe in place of every value, a missing field and an unknown one. */
 export function cases(validator: GenericValidator): unknown[] {
   const node = validator as Node;
-  const found = [...samples(node), ...probes];
+  const found = [...samples(node), ...probes, undefined];
   switch (node.kind) {
     case "array":
-      found.push(...broken(required(node.element!)).map((element) => [element]));
+      found.push(...broken(required(node.element!)).map((element) => [element]), [undefined]);
       break;
     case "object": {
       const fields = Object.entries(node.fields!);
@@ -126,9 +132,11 @@ export function cases(validator: GenericValidator): unknown[] {
       for (const [key, field] of fields) found.push(withField(base, key, undefined), ...broken(required(field)).map((value) => withField(base, key, value)));
       break;
     }
-    case "record":
-      found.push(...broken(required(node.value as Node)).map((value) => ({ key: value })));
+    case "record": {
+      const value = samples(required(node.value as Node))[0];
+      found.push(...broken(required(node.value as Node)).map((broke) => ({ key: broke })), ...refusedKeys.map((key) => ({ [key]: value })));
       break;
+    }
     case "union":
       found.push(...node.members!.flatMap((member) => cases(member)));
       break;

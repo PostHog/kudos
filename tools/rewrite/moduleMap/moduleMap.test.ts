@@ -10,7 +10,7 @@ import { afterAll, describe, expect, test } from "vitest";
 import { z } from "../../../service/node_modules/zod/index.js";
 import { NotPortedError } from "../../../service/src/notPorted.ts";
 import { zv } from "../../../service/src/values.ts";
-import { closureCheck } from "./closure.ts";
+import { closureCheck, servicePackages } from "./closure.ts";
 import { convertModule } from "./codemod.ts";
 import { copyModule, importOnlyDiff } from "./copy.ts";
 import { disagreements } from "./equivalence.ts";
@@ -90,11 +90,12 @@ describe("the copy tool", () => {
     });
     expect(copyModule("convex/ctx/lazy.ts", read("convex/ctx/lazy.ts"), exists)).toEqual({ refusals: ["convex/ctx/lazy.ts: line 2: import(), which a copy can't change"] });
     expect(copyModule("convex/pure/format.ts", 'import { gone } from "./missing";', exists)).toEqual({ refusals: ["convex/pure/format.ts: imports ./missing, which names no module of convex/"] });
+    expect(copyModule("convex/pure/format.ts", 'import values = require("convex/values");', exists)).toEqual({ refusals: ["convex/pure/format.ts: line 1: import = require(), which a copy can't change"] });
   });
 });
 
 describe("the closure check", () => {
-  const packages = new Set(["zod", "hono"]);
+  const packages = servicePackages(repo);
   const earlier = new Set(["service/src/db/columns.ts"]);
   const check = (batch: Record<string, string>) => closureCheck(new Map(Object.entries(batch)), (path) => earlier.has(path), packages);
 
@@ -117,6 +118,8 @@ describe("the closure check", () => {
           'import satori from "satori";',
           'import { outside } from "../../../convex/schema.ts";',
           "const lazy = await import(`./${name}.ts`);",
+          'import type Two = require("./two.ts");',
+          'export * from "zod/does-not-exist";',
         ].join("\n"),
         "service/src/a/two.ts": "",
       }),
@@ -127,12 +130,14 @@ describe("the closure check", () => {
       "service/src/a/one.ts: satori: a package the service doesn't list",
       "service/src/a/one.ts: ../../../convex/schema.ts: outside the service",
       "service/src/a/one.ts: <computed>: an import of a computed specifier",
+      "service/src/a/one.ts: ./two.ts: an import = require(), which an ES module can't use",
+      "service/src/a/one.ts: zod/does-not-exist: nothing zod exports",
     ]);
   });
 });
 
 describe("the codemod", () => {
-  const modules = ["convex/rules/shared.ts", "convex/rules/events.ts", "convex/ctx/unconvertible.ts", "convex/ctx/handler.ts"];
+  const modules = ["convex/rules/shared.ts", "convex/rules/events.ts", "convex/rules/split.ts", "convex/ctx/unconvertible.ts", "convex/ctx/handler.ts"];
   const program = ts.createProgram(modules.map(onDisk), compilerOptions);
   const convert = (path: string) => convertModule(program, program.getSourceFile(onDisk(path))!, path, exists);
   const shared = landed(convert("convex/rules/shared.ts"));
@@ -146,6 +151,11 @@ export type MessageRef = z.infer<typeof messageRefValidator>;
 
 export const toneValidator = z.union([z.literal("warm"), z.literal("loud")]);
 `);
+    expect(landed(convert("convex/rules/split.ts")).text).toBe(`import { z } from "zod";
+
+export const noteValidator = z.strictObject({ text: z.string() });
+export type Note = z.infer<typeof noteValidator>;
+`);
     for (const line of [
       'import { z } from "zod";\nimport { zv } from "../values.ts";',
       'import type { Doc } from "../db/schema/index.ts";\nimport type { Id } from "../db/columns.ts";',
@@ -155,11 +165,13 @@ export const toneValidator = z.union([z.literal("warm"), z.literal("loud")]);
       '  member: zv.id("members"),',
       "  score: zv.number(),",
       "  note: z.union([z.string(), z.null()]),",
-      "  tallies: z.record(z.string(), z.union([zv.number(), z.record(z.string(), z.boolean())])),",
+      "  tallies: zv.record(z.string(), z.union([zv.number(), zv.record(z.string(), z.boolean())])),",
+      "export const appFields = new VObject().fields;",
       "export type CheerEvent = z.infer<typeof cheerEventValidator>;",
       "export type CheerShape = z.infer<typeof cheerEventValidator>;",
       'export const loudnessValidator = z.union([...toneValidator.options, z.literal("quiet"), z.literal(2), z.literal(3n), z.literal(false)]);',
       "export const tones: readonly string[] = toneValidator.options.map(({ value }) => value);",
+      "export const fieldNames = ({ shape: fields }: typeof messageRefValidator) => Object.keys(fields);",
       "export const nothingValidator = z.never();",
       'const refArgs = { ...messageRefValidator.shape, member: zv.id("members") };',
       "export type RefArgs = z.infer<z.ZodObject<typeof refArgs>>;",
@@ -179,6 +191,9 @@ export const toneValidator = z.union([z.literal("warm"), z.literal("loud")]);
         "convex/ctx/unconvertible.ts:5: uses v other than as a call or a type",
         "convex/ctx/unconvertible.ts:7: reads isOptional of a Convex validator, which zod has no counterpart for",
         "convex/ctx/unconvertible.ts:8: reads fields of a Convex validator, which zod has no counterpart for",
+        "convex/ctx/unconvertible.ts:9: a record keyed other than by v.string(), which zod would require every key of",
+        "convex/ctx/unconvertible.ts:10: reads a Convex validator's members other than by name",
+        "convex/ctx/unconvertible.ts:11: reads a Convex validator's members other than by name",
       ],
     });
     expect(convert("convex/ctx/handler.ts")).toEqual({ refusals: ["convex/ctx/handler.ts: imports ../_generated/server, which the service has no counterpart for"] });
@@ -213,6 +228,16 @@ describe("the equivalence check", () => {
     );
     expect(disagreements(v.id("members"), zv.id("members"))).toEqual([]);
     expect(disagreements(v.int64(), z.bigint())).toEqual(['"9223372036854775808n": Convex rejects, zod accepts']);
+    expect(disagreements(v.string(), z.string().optional())).toEqual(["undefined: Convex rejects, zod accepts"]);
+    expect(disagreements(v.array(v.string()), z.array(z.string().optional()))).toEqual(["[null]: Convex rejects, zod accepts"]);
+    expect(disagreements(v.record(v.string(), v.boolean()), z.record(z.string(), z.boolean()))).toEqual([
+      '{"":true}: Convex rejects, zod accepts',
+      '{"$dollar":true}: Convex rejects, zod accepts',
+      '{"_underscore":true}: Convex rejects, zod accepts',
+      '{"é":true}: Convex rejects, zod accepts',
+      '{"tab\\t":true}: Convex rejects, zod accepts',
+      `{"${"k".repeat(1025)}":true}: Convex rejects, zod accepts`,
+    ]);
   });
 });
 
