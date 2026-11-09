@@ -209,6 +209,12 @@ describe("the transaction", () => {
       (tx) => tx.execute(sql`  END`),
       (tx) => tx.execute(sql`rollback`),
       (tx) => (tx as unknown as { $client: pg.ClientBase }).$client.query("start transaction"),
+      (tx) => tx.execute(sql.raw("/* trace */ COMMIT")),
+      (tx) => tx.execute(sql.raw("/* a /* nested */ comment */ commit")),
+      (tx) => tx.execute(sql.raw("-- trace\nCOMMIT")),
+      (tx) => tx.execute(sql.raw("SELECT 1; COMMIT")),
+      (tx) => tx.execute(sql.raw("select 'it''s'; commit")),
+      (tx) => tx.execute(sql.raw("select $q$ $$ $q$; commit")),
     ];
 
     for (const escape of escapes) {
@@ -225,6 +231,12 @@ describe("the transaction", () => {
       return "kept";
     });
     expect(savepoint, "a savepoint stays the handler's").toBe("kept");
+    const lookalikes = await operations.mutation("lookalikes", async ({ tx }) => {
+      await tx.execute(sql.raw("do $$ begin perform 1; end $$"));
+      await tx.execute(sql.raw("select 'x; commit' as quoted, $body$; end$body$ as dollar /* ; commit */"));
+      return (await tx.execute<{ commit: number }>(sql.raw(`select 1 as "commit" -- ; rollback`))).rows;
+    });
+    expect(lookalikes, "commit inside a string, a body, a name or a comment is no statement").toEqual([{ commit: 1 }]);
     expect((await pool.query("select * from counters")).rows, "nothing it wrote stays").toEqual([]);
   });
 
@@ -239,6 +251,23 @@ describe("the transaction", () => {
       await client.query({ name, text: "select 1" });
       // pg refuses a second text under one name before sending it; the transaction is unharmed
       await client.query({ name, text: "select 2" }).catch(() => {});
+      if (attempts === 1) await tx.execute(sql`do $$ begin raise exception using errcode = '40001'; end $$`).catch(() => {});
+      return "done";
+    });
+
+    expect(result).toBe("done");
+    expect(attempts).toBe(2);
+  });
+
+  test("a serialization failure swallowed after a rollback to a savepoint still retries, whatever failed before it", async () => {
+    const { operations } = setUp();
+    let attempts = 0;
+
+    const result = await operations.mutation("recovered", async ({ tx }) => {
+      attempts += 1;
+      await tx.execute(sql`savepoint mine`);
+      await tx.execute(sql`do $$ begin raise exception using errcode = '23505'; end $$`).catch(() => {});
+      await tx.execute(sql`rollback to savepoint mine`);
       if (attempts === 1) await tx.execute(sql`do $$ begin raise exception using errcode = '40001'; end $$`).catch(() => {});
       return "done";
     });
