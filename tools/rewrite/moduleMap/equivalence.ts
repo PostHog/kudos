@@ -25,7 +25,7 @@ const int64 = { min: -(2n ** 63n), max: 2n ** 63n - 1n };
 // Convex's documented rule for a record's keys: ASCII, non-empty, not starting with "$" or "_" (and, as every field
 // name, printable and at most 1024 characters). Written out here apart from service/src/values.ts on purpose.
 const recordKey = (key: string) => /^[^$_][\x20-\x7e]{0,1023}$/.test(key) && /^[\x20-\x7e]+$/.test(key);
-const refusedKeys = ["", "$dollar", "_underscore", "é", "tab\t", "k".repeat(1025)];
+const refusedKeys = ["", "$dollar", "_underscore", "__proto__", "é", "tab\t", "k".repeat(1025)];
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value) && [Object.prototype, null].includes(Object.getPrototypeOf(value));

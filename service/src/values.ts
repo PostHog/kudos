@@ -15,6 +15,9 @@ export function isRecordKey(key: string): boolean {
 export const zv = {
   number: () => z.custom<number>((value) => typeof value === "number", { message: "Expected a number" }),
   id: <Table extends string>(table: Table) => z.custom<Id<Table>>((value) => typeof value === "string", { message: `Expected an ID of ${table}` }),
+  // The keys are checked as given: zod's record drops a `__proto__` key before any check of its own output could see it.
   record: <Value extends z.ZodType>(key: z.ZodString, value: Value) =>
-    z.record(key, value).refine((record) => Object.keys(record).every(isRecordKey), { message: "Expected keys Convex takes as field names" }),
+    z
+      .custom<unknown>((raw) => typeof raw !== "object" || raw === null || Object.keys(raw).every(isRecordKey), { message: "Expected keys Convex takes as field names" })
+      .pipe(z.record(key, value)),
 };
