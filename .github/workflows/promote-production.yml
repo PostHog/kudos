@@ -1,0 +1,180 @@
+# Promotes a commit of main from the sandbox to production. The sandbox app deploys every push to main and the
+# production app deploys the `production` branch; this workflow moves `production` forward to a commit only once that
+# commit passed its checks, the sandbox serves exactly it, and the journeys tagged @sandbox passed against the sandbox.
+#
+# Off until the repository variable HEDGEHUG_PROMOTION turns it on: `sandbox` runs the gate and never touches
+# production, as at the sandbox rehearsal; `production` also fast-forwards production, from the cutover on. Unset or
+# anything else, every job is skipped.
+name: Promote to production
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One promotion at a time; a newer commit's run waits, then the newest one wins.
+concurrency:
+  group: promote-production
+  cancel-in-progress: false
+
+jobs:
+  # Waits for the commit's checks, the sandbox's deploy among them, then for the sandbox to serve exactly this commit.
+  sandbox:
+    if: ${{ github.ref == 'refs/heads/main' && (vars.HEDGEHUG_PROMOTION == 'sandbox' || vars.HEDGEHUG_PROMOTION == 'production') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      checks: read
+      statuses: read
+    outputs:
+      outcome: ${{ steps.serves.outputs.outcome }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+
+      - name: Wait for the commit's checks and the sandbox's deploy
+        run: node tools/release/promote.ts checks
+        env:
+          SHA: ${{ github.sha }}
+          GITHUB_TOKEN: ${{ github.token }}
+          DEADLINE_MS: "3600000"
+          REQUIRED_CHECKS: |
+            gate
+            e2e-rewrite
+            hosthog/deploy (hedgehug-sandbox)
+
+      - name: Wait for the sandbox to serve exactly this commit
+        id: serves
+        run: node tools/release/promote.ts serves
+        env:
+          SHA: ${{ github.sha }}
+          APP_URL: ${{ vars.HEDGEHUG_SANDBOX_URL }}
+          DEADLINE_MS: "1200000"
+
+  # The journeys tagged @sandbox against the sandbox: no Slack fake, no clock to move, no sign-in.
+  gate:
+    needs: sandbox
+    if: ${{ needs.sandbox.outputs.outcome == 'ready' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      outcome: ${{ steps.still.outputs.outcome }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm exec e2e-web install chromium --with-deps
+
+      - name: Run the journeys tagged @sandbox against the sandbox
+        run: |
+          target="$RUNNER_TEMP/sandbox.env"
+          printf '%s\n' KUDOS_TARGET_KIND=rewrite "KUDOS_APP_URL=$APP_URL" "KUDOS_SLACK_SIGNING_SECRET=$SIGNING_SECRET" "KUDOS_SLACK_WORKSPACE=$WORKSPACE" "KUDOS_SLACK_APP_ID=$APP_ID" KUDOS_SIGN_IN=edge-header KUDOS_HOSTED=true > "$target"
+          E2E_TARGET="$target" pnpm exec e2e run --config e2e/e2e.config.ts --tag @sandbox
+        env:
+          APP_URL: ${{ vars.HEDGEHUG_SANDBOX_URL }}
+          WORKSPACE: ${{ vars.HEDGEHUG_SANDBOX_WORKSPACE }}
+          APP_ID: ${{ vars.HEDGEHUG_SANDBOX_APP_ID }}
+          SIGNING_SECRET: ${{ secrets.HEDGEHUG_SANDBOX_SIGNING_SECRET }}
+
+      # What passed must be what is promoted: a sandbox that moved off this commit during the gate stops the promotion.
+      - name: Check the sandbox still serves this commit
+        id: still
+        run: node tools/release/promote.ts serves
+        env:
+          SHA: ${{ github.sha }}
+          APP_URL: ${{ vars.HEDGEHUG_SANDBOX_URL }}
+          DEADLINE_MS: "0"
+
+  # Moves production forward to exactly this commit, never back or sideways, and never creates the branch.
+  promote:
+    needs: gate
+    if: ${{ needs.gate.outputs.outcome == 'ready' && vars.HEDGEHUG_PROMOTION == 'production' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    outputs:
+      production: ${{ steps.forward.outputs.production }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+
+      - name: Fast-forward production to this commit
+        id: forward
+        run: node tools/release/promote.ts fast-forward
+        env:
+          SHA: ${{ github.sha }}
+          HEDGEHUG_PROMOTION: ${{ vars.HEDGEHUG_PROMOTION }}
+
+  # Once production serves the commit, the journeys tagged @sandbox that write nothing run against it.
+  production:
+    needs: promote
+    if: ${{ needs.promote.outputs.production == 'moved' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+
+      - name: Wait for production to serve exactly this commit
+        id: serves
+        run: node tools/release/promote.ts serves
+        env:
+          SHA: ${{ github.sha }}
+          APP_URL: ${{ vars.HEDGEHUG_PRODUCTION_URL }}
+          DEADLINE_MS: "1200000"
+
+      - if: ${{ steps.serves.outputs.outcome == 'ready' }}
+        run: pnpm install --frozen-lockfile
+
+      - if: ${{ steps.serves.outputs.outcome == 'ready' }}
+        run: pnpm exec e2e-web install chromium --with-deps
+
+      - name: Run the journeys tagged @sandbox that write nothing against production
+        if: ${{ steps.serves.outputs.outcome == 'ready' }}
+        run: |
+          target="$RUNNER_TEMP/production.env"
+          printf '%s\n' KUDOS_TARGET_KIND=rewrite "KUDOS_APP_URL=$APP_URL" "KUDOS_SLACK_SIGNING_SECRET=$SIGNING_SECRET" "KUDOS_SLACK_WORKSPACE=$WORKSPACE" "KUDOS_SLACK_APP_ID=$APP_ID" KUDOS_SIGN_IN=edge-header KUDOS_HOSTED=true > "$target"
+          E2E_TARGET="$target" pnpm exec e2e run --config e2e/e2e.config.ts --tag @sandbox --exclude-tag @writes
+        env:
+          APP_URL: ${{ vars.HEDGEHUG_PRODUCTION_URL }}
+          WORKSPACE: ${{ vars.HEDGEHUG_PRODUCTION_WORKSPACE }}
+          APP_ID: ${{ vars.HEDGEHUG_PRODUCTION_APP_ID }}
+          SIGNING_SECRET: ${{ secrets.HEDGEHUG_PRODUCTION_SIGNING_SECRET }}

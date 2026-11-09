@@ -19,6 +19,10 @@ Peer recognition for Slack on one Convex deployment per workspace; the product r
   handler: e2e/local/run.ts
   trust: operator
   control: none — it starts its own local backend and fakes on loopback ports with fresh synthetic secrets, and reaches no other deployment
+- promote to production: CI moves the production branch forward to a commit of main once the sandbox serves it and the journeys tagged @sandbox pass there
+  handler: tools/release/promote.ts
+  trust: operator
+  control: none — maintainers start it by pushing to main, and it runs only while the repository variable HEDGEHUG_PROMOTION is set; it pushes only with that variable at `production`, and only a fast-forward of an existing production branch to the commit the gate passed on
 - action signIn: a browser starts a Slack sign-in, redeems the one-time code with its verifier, or refreshes a session
   handler: signIn in convex/auth.ts
   trust: browser
