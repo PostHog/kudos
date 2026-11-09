@@ -1,3 +1,4 @@
+import { createHmac } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { createServer, connect, type Server, type Socket } from "node:net";
 import { fileURLToPath } from "node:url";
@@ -6,7 +7,8 @@ import { describe, expect, inject, onTestFinished, test } from "vitest";
 import { boot } from "./boot.ts";
 import { z } from "zod";
 import { runMigrations } from "./db/migrate.ts";
-import { actionJob, jobRegistry, mutationJob } from "./jobs/define.ts";
+import { actionJob, mutationJob } from "./jobs/define.ts";
+import { createRegistry } from "./registration.ts";
 import { errorFields, type Log, type LogFields } from "./log.ts";
 import { useTestDatabase, withSearchPath } from "../testing/database.ts";
 import { startServiceProcess, type ServiceProcess } from "../testing/serviceProcess.ts";
@@ -64,6 +66,21 @@ describe("booting", () => {
     expect(service.lines().map((line) => line.message), "no worker, so no job and no cron runs").not.toContain("worker started");
   });
 
+  test("the service's front door answers Slack's URL check, off or on, and refuses an unsigned event", async () => {
+    const challenge = JSON.stringify({ type: "url_verification", challenge: "boot-challenge" });
+    const timestamp = Math.floor(Date.now() / 1000).toString();
+    const signature = `v0=${createHmac("sha256", "boot-secret").update(`v0:${timestamp}:${challenge}`).digest("hex")}`;
+    const signed = { method: "POST", headers: { "x-slack-request-timestamp": timestamp, "x-slack-signature": signature }, body: challenge };
+    for (const off of ["0", "1"]) {
+      const service = await start({ DATABASE_URL: database.url, SLACK_SIGNING_SECRET: "boot-secret", HEDGEHUG_OFF: off });
+      await service.waitFor((line) => line.message === "migrations done");
+
+      expect(await (await fetch(`${service.url}/slack/events`, signed)).json(), `HEDGEHUG_OFF=${off}`).toEqual({ challenge: "boot-challenge" });
+      expect((await fetch(`${service.url}/slack/events`, { method: "POST", body: challenge })).status, `unsigned, HEDGEHUG_OFF=${off}`).toBe(401);
+      service.signal("SIGKILL");
+    }
+  });
+
   test("/testing/time exists only with HEDGEHUG_TEST_SECRET", async () => {
     const advance = (service: ServiceProcess) =>
       fetch(`${service.url}/testing/time`, { method: "POST", headers: { "x-hedgehug-test-secret": "s3cret" }, body: JSON.stringify({ advance: 1_000 }) });
@@ -94,7 +111,7 @@ describe("the worker in the service", () => {
     const service = await boot({
       env: { PORT: "0", DATABASE_URL: database.url, HEDGEHUG_TEST_SECRET: "s3cret" },
       log: captureLog().log,
-      registry: jobRegistry([record]),
+      registry: createRegistry({ test: { jobs: [record] } }),
       pollMs: 3_600_000, // only /testing/time runs jobs here, so what it answers is all that ran
     });
     onTestFinished(() => service.stop());
@@ -118,7 +135,7 @@ describe("the worker in the service", () => {
     const service = await boot({
       env: { PORT: "0", DATABASE_URL: database.url, HEDGEHUG_ADMIN_TOKEN: "a-load-token" },
       log: captureLog().log,
-      registry: jobRegistry([counted]),
+      registry: createRegistry({ test: { jobs: [counted] } }),
       pollMs: 20,
     });
     onTestFinished(() => service.stop());
@@ -152,7 +169,7 @@ describe("the worker in the service", () => {
       await run.query("still connected", async () => {});
     });
     const { log, lines } = captureLog();
-    const service = await boot({ env: { PORT: "0", DATABASE_URL: database.url }, log, registry: jobRegistry([send]), jobGraceMs: 5_000, pollMs: 20 });
+    const service = await boot({ env: { PORT: "0", DATABASE_URL: database.url }, log, registry: createRegistry({ test: { jobs: [send] } }), jobGraceMs: 5_000, pollMs: 20 });
     await service.migrated;
     await service.operations!.mutation("schedule", ({ jobs }) => jobs.enqueue(send, {}));
     await arrived;

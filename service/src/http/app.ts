@@ -33,12 +33,16 @@ export interface AppOptions {
   timeBudgetMs?: number;
   /** The data load: its hold and, while its token is set, its `/admin/load` routes. */
   load?: Pick<LoadControl, "held" | "routes">;
+  /** Slack's front door, mounted at `/slack`. Without it, Slack's routes answer only `HEDGEHUG_OFF`'s 200. */
+  slack?: Hono;
+  /** The domains' website routes, mounted at the root behind the gate. */
+  routes?: Hono[];
 }
 
 const slackPaths = /^\/slack(\/|$)/;
 const loadPaths = /^\/admin\/load(\/|$)/;
 
-export function createApp({ commit, readiness, off, log, clock, testSecret, worker, timeBudgetMs = 25_000, load }: AppOptions): Hono {
+export function createApp({ commit, readiness, off, log, clock, testSecret, worker, timeBudgetMs = 25_000, load, slack, routes = [] }: AppOptions): Hono {
   const app = new Hono();
 
   // One line per request: method, path without its query, status and duration. Never a header or a body.
@@ -61,7 +65,8 @@ export function createApp({ commit, readiness, off, log, clock, testSecret, work
     // A load's hold wins over HEDGEHUG_OFF, before the migrations too: Slack hears 503 and retries rather than an
     // acknowledgement. Only the admin path passes it, once the migrations are done.
     if (load?.held() && !(migrated && load.routes && loadPaths.test(c.req.path))) return unavailable();
-    if (off) return slackPaths.test(c.req.path) ? c.body(null, 200) : unavailable();
+    // Off, the front door answers Slack: 401 to a request Slack didn't sign, the challenge, and 200 to the rest.
+    if (off) return !slackPaths.test(c.req.path) ? unavailable() : slack ? next() : c.body(null, 200);
     if (!migrated) return unavailable();
     return next();
   });
@@ -69,6 +74,9 @@ export function createApp({ commit, readiness, off, log, clock, testSecret, work
   if (load?.routes) app.route("/admin/load", load.routes);
 
   if (testSecret) mountTestingTime(app, testSecret, clock, worker, timeBudgetMs);
+
+  if (slack) app.route("/slack", slack);
+  for (const domainRoutes of routes) app.route("/", domainRoutes);
 
   return app;
 }

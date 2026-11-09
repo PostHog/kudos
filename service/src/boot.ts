@@ -4,11 +4,13 @@ import { readCommit } from "./commit.ts";
 import { runMigrations } from "./db/migrate.ts";
 import { createPool } from "./db/pool.ts";
 import { createApp, type Migrations } from "./http/app.ts";
-import type { JobRegistry } from "./jobs/define.ts";
 import { createWorker, type Worker } from "./jobs/worker.ts";
 import { createLoadControl } from "./load/control.ts";
 import { errorFields, jsonLog, type Log } from "./log.ts";
 import { createOperations, type Operations } from "./operations.ts";
+import type { Registry } from "./registration.ts";
+import { serviceRegistry } from "./registry.ts";
+import { createFrontDoor } from "./slack/frontDoor.ts";
 
 export interface BootOptions {
   env: NodeJS.ProcessEnv;
@@ -19,8 +21,8 @@ export interface BootOptions {
   connectTimeoutMs?: number;
   /** How long `stop` waits for the database's connections to close before it gives up on them. */
   stopTimeoutMs?: number;
-  /** Every job the worker can run, the crons' included. */
-  registry?: JobRegistry;
+  /** What the domains registered: jobs, the crons' included, bus subscribers, Slack handlers and website routes. */
+  registry?: Registry;
   /** How long `stop` lets running jobs finish, within the host's grace period after SIGTERM. */
   jobGraceMs?: number;
   /** How often the worker looks for due jobs and crons. */
@@ -49,7 +51,7 @@ export async function boot({
   retryMs = 5_000,
   connectTimeoutMs = 10_000,
   stopTimeoutMs = 5_000,
-  registry = new Map(),
+  registry = serviceRegistry,
   jobGraceMs = 20_000,
   pollMs,
 }: BootOptions): Promise<Service> {
@@ -62,11 +64,12 @@ export async function boot({
   const pool = databaseUrl ? createPool(databaseUrl, { connectTimeoutMs }) : undefined;
   pool?.on("error", (error) => log.error("database connection lost", errorFields(error)));
   const load = pool ? createLoadControl({ pool, token: env.HEDGEHUG_ADMIN_TOKEN || undefined, log }) : undefined;
-  const operations = pool ? createOperations({ pool, clock, log }) : undefined;
+  const operations = pool ? createOperations({ pool, clock, log, subscribers: registry.subscribers }) : undefined;
   // While a load holds, no cron is written or fired and no job starts.
-  const worker = operations && load ? createWorker({ operations, log, registry, held: load.held, ...(pollMs ? { pollMs } : {}) }) : undefined;
+  const worker = operations && load ? createWorker({ operations, log, registry: registry.jobs, held: load.held, ...(pollMs ? { pollMs } : {}) }) : undefined;
 
   const testSecret = env.HEDGEHUG_TEST_SECRET || undefined;
+  const slack = createFrontDoor({ signingSecret: env.SLACK_SIGNING_SECRET || undefined, clock, off, log, ...(operations ? { operations } : {}), handlers: registry.slack });
   const app = createApp({
     commit: readCommit(env),
     readiness: { migrations: () => migrations },
@@ -76,6 +79,8 @@ export async function boot({
     ...(testSecret ? { testSecret } : {}),
     ...(worker ? { worker } : {}),
     ...(load ? { load } : {}),
+    slack,
+    routes: registry.routes,
   });
   const server = await listen(app.fetch, Number(env.PORT ?? 8080));
   const port = (server.address() as { port: number }).port;
