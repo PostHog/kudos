@@ -61,7 +61,13 @@ try {
   const target: Target = { appUrl: backend.site, signingSecret, workspace, appId, fakesUrl: fakes.url, timeUrl: clock.url, testSecret };
   await writeFile(targetFile, targetLines(target), { mode: 0o600 });
 
-  if (interrupted === undefined) exitCode = await runJourneys(targetFile);
+  // Moving the clock restarts the backend and catches every cron up at once, so with no filter of the caller's the
+  // journeys that move it run after the others, which then never meet that churn.
+  const asked = process.argv.slice(2).filter((argument) => argument !== "--");
+  const passes = asked.length > 0 ? [asked] : [["--exclude-tag", "@time"], ["--tag", "@time"]];
+  const results: number[] = [];
+  for (const pass of passes) if (interrupted === undefined) results.push(await runJourneys(targetFile, pass));
+  if (interrupted === undefined) exitCode = Math.max(...results);
 } catch (failure) {
   if (interrupted === undefined) console.error(failure);
 } finally {
@@ -69,9 +75,9 @@ try {
 }
 process.exit(interrupted === undefined ? exitCode : 128 + constants.signals[interrupted]);
 
-function runJourneys(targetFile: string) {
+function runJourneys(targetFile: string, filters: string[]) {
   return new Promise<number>((resolve) => {
-    runner = spawn("npx", ["--no", "--", "e2e", "run", "--config", "e2e/e2e.config.ts", ...process.argv.slice(2).filter((argument) => argument !== "--")], {
+    runner = spawn("npx", ["--no", "--", "e2e", "run", "--config", "e2e/e2e.config.ts", ...filters], {
       stdio: "inherit",
       detached: true,
       env: { ...process.env, E2E_TARGET: targetFile, E2E_TELEMETRY_DISABLED: "1" },

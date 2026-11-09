@@ -69,10 +69,10 @@ export async function startClock(backend: LocalBackend, { secret, components }: 
       const now = appNow();
       const jobs = (await Promise.all(["", ...components].map(unfinished))).flat().filter((job) => job.scheduledTime <= now);
       const crons = (await Promise.all(["", ...components].map((component) => cronsBehind(component, now)))).flat();
-      const due = [...jobs, ...crons];
+      const due = [...jobs.map((job) => ({ name: job.name, state: `${job.state.kind}, due ${now - job.scheduledTime} ms ago` })), ...crons.map((cron) => ({ name: cron.name, state: `cron ${cron.nextRun!.state.type}` }))];
       for (const job of due) ran.add(job.name);
       quiet = due.length === 0 ? quiet + 1 : 0;
-      if (Date.now() > until) throw new Error(`jobs still due after ${budgetMs} ms: ${due.map((job) => job.name).join(", ")}`);
+      if (Date.now() > until) throw new Error(`jobs still due after ${budgetMs} ms: ${due.map((job) => `${job.name} (${job.state})`).join(", ")}`);
       await new Promise((resolve) => setTimeout(resolve, 200));
     }
     return [...ran];
