@@ -2,12 +2,14 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { AddressInfo } from "node:net";
 import { FakePostHog, type FlagDefinition } from "../../testing/fakePostHog.ts";
 import { FakeSlack, rateLimitedFor, type SlackUser } from "../../testing/fakeSlack.ts";
+import { productionFlags } from "./productionFlags.ts";
 
 export type Fakes = { url: string; stop: () => Promise<void> };
 
 export async function startFakes(): Promise<Fakes> {
   const slack = new FakeSlack();
-  const postHog = new FakePostHog();
+  // PostHog serves the flags production had, so journeys prove what its members saw.
+  const postHog = new FakePostHog().withFlags(...productionFlags);
   const responses = new Map<string, unknown[]>();
   const server = createServer((request, response) => void route({ slack, postHog, responses }, request, response).catch((failure) => answer(response, new Response(String(failure), { status: 500 }))));
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -60,6 +62,9 @@ function control({ slack, postHog, responses }: State, url: URL, body: string) {
     case "/_control/flags":
       postHog.withFlags(...(JSON.parse(body) as FlagDefinition[]));
       return Response.json({ ok: true });
+    // What the app reported to PostHog as exceptions: the type and message of each, and where it was thrown.
+    case "/_control/exceptions":
+      return Response.json(postHog.events().filter((event) => event.event === "$exception").flatMap(({ properties }) => ((properties.$exception_list as ReportedException[] | undefined) ?? []).map(describe)));
     case "/_control/calls":
       return Response.json(slack.callsTo(query("method")));
     case "/_control/reactions":
@@ -67,6 +72,13 @@ function control({ slack, postHog, responses }: State, url: URL, body: string) {
     default:
       return new Response(`no control ${url.pathname}`, { status: 404 });
   }
+}
+
+type ReportedException = { type?: string; value?: string; stacktrace?: { frames?: Array<{ function?: string; filename?: string; lineno?: number }> } };
+
+function describe({ type, value, stacktrace }: ReportedException) {
+  const frames = (stacktrace?.frames ?? []).toReversed().map((frame) => `  at ${frame.function ?? "?"} (${frame.filename ?? "?"}:${frame.lineno ?? "?"})`);
+  return [`${type}: ${value}`, ...frames].join("\n");
 }
 
 // Slack's Web API takes JSON or form-encoded arguments; the recording fake reads JSON, so form fields become JSON
