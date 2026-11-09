@@ -147,7 +147,9 @@ export function createFrontDoor({ signingSecret, clock, off, log, operations, ha
   // A failure answers 500, so Slack delivers the event again; the log names the route, never the error's message.
   app.onError((error, c) => {
     log.error("slack request failed", { path: c.req.path, ...errorFields(error) });
-    return c.body(null, 500);
+    // Without the response the handler made so far: Hono's setter would keep its headers.
+    c.res = undefined;
+    return new Response(null, { status: 500 });
   });
 
   return app;

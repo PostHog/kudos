@@ -1,5 +1,5 @@
 import { createHmac } from "node:crypto";
-import { readdirSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { Hono } from "hono";
 import { describe, expect, test, vi } from "vitest";
 import { z } from "zod";
@@ -154,6 +154,92 @@ describe("a domain's website routes", () => {
     expect(read).not.toContain("thanks");
     expect(answer.headers.get("content-type")).toBe("text/csv");
     expect(lines).toEqual([JSON.stringify({ message: "response body failed", path: "/api/export", error: "TypeError", code: "57014" })]);
+  });
+
+  test("a failure after a response was made answers a plain 500, with none of that response's headers", async () => {
+    const lines: string[] = [];
+    const log = { info: (message: string, fields?: object) => void lines.push(JSON.stringify({ message, ...fields })), error: (message: string, fields?: object) => void lines.push(JSON.stringify({ message, ...fields })) };
+    for (const thrown of [new TypeError("thanks for the release notes"), "thanks for the release notes"]) {
+      lines.length = 0;
+      const routes = new Hono()
+        .use("/api/*", async (_c, next) => {
+          await next();
+          throw thrown;
+        })
+        .get("/api/give", () => new Response("x", { headers: { "content-length": "1", "content-encoding": "gzip", etag: '"given"' } }));
+      const app = createApp({ commit: "test", readiness: { migrations: () => "done" }, off: false, log, clock: createClock(), routes: [routes] });
+
+      const answer = await app.request("/api/give");
+
+      expect(answer.status).toBe(500);
+      expect([answer.headers.get("content-encoding"), answer.headers.get("etag"), answer.headers.get("content-length")]).toEqual([null, null, null]);
+      expect(await answer.text()).toBe("Internal Server Error");
+      expect(lines.join("\n")).not.toContain("thanks");
+      expect(lines.map((line) => JSON.parse(line).message)).toEqual(["request failed", "request"]);
+    }
+  });
+
+  test("a client that stops reading is no failure: the body's source is cancelled and nothing is logged", async () => {
+    const lines: string[] = [];
+    const log = { info: () => {}, error: (message: string, fields?: object) => void lines.push(JSON.stringify({ message, ...fields })) };
+    let cancelled = 0;
+    const routes = new Hono().get("/api/export", () => {
+      let sent = false;
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (sent) return new Promise<void>(() => {});
+          sent = true;
+          controller.enqueue(new TextEncoder().encode("first,"));
+        },
+        cancel: () => void cancelled++,
+      });
+      return new Response(body);
+    });
+    const app = createApp({ commit: "test", readiness: { migrations: () => "done" }, off: false, log, clock: createClock(), routes: [routes] });
+
+    const reader = (await app.request("/api/export")).body!.getReader();
+    await reader.read();
+    await reader.cancel();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(cancelled).toBe(1);
+    expect(lines).toEqual([]);
+  });
+
+  test("a response whose body was already read or is locked answers 500, with the request line", async () => {
+    const lines: string[] = [];
+    const log = { info: (message: string, fields?: object) => void lines.push(JSON.stringify({ message, ...fields })), error: (message: string, fields?: object) => void lines.push(JSON.stringify({ message, ...fields })) };
+    const routes = new Hono()
+      .get("/api/read", async () => {
+        const response = new Response("abcdef", { headers: { "content-length": "6" } });
+        await response.text();
+        return response;
+      })
+      .get("/api/locked", () => {
+        const response = new Response("abcdef", { headers: { "content-length": "6" } });
+        response.body!.getReader();
+        return response;
+      });
+    const app = createApp({ commit: "test", readiness: { migrations: () => "done" }, off: false, log, clock: createClock(), routes: [routes] });
+
+    for (const path of ["/api/read", "/api/locked"]) {
+      lines.length = 0;
+      const answer = await app.request(path);
+
+      expect(answer.status, path).toBe(500);
+      expect(answer.headers.get("content-length"), path).not.toBe("6");
+      expect(lines.map((line) => JSON.parse(line)).map(({ message, status }) => ({ message, status })), path).toEqual([
+        { message: "request failed", status: undefined },
+        { message: "request", status: 500 },
+      ]);
+    }
+  });
+
+  test("no service code streams with Hono's streaming helpers, which print a failure whole and answer 200", () => {
+    const sources = readdirSync(new URL(".", import.meta.url), { recursive: true, encoding: "utf8" }).filter((file) => file.endsWith(".ts"));
+    const streaming = sources.filter((file) => readFileSync(new URL(file, import.meta.url), "utf8").includes(`"hono/${"streaming"}"`));
+
+    expect(streaming).toEqual([]);
   });
 
   test("a route that fails answers 500 and logs its class and code, never its message", async () => {

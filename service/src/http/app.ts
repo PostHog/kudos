@@ -46,24 +46,24 @@ export function createApp({ commit, readiness, off, log, clock, testSecret, work
   const app = new Hono();
 
   // One line per request: method, path without its query, status and duration. Never a header or a body.
-  // Hono's error hooks see only Errors: anything else thrown ends here, as a 500 logged by its kind alone.
+  // Every failure ends here, Errors too (the error hook below hands them on): a 500 with none of the failed response's
+  // headers, logged by the error's kind alone.
   app.use(async (c, next) => {
     const started = performance.now();
     const path = c.req.path;
     try {
       await next();
+      const { body, status, statusText, headers } = c.res;
+      if (body) {
+        const quiet = failingQuietly(body, (error) => log.error("response body failed", { path, ...errorFields(error) }));
+        c.res = undefined;
+        c.res = new Response(quiet, { status, statusText, headers });
+      }
     } catch (error) {
       log.error("request failed", { path, ...errorFields(error) });
+      // Hono's setter keeps the old response's headers; without it first, a success's length or encoding would stay.
       c.res = undefined;
       c.res = new Response("Internal Server Error", { status: 500 });
-    }
-    const { body, status, statusText, headers } = c.res;
-    if (body) {
-      c.res = undefined;
-      c.res = new Response(
-        failingQuietly(body, (error) => log.error("response body failed", { path, ...errorFields(error) })),
-        { status, statusText, headers },
-      );
     }
     log.info("request", {
       method: c.req.method,
@@ -97,10 +97,10 @@ export function createApp({ commit, readiness, off, log, clock, testSecret, work
   for (const domainRoutes of routes) app.route("/", domainRoutes);
 
   // A failure answers 500; the log names the path and the error's class and code, never its message, which may quote
-  // SQL parameters or a member's words. Hono's default would print the whole error.
-  app.onError((error, c) => {
-    log.error("request failed", { path: c.req.path, ...errorFields(error) });
-    return c.text("Internal Server Error", 500);
+  // SQL parameters or a member's words. Hono's default would print the whole error: this hands it to the request log,
+  // which answers it.
+  app.onError((error) => {
+    throw error;
   });
 
   return app;
@@ -158,18 +158,25 @@ function mountTestingTime(app: Hono, secret: string, clock: Clock, worker: AppOp
  */
 function failingQuietly(body: ReadableStream<Uint8Array>, onError: (error: unknown) => void): ReadableStream<Uint8Array> {
   const reader = body.getReader();
+  // A client that stops reading cancels the stream: what the pending read then does is no failure of the body's.
+  let cancelled = false;
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
       try {
         const { done, value } = await reader.read();
+        if (cancelled) return;
         if (done) controller.close();
         else controller.enqueue(value);
       } catch (error) {
+        if (cancelled) return;
         onError(error);
         controller.error(new Error("The response's body failed"));
       }
     },
-    cancel: (reason) => reader.cancel(reason),
+    cancel(reason) {
+      cancelled = true;
+      return reader.cancel(reason);
+    },
   });
 }
 
