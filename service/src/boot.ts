@@ -1,7 +1,7 @@
 import { serve, type ServerType } from "@hono/node-server";
-import pg from "pg";
 import { readCommit } from "./commit.ts";
 import { runMigrations } from "./db/migrate.ts";
+import { createPool } from "./db/pool.ts";
 import { createApp, type Migrations } from "./http/app.ts";
 import { errorFields, jsonLog, type Log } from "./log.ts";
 
@@ -38,7 +38,7 @@ export async function boot({ env, log = jsonLog(), retryMs = 5_000, connectTimeo
   const port = (server.address() as { port: number }).port;
   log.info("listening", { port, migrations, off });
 
-  const pool = databaseUrl ? new pg.Pool({ connectionString: databaseUrl, max: 5, connectionTimeoutMillis: connectTimeoutMs }) : undefined;
+  const pool = databaseUrl ? createPool(databaseUrl, { connectTimeoutMs }) : undefined;
   pool?.on("error", (error) => log.error("database connection lost", errorFields(error)));
 
   const migrated = new Promise<void>((resolve) => {
