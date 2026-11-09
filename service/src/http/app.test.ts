@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import { createClock } from "../clock.ts";
 import { jsonLog } from "../log.ts";
 import { createApp, type Migrations } from "./app.ts";
 
@@ -10,7 +11,7 @@ function appWith({ migrations = "done" as Migrations, off = false } = {}) {
     lines.push(JSON.parse(line) as Record<string, unknown>);
   });
   let state = migrations;
-  const app = createApp({ commit: "0123abc", readiness: { migrations: () => state }, off, log });
+  const app = createApp({ commit: "0123abc", readiness: { migrations: () => state }, off, log, clock: createClock() });
   return { app, lines, raw, migrate: (next: Migrations) => (state = next) };
 }
 

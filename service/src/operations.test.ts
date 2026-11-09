@@ -1,0 +1,191 @@
+import { eq, sql } from "drizzle-orm";
+import { drizzle } from "drizzle-orm/node-postgres";
+import { doublePrecision, integer, pgTable, text } from "drizzle-orm/pg-core";
+import pg from "pg";
+import { afterAll, beforeAll, beforeEach, describe, expect, inject, test } from "vitest";
+import { useTestDatabase, withSearchPath } from "../testing/database.ts";
+import { createClock } from "./clock.ts";
+import { createPool } from "./db/pool.ts";
+import type { Log, LogFields } from "./log.ts";
+import { createOperations, type Operations } from "./operations.ts";
+
+// A table of the test's own, in a schema of its own, so the service's schema stays exactly the migrations'.
+const counters = pgTable("counters", { id: text().primaryKey(), n: integer().notNull(), at: doublePrecision() });
+
+const database = useTestDatabase();
+const schema = `${database.schema}_operations`;
+let pool: pg.Pool;
+
+beforeAll(async () => {
+  const admin = new pg.Client({ connectionString: inject("databaseUrl") });
+  await admin.connect();
+  await admin.query(`drop schema if exists "${schema}" cascade; create schema "${schema}"`);
+  await admin.query(`create table "${schema}".counters (id text primary key, n integer not null, at double precision)`);
+  await admin.end();
+  pool = createPool(withSearchPath(inject("databaseUrl"), schema), { max: 6 });
+});
+afterAll(async () => {
+  await pool.end();
+  const admin = new pg.Client({ connectionString: inject("databaseUrl") });
+  await admin.connect();
+  await admin.query(`drop schema if exists "${schema}" cascade`);
+  await admin.end();
+});
+beforeEach(async () => {
+  await pool.query("truncate counters");
+});
+
+function setUp(options: { maxAttempts?: number } = {}) {
+  let real = 1_700_000_000_000;
+  const clock = createClock({ real: () => real });
+  const lines: Array<{ level: string; message: string } & LogFields> = [];
+  const log: Log = {
+    info: (message, fields) => lines.push({ level: "info", message, ...fields }),
+    error: (message, fields) => lines.push({ level: "error", message, ...fields }),
+  };
+  const operations = createOperations({ db: drizzle({ client: pool }), clock, log, retryDelayMs: () => 1, ...options });
+  return { operations, clock, lines, tick: (ms: number) => (real += ms) };
+}
+
+async function setting(operations: Operations, name: string): Promise<string> {
+  return operations.query("read setting", async ({ tx }) => {
+    const { rows } = await tx.execute<{ value: string }>(sql`select current_setting(${name}) as value`);
+    return rows[0]!.value;
+  });
+}
+
+describe("mutations", () => {
+  test("run in one SERIALIZABLE transaction", async () => {
+    const { operations } = setUp();
+
+    const level = await operations.mutation("read level", async ({ tx }) => {
+      const { rows } = await tx.execute<{ value: string }>(sql`select current_setting('transaction_isolation') as value`);
+      return rows[0]!.value;
+    });
+
+    expect(level).toBe("serializable");
+  });
+
+  test("two that read and write the same row both land: the one that conflicts re-runs whole, with the same now", async () => {
+    const { operations, tick } = setUp();
+    await pool.query("insert into counters (id, n) values ('wallet', 0)");
+    const nows = new Map<string, number[]>();
+    // Both first attempts read before either writes, so SERIALIZABLE must refuse one of them.
+    let reads = 0;
+    let bothRead: () => void;
+    const barrier = new Promise<void>((resolve) => (bothRead = resolve));
+
+    const spend = (name: string) =>
+      operations.mutation(name, async ({ tx, now }) => {
+        nows.set(name, [...(nows.get(name) ?? []), now]);
+        const [row] = await tx.select().from(counters).where(eq(counters.id, "wallet"));
+        if (++reads === 2) bothRead();
+        if (reads <= 2) await barrier;
+        tick(1_000); // real time passes between attempts; the operation's now must not
+        await tx.update(counters).set({ n: row!.n + 1, at: now }).where(eq(counters.id, "wallet"));
+      });
+    await Promise.all([spend("spend a"), spend("spend b")]);
+
+    const { rows } = await pool.query("select n from counters where id = 'wallet'");
+    expect(rows[0].n, "both spends counted").toBe(2);
+    const attempts = [...nows.values()];
+    expect(attempts.map((list) => list.length).sort(), "one ran once, the other twice").toEqual([1, 2]);
+    for (const list of attempts) expect(new Set(list).size, "every attempt of one operation saw one now").toBe(1);
+  });
+
+  test("a serialization failure or deadlock that keeps coming runs out of attempts, logged with the operation's name", async () => {
+    const { operations, lines } = setUp({ maxAttempts: 3 });
+    let attempts = 0;
+
+    const failing = operations.mutation("give kudos", async () => {
+      attempts += 1;
+      throw Object.assign(new Error("could not serialize access"), { code: attempts % 2 ? "40001" : "40P01" });
+    });
+
+    await expect(failing).rejects.toThrow("could not serialize access");
+    expect(attempts, "every attempt ran").toBe(3);
+    expect(lines.filter((line) => line.level === "error"), "one log line, naming the operation").toEqual([
+      { level: "error", message: "mutation retries exhausted", operation: "give kudos", attempts: 3, error: "Error", code: "40001" },
+    ]);
+  });
+
+  test("any other error runs once, rolls the writes back, and is logged with the operation's name", async () => {
+    const { operations, lines } = setUp();
+    let attempts = 0;
+
+    const failing = operations.mutation("open pack", async ({ tx }) => {
+      attempts += 1;
+      await tx.insert(counters).values({ id: "pack", n: 1 });
+      throw new TypeError("no such pack");
+    });
+
+    await expect(failing).rejects.toThrow("no such pack");
+    expect(attempts, "not retried").toBe(1);
+    expect((await pool.query("select * from counters")).rows, "its insert rolled back").toEqual([]);
+    expect(lines.filter((line) => line.level === "error")).toEqual([{ level: "error", message: "operation failed", operation: "open pack", kind: "mutation", error: "TypeError" }]);
+  });
+
+  test("new rows get a UUID and a creation time from the operation's instant, strictly increasing", async () => {
+    const { operations, clock } = setUp();
+    clock.advance(86_400_000);
+
+    const stamps = await operations.mutation("insert three", async ({ now, newRow }) => ({ now, rows: [newRow(), newRow(), newRow()] }));
+    const later = await operations.mutation("insert one more", async ({ newRow }) => newRow());
+
+    const times = [...stamps.rows, later].map((row) => row._creationTime);
+    expect(times[0], "the first row is stamped with the operation's now, test offset included").toBe(stamps.now);
+    expect(stamps.now, "now includes the offset").toBe(1_700_000_000_000 + 86_400_000);
+    for (let i = 1; i < times.length; i++) expect(times[i], `row ${i} after row ${i - 1}`).toBeGreaterThan(times[i - 1]!);
+    expect(times.every((time) => time - stamps.now < 1), "every stamp stays within the operation's millisecond").toBe(true);
+    for (const row of [...stamps.rows, later]) expect(row._id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  });
+});
+
+describe("queries", () => {
+  test("run in one REPEATABLE READ READ ONLY transaction", async () => {
+    const { operations } = setUp();
+
+    expect(await setting(operations, "transaction_isolation")).toBe("repeatable read");
+    expect(await setting(operations, "transaction_read_only")).toBe("on");
+  });
+
+  test("see one snapshot, whatever commits meanwhile", async () => {
+    const { operations } = setUp();
+    await pool.query("insert into counters (id, n) values ('board', 1)");
+
+    const [first, second] = await operations.query("read the board twice", async ({ tx }) => {
+      const read = async () => (await tx.select().from(counters).where(eq(counters.id, "board")))[0]!.n;
+      const before = await read();
+      await pool.query("update counters set n = 2 where id = 'board'");
+      return [before, await read()];
+    });
+
+    expect(first).toBe(1);
+    expect(second, "the second read sees the first's snapshot").toBe(1);
+  });
+
+  test("can't write", async () => {
+    const { operations } = setUp();
+
+    await expect(operations.query("sneak a write", ({ tx }) => tx.insert(counters).values({ id: "x", n: 1 }))).rejects.toThrow();
+    expect((await pool.query("select * from counters")).rows).toEqual([]);
+  });
+});
+
+describe("actions", () => {
+  test("read the clock live and run mutations and queries", async () => {
+    const { operations, clock, tick } = setUp();
+
+    const seen = await operations.action("hold for a rate limit", async (ctx) => {
+      const before = ctx.clock.now();
+      tick(30_000); // a Slack call and its wait
+      clock.advance(5_000);
+      await ctx.run.mutation("count", ({ tx }) => tx.insert(counters).values({ id: "action", n: 1 }));
+      const n = await ctx.run.query("read", async ({ tx }) => (await tx.select().from(counters))[0]!.n);
+      return { before, after: ctx.clock.now(), n };
+    });
+
+    expect(seen.after - seen.before, "the action sees real time and the offset move").toBe(35_000);
+    expect(seen.n).toBe(1);
+  });
+});

@@ -52,5 +52,9 @@ Peer recognition for Slack on one Convex deployment per workspace; the product r
   handler: createApp in service/src/http/app.ts
   trust: browser
   control: none — it reads no row and no secret; it answers the commit the image was built from and two states
+- route POST /testing/time: the E2E suite moves the app's clock forward on a local or CI copy of the service
+  handler: mountTestingTime in service/src/http/app.ts
+  trust: browser
+  control: none — it is mounted only when HEDGEHUG_TEST_SECRET is set, which production and the sandbox never set, and a request whose x-hedgehug-test-secret doesn't match, compared in constant time, gets the 404 of an unknown path (service/src/http/testingTime.test.ts)
 
 ## invariants

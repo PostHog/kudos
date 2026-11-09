@@ -1,9 +1,12 @@
 import { serve, type ServerType } from "@hono/node-server";
+import { drizzle } from "drizzle-orm/node-postgres";
+import { createClock, type Clock } from "./clock.ts";
 import { readCommit } from "./commit.ts";
 import { runMigrations } from "./db/migrate.ts";
 import { createPool } from "./db/pool.ts";
 import { createApp, type Migrations } from "./http/app.ts";
 import { errorFields, jsonLog, type Log } from "./log.ts";
+import { createOperations, type Operations } from "./operations.ts";
 
 export interface BootOptions {
   env: NodeJS.ProcessEnv;
@@ -20,6 +23,9 @@ export interface Service {
   port: number;
   /** Resolves once the migrations are done; never resolves without a database. */
   migrated: Promise<void>;
+  clock: Clock;
+  /** The operation runner, when a database is set. */
+  operations: Operations | undefined;
   stop(): Promise<void>;
 }
 
@@ -33,13 +39,16 @@ export async function boot({ env, log = jsonLog(), retryMs = 5_000, connectTimeo
   let migrations: Migrations = databaseUrl ? "pending" : "no-database";
   let stopping = false;
 
-  const app = createApp({ commit: readCommit(env), readiness: { migrations: () => migrations }, off, log });
+  const clock = createClock();
+  const testSecret = env.HEDGEHUG_TEST_SECRET || undefined;
+  const app = createApp({ commit: readCommit(env), readiness: { migrations: () => migrations }, off, log, clock, ...(testSecret ? { testSecret } : {}) });
   const server = await listen(app.fetch, Number(env.PORT ?? 8080));
   const port = (server.address() as { port: number }).port;
   log.info("listening", { port, migrations, off });
 
   const pool = databaseUrl ? createPool(databaseUrl, { connectTimeoutMs }) : undefined;
   pool?.on("error", (error) => log.error("database connection lost", errorFields(error)));
+  const operations = pool ? createOperations({ db: drizzle({ client: pool }), clock, log }) : undefined;
 
   const migrated = new Promise<void>((resolve) => {
     if (!pool) return;
@@ -61,6 +70,8 @@ export async function boot({ env, log = jsonLog(), retryMs = 5_000, connectTimeo
   return {
     port,
     migrated,
+    clock,
+    operations,
     async stop() {
       stopping = true;
       await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));

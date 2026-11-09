@@ -58,6 +58,19 @@ describe("booting", () => {
     expect((await get(service, "/")).status, "the website while off").toBe(503);
   });
 
+  test("/testing/time exists only with HEDGEHUG_TEST_SECRET", async () => {
+    const advance = (service: ServiceProcess) =>
+      fetch(`${service.url}/testing/time`, { method: "POST", headers: { "x-hedgehug-test-secret": "s3cret" }, body: JSON.stringify({ advance: 1_000 }) });
+    const without = await start({ DATABASE_URL: database.url });
+    const withSecret = await start({ DATABASE_URL: database.url, HEDGEHUG_TEST_SECRET: "s3cret" });
+    await Promise.all([without, withSecret].map((service) => service.waitFor((line) => line.message === "migrations done")));
+
+    expect((await advance(without)).status, "without the env").toBe(404);
+    const answer = await advance(withSecret);
+    expect(answer.status, "with the env and its secret").toBe(200);
+    expect(await answer.json()).toMatchObject({ ran: [] });
+  });
+
   test("SIGTERM stops the service cleanly", async () => {
     const service = await start({ DATABASE_URL: database.url });
     await service.waitFor((line) => line.message === "migrations done");
