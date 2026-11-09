@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { FakePostHog, type FlagDefinition } from "../../testing/fakePostHog.ts";
-import { FakeSlack, rateLimitedFor, type SlackUser } from "../../testing/fakeSlack.ts";
+import { FakeSlack, rateLimitedFor, type SlackUser, type UserGroupOptions } from "../../testing/fakeSlack.ts";
 import { productionFlags } from "./productionFlags.ts";
 
 export type Fakes = { url: string; stop: () => Promise<void> };
@@ -46,6 +46,12 @@ function control({ slack, postHog, responses }: State, url: URL, body: string) {
     case "/_control/channels": {
       const { id, ...options } = JSON.parse(body) as { id: string } & Parameters<FakeSlack["withChannel"]>[1];
       slack.withChannel(id, options);
+      return Response.json({ ok: true });
+    }
+    // A user group as usergroups.list and usergroups.users.list answer it.
+    case "/_control/user-groups": {
+      const { id, team_id, ...options } = JSON.parse(body) as { id: string; team_id: string } & UserGroupOptions;
+      slack.withUserGroup(id, { ...options, teamId: team_id });
       return Response.json({ ok: true });
     }
     case "/_control/rate-limits": {
