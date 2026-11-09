@@ -1,20 +1,20 @@
 // The worker: runs due jobs, at most `concurrency` at a time so they never starve Slack's acks, and fires the crons.
 // - A slot claims the next due job in one transaction, `FOR UPDATE SKIP LOCKED`, so two copies never wait on each
 //   other's job and a job one copy holds never blocks the next.
-// - A mutation job runs in that same transaction, which also marks it `success`: exactly once. An app error rolls the
-//   job's writes back to a savepoint and marks it `failed` before the transaction commits, so no copy can take it in
-//   between; it never runs again. The database's trouble (a serialization failure past its retries, a lost connection)
+// - A mutation job runs in that same transaction, which also marks it `success`: exactly once. An app error, or a
+//   network call the runner refused, rolls the job's writes back behind the runner's fence and marks it `failed`
+//   before the transaction commits, so no copy can take it in between; it never runs again. The database's trouble (a serialization failure past its retries, a lost connection)
 //   is not the job's: it rolls everything back and the job stays pending for a later run.
 // - An action job is marked `running` with a deadline in that transaction, before it starts, and never starts again;
 //   the sweep marks one past its deadline `failed`. At most once, as on Convex.
 // - A cron fires in the transaction that moves its next run forward, so of two copies only one fires it; a run
 //   missed while no copy ran fires once, never as a backlog.
 // - While the load holds (S18), nothing here writes: no cron, no claim, no sweep.
-import { and, asc, eq, inArray, lte, or, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, lte, or } from "drizzle-orm";
 import { decodeStored } from "../db/codec.ts";
 import { crons, jobs } from "../db/schema/service.ts";
 import { errorFields, type Log } from "../log.ts";
-import { isNetworkInOperation, type MutationContext, type Operations, type Transaction } from "../operations.ts";
+import { fence, type MutationContext, type Operations, type Transaction } from "../operations.ts";
 import { cronIds, cronSchedules, isCronId, nextRun, retiredCrons, type CronId } from "./crons.ts";
 import type { ActionJob, JobRegistry, MutationJob } from "./define.ts";
 
@@ -149,16 +149,9 @@ export function createWorker({
         return { action: job, id: row._id, args: row.args };
       });
     } catch (error) {
-      // The runner logged it. Whatever the transaction claimed rolled back: the job is still pending.
+      // The runner logged it. Whatever the transaction claimed rolled back: the job is still pending, and waits for a
+      // later poll rather than running again at once.
       if (name === undefined) return undefined;
-      // A mutation job that reached for the network failed its whole transaction, claim and all, so its failure is
-      // marked apart. Another copy may take it in between; it is refused the same and writes nothing either.
-      if (id !== undefined && isNetworkInOperation(error)) {
-        const failedId = id;
-        // Unmarked, the job is still pending: it waits for a later poll rather than running again at once.
-        const marked = await operations.mutation("jobs.fail", ({ tx, now }) => markFailed(tx, now, failedId, error)).then(() => true, () => false);
-        return report({ name, outcome: marked ? "failed" : "pending", error }, started);
-      }
       return report({ name, outcome: "pending", error }, started);
     }
     if (claimed === undefined || name === undefined) return undefined;
@@ -166,19 +159,19 @@ export function createWorker({
     return report({ name, ...(await runAction(claimed)) }, started);
   }
 
-  // The job's writes run inside a savepoint, so an app error undoes them and leaves the claim and its lock in place.
-  // The success mark is inside too: after a failure the handler swallowed, it answers with that failure's code (the
-  // runner's doing), so a hidden serialization failure retries and a job's own error fails the job.
+  // The job runs behind the runner's fence, so a failure, a refused network call included, undoes its writes and
+  // leaves the claim and its lock in place. The success mark is inside too: after a failure the handler swallowed, it
+  // answers with that failure's code (the runner's doing), so a hidden serialization failure retries and a job's own
+  // error fails the job.
   async function runMutation(ctx: MutationContext, id: string, job: MutationJob, stored: string): Promise<Claimed> {
-    await ctx.tx.execute(sql`savepoint job`);
     try {
-      await job.handler(ctx, job.args.parse(decodeStored(stored)));
-      await ctx.tx.update(jobs).set({ state: "success", completedAt: ctx.now }).where(eq(jobs._id, id));
+      await fence(async () => {
+        await job.handler(ctx, job.args.parse(decodeStored(stored)));
+        await ctx.tx.update(jobs).set({ state: "success", completedAt: ctx.now }).where(eq(jobs._id, id));
+      });
       return { outcome: "success" };
     } catch (error) {
       if (databaseTrouble(error)) throw error; // the runner retries it, or the job stays pending
-      if (isNetworkInOperation(error)) throw error; // nothing more runs in this transaction; runNext marks it failed
-      await ctx.tx.execute(sql`rollback to savepoint job`);
       await markFailed(ctx.tx, ctx.now, id, error);
       return { outcome: "failed", error };
     }

@@ -170,44 +170,24 @@ describe("mutation jobs", () => {
     expect(await jobRows()).toEqual([{ name: "analytics.flags.launder", state: "failed", error: expect.stringContaining("never reaches the network") }]);
   });
 
-  test("a refused job whose failure can't be marked stays pending for a later poll, not rerun at once", async () => {
-    let runs = 0;
-    const call = mutationJob("analytics.flags.unmarked", z.object({}), async () => {
-      runs += 1;
-      await fetch("http://127.0.0.1:9/never");
-    });
-    // One slot: a second would find the job pending again once the first rolls back, and run it without a refill.
-    const { worker, operations, enqueue } = setUp([call], { concurrency: 1 });
-    await enqueue(call, {});
-    const unmarkable = around(operations, {
-      before: (name) => {
-        if (name === "jobs.fail") throw Object.assign(new Error("connection reset while marking"), { code: "ECONNRESET" });
-      },
-    });
-
-    // One tick and no poll for an hour: a slot that counts the unmarked failure as progress starts the job again.
-    const copy = worker({ operations: unmarkable });
-    await copy.tick();
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    await copy.stop(1_000);
-
-    expect(runs, "one run, then it waits for the next poll").toBe(1);
-    expect(await jobRows()).toEqual([{ name: "analytics.flags.unmarked", state: "pending", error: null }]);
-  });
-
-  test("an app error is marked failed before the job's claim ends: a copy that looks the moment it ends never runs it", async () => {
+  test.each([
+    { failure: "an app error", throws: async () => Promise.reject(new TypeError("no such pack")), error: "TypeError: no such pack" },
+    { failure: "a refused network call", throws: () => fetch("http://127.0.0.1:9/never"), error: expect.stringContaining("never reaches the network") },
+  ])("$failure is marked failed before the job's claim ends: a copy that looks the moment it ends never runs it", async ({ throws, error }) => {
     let runs = 0;
     const open = mutationJob("album.packs.open", z.object({}), async (ctx) => {
       runs += 1;
       await effect(ctx, "pack");
-      throw new TypeError("no such pack");
+      await throws();
     });
     const { worker, operations, enqueue } = setUp([open]);
     await enqueue(open, {});
     const other = worker();
     let looked = false;
-    // Once the first copy's handler has run, its next step waits until the other copy has looked for work.
+    // Once the first copy's handler has run, its next step waits until the other copy has looked for work. One slot,
+    // so the copy that looks is the other one.
     const first = worker({
+      concurrency: 1,
       operations: around(operations, {
         after: async () => {
           if (runs === 0 || looked) return;
@@ -221,7 +201,8 @@ describe("mutation jobs", () => {
 
     expect(looked).toBe(true);
     expect(runs).toBe(1);
-    expect(await jobRows()).toEqual([{ name: "album.packs.open", state: "failed", error: "TypeError: no such pack" }]);
+    expect(await effects("pack"), "its write rolled back").toBe(0);
+    expect(await jobRows()).toEqual([{ name: "album.packs.open", state: "failed", error }]);
   });
 
   test("the database's trouble is not the job's: past the runner's retries it stays pending, runs later, and never fails for it", async () => {
