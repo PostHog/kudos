@@ -1,11 +1,14 @@
 import type { Browser } from "@e2e-dev/web";
 import { expect, type App, type Screen } from "e2e";
 import { productionFlags } from "./fakes/productionFlags.ts";
+import { signInPath } from "./local/edge.ts";
 import type { Target } from "./target.ts";
 
 // The website as a member uses it, in a browser. Signing in is the one step each target does its own way: today's app
 // signs in with Slack, so the fakes act as Slack's OpenID issuer and send the browser straight back as the member a
-// journey names. A target that signs in another way adds its mechanism here and names it in its target file.
+// journey names. The rewrite's edge signs members in before the app sees them, so its stand-in (local/edge.ts) takes
+// the member's email and sends the browser back. A target that signs in another way adds its mechanism here and names
+// it in its target file.
 
 export type SignInAs = { workspace?: string };
 
@@ -18,7 +21,19 @@ const signIns: Record<Target["signIn"], SignIn> = {
     // Slack's return lands on the website with a one-time code, which the website redeems and drops from the address.
     await website.backOnTheWebsite((url) => !url.searchParams.has("code"));
   },
+  // The workspace means nothing to the edge: a member of another one is an email the app finds in no workspace.
+  "edge-header": async (website, member) => {
+    const here = new URL(await website.browser.url());
+    await website.app.open(`${signInPath}?${new URLSearchParams({ email: memberEmail(member), to: here.pathname + here.search })}`);
+    await website.backOnTheWebsite((url) => url.pathname !== signInPath);
+  },
 };
+
+// The email a member signs in to the edge with. Once the rewrite serves the website (S15), it looks the email up in
+// Slack, and the Slack fake learns it with each member.
+export function memberEmail(member: string) {
+  return `${member.toLowerCase()}@example.com`;
+}
 
 export class Website {
   readonly target: Target;
