@@ -51,6 +51,10 @@ function control({ slack, postHog, responses }: State, url: URL, body: string) {
       slack.answeringIn(method, channel, rateLimitedFor(seconds));
       return Response.json({ ok: true });
     }
+    case "/_control/call-times":
+      return Response.json(slack.timesOf(query("method"), (args) => args.channel === query("channel")));
+    case "/_control/joined":
+      return Response.json(slack.hasJoined(query("channel")));
     case "/_control/responses":
       return Response.json(responses.get(query("reply")) ?? []);
     case "/_control/flags":

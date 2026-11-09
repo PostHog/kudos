@@ -74,9 +74,8 @@ test("when Slack rate-limits the mark, it lands once Slack lets it", async ({ sl
   const message = await slack.post(giver, [mention(recipient), text(" "), emoji("taco")], { channel });
 
   await expect.poll(() => slack.reactionsOn(message)).toEqual(["taco"]);
-  const marks = (await slack.callsTo("reactions.add")).filter((call) => call.timestamp === message.ts);
-  expect(marks).toEqual([
-    { channel, timestamp: message.ts, name: "taco" },
-    { channel, timestamp: message.ts, name: "taco" },
-  ]);
+  // Slack asked for a second's wait, and the mark that landed came no sooner.
+  const [refused, ...after] = await slack.callTimes("reactions.add", channel);
+  expect(after.length).toBeGreaterThan(0);
+  expect(Math.min(...after) - refused!).toBeGreaterThanOrEqual(1_000);
 });

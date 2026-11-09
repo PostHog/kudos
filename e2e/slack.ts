@@ -18,7 +18,7 @@ export type ChannelType = "channel" | "group" | "im" | "mpim";
 
 export type PostOptions = { channel?: string; channelType?: ChannelType; threadTs?: string; fromBot?: boolean };
 
-export type Posted = { channel: string; ts: string; channelType: ChannelType };
+export type Posted = { channel: string; ts: string; channelType: ChannelType; user: string; elements: RichElement[]; threadTs?: string };
 
 export type MemberOptions = { is_bot?: boolean; deleted?: boolean };
 
@@ -46,6 +46,13 @@ export class Slack {
     return { id, name };
   }
 
+  // Slack's direct message with the app: a D… conversation the app can't join, whose name commands report as below.
+  async directMessage() {
+    const id = uniqueId("D");
+    await this.control("channels", { id, name: id, kind: "private", joined: false });
+    return { id, name: "directmessage" };
+  }
+
   async post(user: string, elements: RichElement[], { channel = "C_E2E_GENERAL", channelType = "channel", threadTs, fromBot = false }: PostOptions = {}): Promise<Posted> {
     const ts = uniqueTs();
     await this.sendEvent({
@@ -59,12 +66,14 @@ export class Slack {
       ...(fromBot && { bot_id: "B_E2E" }),
       ...content(elements),
     });
-    return { channel, ts, channelType };
+    return { channel, ts, channelType, user, elements, ...(threadTs !== undefined && { threadTs }) };
   }
 
   // Slack sends an edit as a message_changed event that carries the whole new message and when it was edited.
-  async edit(user: string, posted: Posted, elements: RichElement[]) {
+  async edit(posted: Posted, elements: RichElement[]): Promise<Posted> {
     const editedTs = uniqueTs();
+    const { user, ts, threadTs } = posted;
+    const message = { type: "message", user, ts, team: this.target.workspace, ...(threadTs !== undefined && { thread_ts: threadTs }) };
     await this.sendEvent({
       type: "message",
       subtype: "message_changed",
@@ -72,9 +81,10 @@ export class Slack {
       channel: posted.channel,
       channel_type: posted.channelType,
       ts: editedTs,
-      message: { type: "message", user, ts: posted.ts, team: this.target.workspace, edited: { user, ts: editedTs }, ...content(elements) },
-      previous_message: { type: "message", user, ts: posted.ts },
+      message: { ...message, edited: { user, ts: editedTs }, ...content(elements) },
+      previous_message: { ...message, ...content(posted.elements) },
     });
+    return { ...posted, elements };
   }
 
   // Slack delivers an event again when it saw no answer in time: the same envelope, event id and all.
@@ -83,7 +93,8 @@ export class Slack {
     await this.deliver(this.lastEnvelope);
   }
 
-  // Runs a slash command; the app answers on the command's response URL, which the fakes record under `reply`.
+  // Runs a slash command. Slack shows the app's answer from the request's own response or from posts to the
+  // command's response URL; `responsesTo(reply)` reads both.
   async command(user: string, channel: { id: string; name: string }, text = "") {
     const reply = uniqueId("R");
     const form = new URLSearchParams({
@@ -95,14 +106,27 @@ export class Slack {
       text,
       response_url: `${this.target.fakesUrl}/responses/${reply}`,
       trigger_id: uniqueId("T"),
+      api_app_id: this.target.appId,
     });
     const response = await this.signed("/slack/commands", form.toString(), "application/x-www-form-urlencoded");
     if (response.status !== 200) throw new Error(`the app answered the command with ${response.status}`);
+    const body = await response.text();
+    if (body !== "") this.immediateResponses.set(reply, JSON.parse(body) as Record<string, unknown>);
     return reply;
   }
 
-  responsesTo(reply: string) {
-    return this.read<Record<string, unknown>[]>("responses", { reply });
+  async responsesTo(reply: string) {
+    const immediate = this.immediateResponses.get(reply);
+    return [...(immediate === undefined ? [] : [immediate]), ...(await this.read<Record<string, unknown>[]>("responses", { reply }))];
+  }
+
+  hasJoined(channel: string) {
+    return this.read<boolean>("joined", { channel });
+  }
+
+  // When Slack received each call of `method` in `channel`, in milliseconds.
+  callTimes(method: string, channel: string) {
+    return this.read<number[]>("call-times", { method, channel });
   }
 
   // Slack answers the next call of `method` in `channel` with a 429 that asks to wait `seconds`.
@@ -123,6 +147,7 @@ export class Slack {
   }
 
   private lastEnvelope: string | undefined;
+  private readonly immediateResponses = new Map<string, Record<string, unknown>>();
 
   private async sendEvent(event: Record<string, unknown>) {
     this.lastEnvelope = JSON.stringify({ type: "event_callback", team_id: this.target.workspace, event_id: uniqueId("Ev"), event_time: Math.floor(Date.now() / 1000), event });

@@ -21,6 +21,7 @@ A target file is an env file that names the app and its fakes:
 | `KUDOS_APP_URL` | The app's base URL, where Slack's requests and the website go. |
 | `KUDOS_SLACK_SIGNING_SECRET` | The signing secret the app checks Slack's requests with. |
 | `KUDOS_SLACK_WORKSPACE` | The Slack workspace id the app serves. |
+| `KUDOS_SLACK_APP_ID` | The Slack app id that Slack's requests to the app carry. |
 | `KUDOS_FAKES_URL` | The fakes the app calls as Slack's Web API (`/api`) and as PostHog. |
 
 `pnpm e2e` writes the local one itself. Another target, such as the rewrite, writes its own file outside the repository and runs `E2E_TARGET=<file> pnpm exec e2e run --config e2e/e2e.config.ts`; its app must reach the fakes.

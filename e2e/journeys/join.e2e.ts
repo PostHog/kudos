@@ -9,6 +9,7 @@ test("/hedgehug in a channel joins it, and says so when it is already in", async
 
   const first = await slack.command(member, channel);
   await expect.poll(() => slack.responsesTo(first)).toEqual([{ response_type: "ephemeral", text: joined }]);
+  expect(await slack.hasJoined(channel.id)).toBe(true);
   const again = await slack.command(member, channel);
 
   await expect.poll(() => slack.responsesTo(again)).toEqual([{ response_type: "ephemeral", text: alreadyIn }]);
@@ -32,15 +33,13 @@ test("/hedgehug stays out of shared and customer channels", async ({ slack }) =>
   const replies = [await slack.command(member, shared), await slack.command(member, customer)];
 
   for (const reply of replies) await expect.poll(() => slack.responsesTo(reply)).toEqual([{ response_type: "ephemeral", text: staysOut }]);
-  const joins = (await slack.callsTo("conversations.join")).filter((call) => call.channel === shared.id || call.channel === customer.id);
-  expect(joins).toEqual([]);
+  expect([await slack.hasJoined(shared.id), await slack.hasJoined(customer.id)]).toEqual([false, false]);
 });
 
 test("/hedgehug in a direct message says to run it in a channel", async ({ slack }) => {
-  const member = await slack.member();
-  const { id } = await slack.channel("private");
+  const [member, direct] = [await slack.member(), await slack.directMessage()];
 
-  const reply = await slack.command(member, { id, name: "directmessage" });
+  const reply = await slack.command(member, direct);
 
   await expect.poll(() => slack.responsesTo(reply)).toEqual([
     { response_type: "ephemeral", text: "I only count kudos in channels. Run `/hedgehug` in the channel you want me in." },

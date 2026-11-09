@@ -9,6 +9,7 @@ import { startFakes } from "../fakes/server.ts";
 import { targetLines, type Target } from "../target.ts";
 
 const workspace = "T1";
+const appId = "A_KUDOS";
 const cleanups: (() => Promise<unknown>)[] = [];
 let runner: ChildProcess | undefined;
 let interrupted: NodeJS.Signals | undefined;
@@ -35,7 +36,7 @@ try {
       SLACK_API_URL: `${fakes.url}/api`,
       SLACK_SIGNING_SECRET: signingSecret,
       SLACK_BOT_TOKEN: "xoxb-e2e",
-      SLACK_APP_ID: "A_KUDOS",
+      SLACK_APP_ID: appId,
       SLACK_WORKSPACE_ID: workspace,
       POSTHOG_HOST: fakes.url,
       POSTHOG_PROJECT_TOKEN: projectToken,
@@ -48,7 +49,7 @@ try {
   const directory = await mkdtemp(join(tmpdir(), "kudos-e2e-target-"));
   cleanups.push(() => rm(directory, { recursive: true, force: true }));
   const targetFile = join(directory, "local.env");
-  const target: Target = { appUrl: backend.site, signingSecret, workspace, fakesUrl: fakes.url };
+  const target: Target = { appUrl: backend.site, signingSecret, workspace, appId, fakesUrl: fakes.url };
   await writeFile(targetFile, targetLines(target), { mode: 0o600 });
 
   if (interrupted === undefined) exitCode = await runJourneys(targetFile);
