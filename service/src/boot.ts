@@ -61,12 +61,13 @@ export async function boot({
   const pool = databaseUrl ? createPool(databaseUrl, { connectTimeoutMs }) : undefined;
   pool?.on("error", (error) => log.error("database connection lost", errorFields(error)));
   const operations = pool ? createOperations({ pool, clock, log }) : undefined;
-  const worker = operations ? createWorker({ operations, log, registry, ...(pollMs ? { pollMs } : {}) }) : undefined;
+  const held = () => false; // the load's hold: S18's load control (PostHog/kudos#903) answers this
+  const worker = operations ? createWorker({ operations, log, registry, held, ...(pollMs ? { pollMs } : {}) }) : undefined;
 
   const testSecret = env.HEDGEHUG_TEST_SECRET || undefined;
   const app = createApp({
     commit: readCommit(env),
-    readiness: { migrations: () => migrations },
+    readiness: { migrations: () => migrations, held },
     off,
     log,
     clock,

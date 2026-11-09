@@ -315,6 +315,35 @@ describe("crons", () => {
   });
 });
 
+describe("the load's hold", () => {
+  test("while the load holds, no cron is written or fired and no job starts; once it lifts, both run", async () => {
+    let holding = true;
+    let fired = 0;
+    const tick = mutationJob("website.clock.tick", z.object({}), async (ctx) => {
+      fired += 1;
+      await effect(ctx, "tick");
+    });
+    const { worker, clock, enqueue } = setUp([tick], { held: () => holding });
+    const copy = worker();
+    await enqueue(tick, {});
+
+    await copy.start();
+    await copy.tick();
+    expect(await copy.settle(200), "nothing runs while held").toEqual({ ran: [], done: false });
+    expect(await db.select().from(crons), "no cron row is written while held").toEqual([]);
+
+    holding = false;
+    await copy.tick();
+    expect((await copy.settle(5_000)).ran).toEqual(["website.clock.tick"]);
+    expect(await db.select().from(crons)).toHaveLength(15);
+    clock.advance(15 * 60_000);
+    await copy.tick();
+    await copy.settle(5_000);
+    expect(fired, "the queued job, then the cron").toBe(2);
+    await copy.stop(1_000);
+  });
+});
+
 describe("stopping", () => {
   test("takes no new job and lets running ones finish within the grace", async () => {
     const hold = gate();

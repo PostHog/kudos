@@ -26,6 +26,8 @@ export interface WorkerOptions {
   actionDeadlineMs?: number;
   /** How often the sweep looks for action jobs past their deadline, in real milliseconds. */
   sweepMs?: number;
+  /** The load's hold (S18): while it holds, no cron is written or fired and no job starts. */
+  held?: () => boolean;
 }
 
 /** What `settle` did: the jobs that finished meanwhile, by name, and whether it got there within its budget. */
@@ -35,9 +37,9 @@ export interface Settled {
 }
 
 export interface Worker {
-  /** Writes the crons' first runs, then ticks every `pollMs`. */
+  /** Writes the crons' first runs, unless the load holds, then ticks every `pollMs`. */
   start(): Promise<void>;
-  /** Fires the due crons and starts due jobs, once. */
+  /** Fires the due crons and starts due jobs, once; nothing while the load holds. */
   tick(): Promise<void>;
   /** Runs every job due by the app's clock until none is due or running; jobs they schedule as due run too. */
   settle(budgetMs: number): Promise<Settled>;
@@ -51,13 +53,23 @@ export interface Worker {
 
 type Outcome = "success" | "failed" | "skipped";
 
-export function createWorker({ operations, log, registry, concurrency = 2, pollMs = 500, actionDeadlineMs = 600_000, sweepMs = 60_000 }: WorkerOptions): Worker {
+export function createWorker({
+  operations,
+  log,
+  registry,
+  concurrency = 2,
+  pollMs = 500,
+  actionDeadlineMs = 600_000,
+  sweepMs = 60_000,
+  held = () => false,
+}: WorkerOptions): Worker {
   const running = new Map<string, Promise<void>>();
   const finished = new Set<(name: string) => void>();
   const timers: NodeJS.Timeout[] = [];
   let stopping = false;
   let filling: Promise<void> | undefined;
   let fillAgain = false;
+  let seeded = false;
   let ticking: Promise<void> | undefined;
   let tickAgain = false;
 
@@ -71,7 +83,7 @@ export function createWorker({ operations, log, registry, concurrency = 2, pollM
       do {
         fillAgain = false;
         const free = concurrency - running.size;
-        if (stopping || free <= 0) return;
+        if (stopping || held() || free <= 0) return;
         const due = await operations.query("jobs.due", ({ tx, now }) =>
           tx
             .select({ _id: jobs._id, name: jobs.name })
@@ -205,7 +217,8 @@ export function createWorker({ operations, log, registry, concurrency = 2, pollM
     ticking = (async () => {
       do {
         tickAgain = false;
-        if (stopping) return;
+        if (stopping || held()) return;
+        if (!seeded) await seedCrons();
         await fireDueCrons().catch(() => {}); // logged by the runner; the next tick tries again
         await fill();
       } while (tickAgain);
@@ -248,12 +261,18 @@ export function createWorker({ operations, log, registry, concurrency = 2, pollM
     }
   }
 
+  // Each cron's first run, once per copy; a row another copy wrote stays as it is.
+  async function seedCrons(): Promise<void> {
+    await operations.mutation("crons.seed", async ({ tx, now }) => {
+      const rows = cronIds.filter((id) => !retiredCrons.has(id)).map((id) => ({ id, nextRun: nextRun(cronSchedules[id], now) }));
+      await tx.insert(crons).values(rows).onConflictDoNothing();
+    });
+    seeded = true;
+  }
+
   return {
     async start() {
-      await operations.mutation("crons.seed", async ({ tx, now }) => {
-        const rows = cronIds.filter((id) => !retiredCrons.has(id)).map((id) => ({ id, nextRun: nextRun(cronSchedules[id], now) }));
-        await tx.insert(crons).values(rows).onConflictDoNothing();
-      });
+      if (!held()) await seedCrons();
       const waiting = cronIds.filter((id) => !retiredCrons.has(id) && !registry.has(id));
       if (waiting.length > 0) log.info("crons with no job yet", { crons: waiting.join(" ") });
       timers.push(setInterval(() => void tick(), pollMs).unref());

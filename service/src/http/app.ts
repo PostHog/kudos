@@ -13,6 +13,8 @@ export type Migrations = "no-database" | "pending" | "done";
 
 export interface Readiness {
   migrations(): Migrations;
+  /** The load's hold (S18): every route but `/healthz` answers 503, Slack's too, even with `HEDGEHUG_OFF`. */
+  held?(): boolean;
 }
 
 export interface AppOptions {
@@ -53,6 +55,7 @@ export function createApp({ commit, readiness, off, log, clock, testSecret, work
   app.get("/healthz", (c) => c.json({ commit, migrations: readiness.migrations(), off }));
 
   app.use(async (c, next) => {
+    if (readiness.held?.()) return unavailable();
     if (off) return slackPaths.test(c.req.path) ? c.body(null, 200) : unavailable();
     if (readiness.migrations() !== "done") return unavailable();
     return next();
