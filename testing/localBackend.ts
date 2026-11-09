@@ -1,7 +1,7 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -30,10 +30,12 @@ export async function startLocalBackend({ instanceName, variables, signal }: Loc
     ...["--convex-origin", cloud, "--convex-site", site],
     ...["--local-storage", join(directory, "storage"), "--disable-beacon"],
     join(directory, "db.sqlite3"),
-  ], { stdio: "ignore" });
+  ], { stdio: "ignore", detached: true });
   const stop = async () => {
     const exited = new Promise((resolve) => backend.once("exit", resolve));
-    if (backend.exitCode === null && backend.kill()) await exited;
+    const running = backend.exitCode === null;
+    killGroup(backend);
+    if (running) await exited;
     await rm(directory, { recursive: true, force: true });
   };
   try {
@@ -71,14 +73,21 @@ async function backendBinary(signal?: AbortSignal) {
   const binary = join(directory, "convex-local-backend");
   if (existsSync(binary)) return binary;
   await mkdir(directory, { recursive: true });
-  const archive = join(directory, "backend.zip");
-  const download = await fetch(`https://github.com/get-convex/convex-backend/releases/download/${backendVersion}/convex-local-backend-${targetTriple()}.zip`, { signal });
-  if (!download.ok) throw new Error(`the local backend ${backendVersion} didn't download: ${download.status}`);
-  await writeFile(archive, Buffer.from(await download.arrayBuffer()));
-  await run("unzip", ["-o", archive, "-d", directory], { signal });
-  await rm(archive);
-  await chmod(binary, 0o755);
-  return binary;
+  // Download and extract beside the cache, then rename the finished binary in, so an interrupted start never
+  // leaves a partial binary that a later run would take for the real one.
+  const staging = await mkdtemp(join(directory, ".staging-"));
+  try {
+    const archive = join(staging, "backend.zip");
+    const download = await fetch(`https://github.com/get-convex/convex-backend/releases/download/${backendVersion}/convex-local-backend-${targetTriple()}.zip`, { signal });
+    if (!download.ok) throw new Error(`the local backend ${backendVersion} didn't download: ${download.status}`);
+    await writeFile(archive, Buffer.from(await download.arrayBuffer()));
+    await run("unzip", ["-o", archive, "-d", staging], { signal });
+    await chmod(join(staging, "convex-local-backend"), 0o755);
+    await rename(join(staging, "convex-local-backend"), binary);
+    return binary;
+  } finally {
+    await rm(staging, { recursive: true, force: true });
+  }
 }
 
 function targetTriple() {
@@ -91,8 +100,33 @@ async function adminKey(binary: string, instanceName: string, instanceSecret: st
   return stdout.trim().split("\n").at(-1)!;
 }
 
-async function convex(args: string[], signal?: AbortSignal) {
-  await run("npx", ["--no", "--", "convex", ...args], { maxBuffer: 16 * 1024 * 1024, signal });
+// The CLI runs under npx in a process group of its own, so stopping it stops the whole tree, not just npx.
+function convex(args: string[], signal?: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    signal?.throwIfAborted();
+    const cli = spawn("npx", ["--no", "--", "convex", ...args], { stdio: ["ignore", "ignore", "pipe"], detached: true });
+    let errors = "";
+    cli.stderr.on("data", (chunk) => (errors = (errors + String(chunk)).slice(-16_384)));
+    const abort = () => killGroup(cli);
+    signal?.addEventListener("abort", abort, { once: true });
+    cli.once("error", reject);
+    cli.once("exit", (code, killedBy) => {
+      signal?.removeEventListener("abort", abort);
+      if (signal?.aborted) reject(signal.reason);
+      else if (code === 0) resolve();
+      else reject(new Error(`convex ${args[0]} exited with ${code ?? killedBy}: ${errors}`));
+    });
+  });
+}
+
+// The backend runs its actions in node executors of its own, so it and the CLI are stopped by process group.
+function killGroup(child: ChildProcess) {
+  if (child.pid === undefined) return;
+  try {
+    process.kill(-child.pid, "SIGTERM");
+  } catch {
+    // the group has already exited
+  }
 }
 
 export function freePort() {
