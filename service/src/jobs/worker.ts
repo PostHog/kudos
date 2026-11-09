@@ -156,18 +156,20 @@ export function createWorker({
   }
 
   // The job's writes run inside a savepoint, so an app error undoes them and leaves the claim and its lock in place.
+  // The success mark is inside too: after a failure the handler swallowed, it answers with that failure's code (the
+  // runner's doing), so a hidden serialization failure retries and a job's own error fails the job.
   async function runMutation(ctx: MutationContext, id: string, job: MutationJob, stored: string): Promise<Claimed> {
     await ctx.tx.execute(sql`savepoint job`);
     try {
       await job.handler(ctx, job.args.parse(decodeStored(stored)));
+      await ctx.tx.update(jobs).set({ state: "success", completedAt: ctx.now }).where(eq(jobs._id, id));
+      return { outcome: "success" };
     } catch (error) {
       if (databaseTrouble(error)) throw error; // the runner retries it, or the job stays pending
       await ctx.tx.execute(sql`rollback to savepoint job`);
       await markFailed(ctx.tx, ctx.now, id, error);
       return { outcome: "failed", error };
     }
-    await ctx.tx.update(jobs).set({ state: "success", completedAt: ctx.now }).where(eq(jobs._id, id));
-    return { outcome: "success" };
   }
 
   async function runAction({ action, id, args }: Extract<Claimed, { action: ActionJob }>): Promise<Omit<Ran, "name">> {

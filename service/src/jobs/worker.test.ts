@@ -202,6 +202,37 @@ describe("mutation jobs", () => {
     expect(await effects("pack"), "its first write rolled back too").toBe(0);
   });
 
+  test("a job that swallows a database error of its own and goes on fails, and the next job runs", async () => {
+    const swallowing = mutationJob("album.packs.open", z.object({}), async ({ tx }) => {
+      const row = { source: "test", table: "pack", _id: "same", _creationTime: 1, document: "{}" };
+      await tx.insert(archive).values(row);
+      await tx.insert(archive).values(row).catch(() => {}); // hides the duplicate key; Postgres aborted all the same
+    });
+    const next = mutationJob("website.clock.tick", z.object({}), (ctx) => effect(ctx, "next"));
+    const { worker, enqueue } = setUp([swallowing, next], { concurrency: 1 });
+    await enqueue(swallowing, {});
+    await enqueue(next, {});
+
+    expect(await worker().settle(5_000)).toEqual({ ran: ["album.packs.open", "website.clock.tick"], done: true });
+    expect((await jobRows()).map((row) => row.state)).toEqual(["failed", "success"]);
+    expect(await effects("pack")).toBe(0);
+  });
+
+  test("a job that swallows a serialization failure and goes on runs again", async () => {
+    let calls = 0;
+    const give = mutationJob("engine.give.award", z.object({}), async (ctx) => {
+      calls += 1;
+      if (calls === 1) await ctx.tx.execute(sql`do $$ begin raise exception using errcode = '40001'; end $$`).catch(() => {});
+      await effect(ctx, "give");
+    });
+    const { worker, enqueue } = setUp([give]);
+    await enqueue(give, {});
+
+    expect(await worker().settle(5_000)).toEqual({ ran: ["engine.give.award"], done: true });
+    expect(calls).toBe(2);
+    expect(await effects("give")).toBe(1);
+  });
+
   test("jobs another copy holds never block the next one", async () => {
     let holding = 0;
     const bothHeld = gate();
