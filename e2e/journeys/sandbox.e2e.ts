@@ -1,3 +1,4 @@
+import { isEdgeSignIn } from "../edgeSignIn.ts";
 import { targetOf } from "../target.ts";
 import { expect, test } from "../test.ts";
 
@@ -23,8 +24,8 @@ test("a visitor who hasn't signed in is sent to the edge's sign-in from the webs
       const answer = await fetch(new URL(path, appUrl), { headers, redirect: "manual" });
 
       expect([301, 302, 303, 307, 308], `${path} with ${claim}`).toContain(answer.status);
-      const to = new URL(answer.headers.get("location") ?? "", appUrl).href;
-      expect(to.startsWith(edgeSignInUrl), `${path} with ${claim} is sent to ${to}, not to ${edgeSignInUrl}`).toBe(true);
+      const to = answer.headers.get("location") ?? "";
+      expect(isEdgeSignIn(to, appUrl, edgeSignInUrl), `${path} with ${claim} is sent to ${to}, not to ${edgeSignInUrl}`).toBe(true);
     }
   }
 });

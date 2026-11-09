@@ -288,6 +288,7 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/website/xpMoment.test.ts | S17 | | |
 | convex/welcome/welcome.test.ts | S5 | | |
 | convex/workspace/workspaceSettings.test.ts | S3 | | |
+| e2e/edgeSignIn.test.ts | S20 | | |
 | e2e/fakes/server.test.ts | S20 | | |
 | e2e/local/edge.test.ts | S20 | | |
 | e2e/local/rewrite.test.ts | S20 | | |
