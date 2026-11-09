@@ -17,17 +17,29 @@ export function jsonLog(write: (line: string) => void = (line) => process.stdout
   };
 }
 
+// pg's own connection errors carry no code; these exact messages, and only these, are named by one of ours.
+const knownMessages = new Map([
+  ["timeout exceeded when trying to connect", "DB_CONNECT_TIMEOUT"],
+  ["Connection terminated due to connection timeout", "DB_CONNECT_TIMEOUT"],
+  ["timeout expired", "DB_CONNECT_TIMEOUT"],
+  ["Connection terminated unexpectedly", "DB_CONNECTION_TERMINATED"],
+  ["Query read timeout", "DB_QUERY_TIMEOUT"],
+]);
+
 /**
- * What a log line may say about an error: its class and its code (a Postgres SQLSTATE such as `42P01`, or a system
- * code such as `ECONNREFUSED`), from it or the errors it wraps. Never its message: Drizzle's and pg's messages quote
- * the failing SQL and its parameters.
+ * What a log line may say about an error: its class and its code (a Postgres SQLSTATE such as `42P01`, a system code
+ * such as `ECONNREFUSED`, or ours for one of pg's known connection errors), from it or the errors it wraps. Never its
+ * message: Drizzle's and pg's messages quote the failing SQL and its parameters.
  */
 export function errorFields(error: unknown): { error: string; code?: string } {
   const name = error instanceof Error ? error.name : "non-Error thrown";
   let code: string | undefined;
+  let known: string | undefined;
   for (let cause = error, depth = 0; cause instanceof Error && depth < 5 && !code; cause = cause.cause, depth++) {
     const candidate = (cause as { code?: unknown }).code;
     if (typeof candidate === "string" && /^[A-Z0-9_]{1,40}$/.test(candidate)) code = candidate;
+    known ??= knownMessages.get(cause.message);
   }
+  code ??= known;
   return code ? { error: name, code } : { error: name };
 }
