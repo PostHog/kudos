@@ -6,7 +6,7 @@ import { useTestDatabase, withSearchPath } from "../testing/database.ts";
 import { createClock } from "./clock.ts";
 import { createPool } from "./db/pool.ts";
 import type { Log, LogFields } from "./log.ts";
-import { createOperations, type Operations } from "./operations.ts";
+import { createOperations, type Database, type Operations } from "./operations.ts";
 
 // A table of the test's own, in a schema of its own, so the service's schema stays exactly the migrations'.
 const counters = pgTable("counters", { id: text().primaryKey(), n: integer().notNull(), at: doublePrecision() });
@@ -20,6 +20,14 @@ beforeAll(async () => {
   await admin.connect();
   await admin.query(`drop schema if exists "${schema}" cascade; create schema "${schema}"`);
   await admin.query(`create table "${schema}".counters (id text primary key, n integer not null, at double precision)`);
+  // A row of doomed ends its own session when its transaction commits, so COMMIT fails with the connection gone.
+  await admin.query(`create table "${schema}".doomed (id text primary key)`);
+  await admin.query(
+    `create function "${schema}".end_session() returns trigger language plpgsql as $$ begin perform pg_terminate_backend(pg_backend_pid()); return null; end $$`,
+  );
+  await admin.query(
+    `create constraint trigger doomed_at_commit after insert on "${schema}".doomed deferrable initially deferred for each row execute function "${schema}".end_session()`,
+  );
   await admin.end();
   pool = createPool(withSearchPath(inject("databaseUrl"), schema), { max: 6 });
 });
@@ -44,6 +52,14 @@ function setUp(options: { maxAttempts?: number; pool?: Pick<pg.Pool, "connect"> 
   };
   const operations = createOperations({ pool, clock, log, retryDelayMs: () => 1, ...options });
   return { operations, clock, lines, tick: (ms: number) => (real += ms) };
+}
+
+/** Whether the error, or one it wraps (Drizzle wraps a failed query), is named `name`. */
+function causedBy(name: string): (error: unknown) => boolean {
+  return (error) => {
+    for (let cause = error; cause instanceof Error; cause = cause.cause) if (cause.name === name) return true;
+    return false;
+  };
 }
 
 async function setting(operations: Operations, name: string): Promise<string> {
@@ -171,6 +187,66 @@ describe("the transaction", () => {
     }
   });
 
+  test("drops a connection whose session ended at COMMIT, so the next operation gets a working one", async () => {
+    // One connection, so the dead one handed back would be the next operation's.
+    const single = createPool(withSearchPath(inject("databaseUrl"), schema), { max: 1, connectTimeoutMs: 2_000 });
+    try {
+      const { operations } = setUp({ pool: single });
+
+      await expect(operations.mutation("doomed", ({ tx }) => tx.execute(sql`insert into doomed values ('x')`))).rejects.toMatchObject({ code: "57P01" });
+      const next = await operations.mutation("next", async ({ tx }) => (await tx.execute<{ one: number }>(sql`select 1 as one`)).rows);
+      expect(next, "the next operation runs").toEqual([{ one: 1 }]);
+    } finally {
+      await single.end();
+    }
+  });
+
+  test("a handler can't end or start the runner's transaction, through Drizzle's own transaction or a raw statement", async () => {
+    const { operations } = setUp();
+    const escapes: Array<(tx: Database) => Promise<unknown>> = [
+      (tx) => tx._.session.transaction((inner) => inner.insert(counters).values({ id: "inner", n: 1 })),
+      (tx) => tx.execute(sql`commit`),
+      (tx) => tx.execute(sql`  END`),
+      (tx) => tx.execute(sql`rollback`),
+      (tx) => (tx as unknown as { $client: pg.ClientBase }).$client.query("start transaction"),
+    ];
+
+    for (const escape of escapes) {
+      const run = operations.mutation("escape", async ({ tx }) => {
+        await tx.insert(counters).values({ id: "outer", n: 1 });
+        await escape(tx as unknown as Database);
+      });
+      await expect(run).rejects.toSatisfy(causedBy("TransactionOwnedError"));
+    }
+    const savepoint = await operations.mutation("savepoint", async ({ tx }) => {
+      await tx.execute(sql`savepoint mine`);
+      await tx.insert(counters).values({ id: "undone", n: 1 });
+      await tx.execute(sql`rollback to savepoint mine`);
+      return "kept";
+    });
+    expect(savepoint, "a savepoint stays the handler's").toBe("kept");
+    expect((await pool.query("select * from counters")).rows, "nothing it wrote stays").toEqual([]);
+  });
+
+  test("a client error of pg's own before a swallowed serialization failure still retries it", async () => {
+    const { operations } = setUp();
+    let attempts = 0;
+
+    const result = await operations.mutation("retried", async ({ tx }) => {
+      attempts += 1;
+      const client = (tx as unknown as { $client: pg.ClientBase }).$client;
+      const name = `twice-${attempts}-${Math.random()}`;
+      await client.query({ name, text: "select 1" });
+      // pg refuses a second text under one name before sending it; the transaction is unharmed
+      await client.query({ name, text: "select 2" }).catch(() => {});
+      if (attempts === 1) await tx.execute(sql`do $$ begin raise exception using errcode = '40001'; end $$`).catch(() => {});
+      return "done";
+    });
+
+    expect(result).toBe("done");
+    expect(attempts).toBe(2);
+  });
+
   test("fails an operation that caught a database error and went on, keeping the error's code, and keeps none of its writes", async () => {
     const { operations, lines } = setUp();
     let attempts = 0;
@@ -210,6 +286,20 @@ describe("the transaction", () => {
 
     for (const run of nested) await expect(run()).rejects.toMatchObject({ name: "NestedOperationError" });
     expect((await pool.query("select * from counters")).rows, "neither the outer nor the inner write stays").toEqual([]);
+  });
+
+  test("work an operation leaves behind may start operations once it has ended", async () => {
+    const { operations } = setUp();
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => (release = resolve));
+    let later!: Promise<string>;
+
+    await operations.mutation("parent", async () => {
+      later = released.then(() => operations.mutation("later", async () => "ran"));
+    });
+    release();
+
+    expect(await later).toBe("ran");
   });
 });
 
