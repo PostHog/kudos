@@ -220,6 +220,9 @@ describe("the transaction", () => {
       (tx) => tx.execute(sql.raw("SELECT 1 AS é$$; COMMIT")),
       (tx) => tx.execute(sql.raw("start /* a */ transaction")),
       (tx) => tx.execute(sql.raw("rollback /* not to a savepoint */")),
+      (tx) => tx.execute(sql.raw("; COMMIT")),
+      (tx) => tx.execute(sql.raw(";; /* empty statements */ END")),
+      (tx) => tx.execute(sql.raw("; ROLLBACK")),
     ];
 
     for (const [index, escape] of escapes.entries()) {
