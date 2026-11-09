@@ -8,6 +8,8 @@ Outside-in journeys for HedgeHug on [e2e](https://e2e.com), TypeScript on Playwr
 
 It imports nothing from `convex/`. Every journey makes its own synthetic members and messages, so journeys never share state.
 
+The PostHog fake serves the flags production had when it was paused (`fakes/productionFlags.ts`), on for everyone, so journeys prove what production's members saw. `pnpm e2e` makes the local app load them before the first journey; another target loads them from `KUDOS_FAKES_URL` as it would from PostHog.
+
 ## Run it
 
 `pnpm e2e` runs every journey against today's app on a disposable local Convex backend (`local/run.ts`): it starts the fakes, starts the backend on free ports with the fakes' URLs in its env, deploys, writes a target file and runs `e2e run` on it. Arguments after `--` go to `e2e run`, such as `pnpm e2e -- journeys/giving.e2e.ts`. The first run downloads the pinned local backend into `~/.cache/convex/binaries/`; a browser comes from `pnpm exec e2e-web install chromium`.

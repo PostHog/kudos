@@ -20,11 +20,19 @@ export type PostOptions = { channel?: string; channelType?: ChannelType; threadT
 
 export type Posted = { channel: string; ts: string; channelType: ChannelType; user: string; elements: RichElement[]; threadTs?: string };
 
-export type MemberOptions = { is_bot?: boolean; deleted?: boolean };
+export type MemberOptions = { is_bot?: boolean; deleted?: boolean; is_admin?: boolean };
 
 export type ChannelKind = "public" | "private" | "shared" | "pending-shared";
 
 export type SlackCall = Record<string, unknown>;
+
+export type View = { type: string; blocks: Block[] };
+
+export type Block = { type: string; text?: { text: string }; elements?: Element[]; accessory?: Element };
+
+export type Element = { type: string; action_id?: string; value?: string; text?: { text: string }; options?: Array<{ text: { text: string }; value: string }> };
+
+export type Action = { action_id: string; value?: string; type?: string; selected_option?: { value: string }; selected_channel?: string };
 
 export class Slack {
   private readonly target: Target;
@@ -88,6 +96,34 @@ export class Slack {
     return { ...posted, elements };
   }
 
+  // A member adds a reaction to someone's message.
+  async react(user: string, { channel, ts, user: author }: Posted, reaction: string) {
+    const eventTs = uniqueTs();
+    await this.sendEvent({ type: "reaction_added", user, reaction, item_user: author, item: { type: "message", channel, ts }, event_ts: eventTs });
+  }
+
+  // A member opens the app's Home tab.
+  async openHome(user: string) {
+    await this.sendEvent({ type: "app_home_opened", user, channel: uniqueId("D"), tab: "home", event_ts: uniqueTs() });
+  }
+
+  // A member clicks a button or picks an option on App Home, as Slack posts it: a form with one JSON payload.
+  async click(user: string, action: Action, state: Record<string, unknown> = {}) {
+    const payload = {
+      type: "block_actions",
+      team: { id: this.target.workspace },
+      user: { id: user },
+      api_app_id: this.target.appId,
+      trigger_id: uniqueId("T"),
+      container: { type: "view" },
+      view: { type: "home" },
+      state: { values: state },
+      actions: [{ type: "button", ...action }],
+    };
+    const response = await this.signed("/slack/interactivity", new URLSearchParams({ payload: JSON.stringify(payload) }).toString(), "application/x-www-form-urlencoded");
+    if (response.status !== 200) throw await this.failure(`the app answered a click with ${response.status}`);
+  }
+
   // Slack delivers an event again when it saw no answer in time: the same envelope, event id and all.
   async redeliverLast() {
     if (this.lastEnvelope === undefined) throw new Error("no event to deliver again");
@@ -110,7 +146,7 @@ export class Slack {
       api_app_id: this.target.appId,
     });
     const response = await this.signed("/slack/commands", form.toString(), "application/x-www-form-urlencoded");
-    if (response.status !== 200) throw new Error(`the app answered the command with ${response.status}`);
+    if (response.status !== 200) throw await this.failure(`the app answered the command with ${response.status}`);
     const body = await response.text();
     if (body === "") return reply;
     const isJson = response.headers.get("content-type")?.startsWith("application/json") === true;
@@ -122,7 +158,7 @@ export class Slack {
   async responsesTo(reply: string) {
     const immediate = this.immediateResponses.get(reply);
     const posted = await this.read<Record<string, unknown>[]>("responses", { reply });
-    return [...(immediate === undefined ? [] : [immediate]), ...posted].map((shown) => ({ response_type: "ephemeral", ...shown }));
+    return [...(immediate === undefined ? [] : [immediate]), ...posted].map((shown): Record<string, unknown> => ({ response_type: "ephemeral", ...shown }));
   }
 
   hasJoined(channel: string) {
@@ -147,6 +183,16 @@ export class Slack {
     return (await this.callsTo("chat.postEphemeral")).filter((call) => call.user === user);
   }
 
+  // Direct messages the app sent a member: Slack takes a member's id as the channel of a DM.
+  async dmsTo(user: string) {
+    return (await this.callsTo("chat.postMessage")).filter((call) => call.channel === user);
+  }
+
+  // The App Home views the app published for a member, oldest first.
+  async homesOf(user: string) {
+    return (await this.callsTo("views.publish")).filter((call) => call.user_id === user).map((call) => call.view as View);
+  }
+
   callsTo(method: string) {
     return this.read<SlackCall[]>("calls", { method });
   }
@@ -161,7 +207,14 @@ export class Slack {
 
   private async deliver(envelope: string) {
     const response = await this.signed("/slack/events", envelope);
-    if (response.status !== 200) throw new Error(`the app answered an event with ${response.status}`);
+    if (response.status !== 200) throw await this.failure(`the app answered an event with ${response.status}`);
+  }
+
+  // A failed request names the exceptions the app has reported to PostHog, which it does a moment after failing.
+  private async failure(what: string) {
+    await new Promise((resolve) => setTimeout(resolve, 3_000));
+    const reported = await this.read<string[]>("exceptions", {}).catch(() => []);
+    return new Error(reported.length === 0 ? what : `${what}; the app reported:\n${reported.join("\n")}`);
   }
 
   private signed(path: string, body: string, contentType = "application/json") {
