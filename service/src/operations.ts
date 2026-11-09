@@ -4,6 +4,7 @@
 // - a query: one REPEATABLE READ READ ONLY transaction, so every read sees one snapshot, with one `now`;
 // - an action: no transaction; it reads the clock live and runs mutations and queries through the runner.
 // A mutation or query never runs another: the inner one would commit on its own, outside the outer's transaction.
+// The transaction is the runner's: a handler can't begin, commit or roll it back, only use savepoints inside it.
 // A failure is logged with the operation's name; never its message, which may quote SQL.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
@@ -13,8 +14,8 @@ import type { Clock } from "./clock.ts";
 import { errorFields, type Log } from "./log.ts";
 
 export type Database = NodePgDatabase<Record<string, never>>;
-/** The operation's transaction: everything a Drizzle database does, except open a transaction of its own. */
-export type Transaction = Omit<Database, "transaction">;
+/** The operation's transaction: everything a Drizzle database does, except open a transaction or reach its session. */
+export type Transaction = Omit<Database, "transaction" | "_" | "$client">;
 
 /** What a new row is born with: a UUID, which no Convex ID can equal, and its creation time. */
 export interface NewRow {
@@ -58,8 +59,12 @@ export interface OperationsOptions {
 // Postgres's serialization failure and deadlock: the transaction did nothing, and running it again may succeed.
 const retryable = new Set(["40001", "40P01"]);
 
-// The mutation or query whose handler is running, so another one started inside it is refused.
-const running = new AsyncLocalStorage<string>();
+// Statements that begin or end a transaction; `rollback to savepoint` is not one.
+const transactionControl = /^\s*(begin|start\s+transaction|commit|end|abort|rollback(?!\s+(work\s+|transaction\s+)?to\b)|prepare\s+transaction)\b/i;
+
+// The mutation or query whose transaction is open, so another one started inside it is refused. Work its handler
+// left behind keeps the store after the operation ends; `open` turns false then, and nothing is refused.
+const running = new AsyncLocalStorage<{ name: string; open: boolean }>();
 
 export function createOperations({ pool, clock, log, maxAttempts = 10, retryDelayMs = jitteredBackoff }: OperationsOptions): Operations {
   let lastCreationTime = Number.NEGATIVE_INFINITY;
@@ -83,15 +88,20 @@ export function createOperations({ pool, clock, log, maxAttempts = 10, retryDela
     // A checked-out client has no listener of the pool's; without one, a dropped connection would crash the process.
     const onError = (error: unknown) => (broken ??= error);
     client.on("error", onError);
-    // The first statement that failed. Postgres aborts the transaction on it, even when the handler catches it.
+    // The first statement Postgres failed. It aborts the transaction on it, even when the handler catches it; pg's own
+    // refusals, such as a prepared statement's name used twice, never reach Postgres and abort nothing.
     let aborted: unknown;
     const tracked = {
-      query: (...args: Parameters<pg.PoolClient["query"]>) =>
-        (client.query as (...args: unknown[]) => Promise<unknown>)(...args).catch((error: unknown) => {
-          aborted ??= error;
+      query: (...args: Parameters<pg.PoolClient["query"]>) => {
+        const text = typeof args[0] === "string" ? args[0] : (args[0] as { text?: unknown } | undefined)?.text;
+        if (typeof text === "string" && transactionControl.test(text)) return Promise.reject(transactionOwned(name));
+        return (client.query as (...args: unknown[]) => Promise<unknown>)(...args).catch((error: unknown) => {
+          if (hasSqlState(error)) aborted ??= error;
           throw error;
-        }),
+        });
+      },
     };
+    const scope = { name, open: true };
     try {
       await client.query(begin).catch((error: unknown) => {
         broken ??= error;
@@ -99,20 +109,21 @@ export function createOperations({ pool, clock, log, maxAttempts = 10, retryDela
       });
       let result: T;
       try {
-        result = await running.run(name, () => handler(drizzle({ client: tracked as unknown as pg.PoolClient })));
+        result = await running.run(scope, () => handler(drizzle({ client: tracked as unknown as pg.PoolClient })));
       } catch (error) {
         await client.query("ROLLBACK").catch((rollbackError: unknown) => (broken ??= rollbackError));
         throw error;
       }
       const commit = await client.query("COMMIT").catch((error: unknown) => {
-        // Postgres answered, so the transaction is over and the connection is fine; anything else may have broken it.
-        if (!hasSqlState(error)) broken ??= error;
+        // The connection may be gone even when Postgres answered: a session ended at COMMIT answers 57P01 first.
+        broken ??= error;
         throw error;
       });
       // On an aborted transaction Postgres answers COMMIT with ROLLBACK: the handler went on after a failed statement.
       if (commit.command !== "COMMIT") throw wentOnAfter(aborted);
       return result;
     } finally {
+      scope.open = false;
       client.removeListener("error", onError);
       client.release(broken !== undefined);
     }
@@ -157,10 +168,16 @@ export function createOperations({ pool, clock, log, maxAttempts = 10, retryDela
 
 function refuseNesting(name: string): void {
   const outer = running.getStore();
-  if (outer === undefined) return;
-  const error = new Error(`"${name}" was started inside "${outer}"; call the shared code directly, or run both from an action`);
+  if (!outer?.open) return;
+  const error = new Error(`"${name}" was started inside "${outer.name}"; call the shared code directly, or run both from an action`);
   error.name = "NestedOperationError";
   throw error;
+}
+
+function transactionOwned(name: string): Error {
+  const error = new Error(`"${name}" tried to begin or end its transaction, which is the runner's; use a savepoint inside it`);
+  error.name = "TransactionOwnedError";
+  return error;
 }
 
 // The handler caught a failed statement and went on; the error carries that statement's SQLSTATE, so a serialization
