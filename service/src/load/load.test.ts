@@ -10,6 +10,7 @@ import { fromDocument, toDocument } from "../db/documents.ts";
 import { archive, files, hypeReactions, kudosMessages, members, wordDeletionRequests } from "../db/schema/index.ts";
 import { createPool } from "../db/pool.ts";
 import { createApp, type Migrations } from "../http/app.ts";
+import { createClock } from "../clock.ts";
 import type { Log } from "../log.ts";
 import { createLoadControl, type LoadControl } from "./control.ts";
 import { maxFileBytes } from "./loader.ts";
@@ -41,7 +42,7 @@ async function copy(
   const load = createLoadControl({ pool: database.pool, token: adminToken, log, limits: { rows, bytes }, pollMs: 50 });
   await load.refresh();
   load.resume();
-  const app = createApp({ commit: "test", readiness: { migrations: () => migrations }, off, log, load });
+  const app = createApp({ commit: "test", readiness: { migrations: () => migrations }, off, log, clock: createClock(), load });
   const request: Copy["request"] = (path, { token: given = token, ...init } = {}) =>
     Promise.resolve(app.request(path, { ...init, headers: { ...(given === null ? {} : { "x-hedgehug-admin-token": given }), ...init.headers } }));
   const made = { load, request, logs };
