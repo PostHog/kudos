@@ -30,6 +30,9 @@ export type SlackCall = Record<string, unknown>;
 
 export type View = { type: string; blocks: Block[] };
 
+// A message the app posted, as Slack shows it now: after any update, with the ts that names it.
+export type Shown = { channel: string; ts: string; threadTs?: string; text: string; blocks?: Block[] };
+
 export type Block = { type: string; text?: { text: string }; elements?: Element[]; accessory?: Element };
 
 export type Element = {
@@ -68,14 +71,22 @@ export class Slack {
 
   async member(options: MemberOptions = {}) {
     const id = uniqueId("U");
-    await this.control("members", { id, team_id: this.target.workspace, tz: noonZone(await this.now()), real_name: `Member ${id}`, ...options });
+    await this.enrol(id, options);
     return id;
+  }
+
+  // Slack learns of a member, in a fixed-offset zone where the app's clock reads about noon, so a journey's messages
+  // never straddle their midnight and the daily allowance never refills mid-journey.
+  private async enrol(id: string, options: MemberOptions) {
+    const hoursAhead = 12 - new Date(await this.now()).getUTCHours();
+    await this.control("members", { id, team_id: this.target.workspace, tz: zoneAhead(hoursAhead), real_name: `Member ${id}`, ...options });
+    this.hoursAhead.set(id, hoursAhead);
   }
 
   // Someone Slack doesn't know yet: it answers users.info about them with user_not_found until they join.
   stranger() {
     const id = uniqueId("U");
-    return { id, join: async (options: MemberOptions = {}) => this.control("members", { id, team_id: this.target.workspace, tz: noonZone(await this.now()), real_name: `Member ${id}`, ...options }) };
+    return { id, join: (options: MemberOptions = {}) => this.enrol(id, options) };
   }
 
   // A user group in Slack, which the app reads only when it syncs them. Groups are workspace-wide, so a journey names
@@ -85,6 +96,15 @@ export class Slack {
     await this.control("user-groups", { id, team_id: this.target.workspace, handle: name.toLowerCase().replaceAll(/[^a-z0-9]+/g, "-"), name, users });
     return id;
   }
+
+  // How many hours a member's clock runs ahead of UTC: their zone has a fixed offset, so it never changes.
+  hoursAheadOf(member: string) {
+    const hours = this.hoursAhead.get(member);
+    if (hours === undefined) throw new Error(`${member} is no member this journey made`);
+    return hours;
+  }
+
+  private readonly hoursAhead = new Map<string, number>();
 
   // A channel only this journey uses, so what the app does in it is this journey's alone.
   async channel(kind: ChannelKind = "public", { name = `e2e-${uniqueId("").toLowerCase()}`, joined = false } = {}) {
@@ -148,15 +168,22 @@ export class Slack {
 
   // A member clicks a button or picks an option on App Home, as Slack posts it: a form with one JSON payload.
   async click(user: string, action: Action, state: Record<string, unknown> = {}) {
+    await this.interact(user, action, { container: { type: "view" }, view: { type: "home" }, state: { values: state } });
+  }
+
+  // A member clicks a button on a message the app posted, such as a direct message.
+  async clickOn(user: string, { channel, ts }: Shown, action: Action) {
+    await this.interact(user, action, { container: { type: "message", channel_id: channel, message_ts: ts }, channel: { id: channel }, message: { ts } });
+  }
+
+  private async interact(user: string, action: Action, where: Record<string, unknown>) {
     const payload = {
       type: "block_actions",
       team: { id: this.target.workspace },
       user: { id: user },
       api_app_id: this.target.appId,
       trigger_id: uniqueId("T"),
-      container: { type: "view" },
-      view: { type: "home" },
-      state: { values: state },
+      ...where,
       actions: [{ type: "button", ...action }],
     };
     const response = await this.signed("/slack/interactivity", new URLSearchParams({ payload: JSON.stringify(payload) }).toString(), "application/x-www-form-urlencoded");
@@ -246,6 +273,11 @@ export class Slack {
     return (await this.callsTo("chat.postMessage")).filter((call) => call.channel === user || call.channel === directMessageWith(user));
   }
 
+  // The messages the app posted in a channel, oldest first, each as it shows now. A member's id names their DM.
+  messagesIn(channel: string) {
+    return this.read<Shown[]>("messages", { channel });
+  }
+
   // The App Home views the app published for a member, oldest first.
   async homesOf(user: string) {
     return (await this.callsTo("views.publish")).filter((call) => call.user_id === user).map((call) => call.view as View);
@@ -323,9 +355,8 @@ function uniqueTs(now: number) {
   return `${Math.floor(lastTs / 1_000_000)}.${String(lastTs % 1_000_000).padStart(6, "0")}`;
 }
 
-// A fixed-offset zone where it is now about noon, so a journey's messages never straddle the member's midnight and
-// the daily allowance never refills mid-journey.
-function noonZone(now: number) {
-  const offset = 12 - new Date(now).getUTCHours();
-  return offset === 0 ? "Etc/GMT" : `Etc/GMT${offset > 0 ? "-" : "+"}${Math.abs(offset)}`;
+// A new member's zone has a fixed offset where it is now about noon, so a journey's messages never straddle the
+// member's midnight and the daily allowance never refills mid-journey. Etc/GMT names its offsets with the sign flipped.
+function zoneAhead(hours: number) {
+  return hours === 0 ? "Etc/GMT" : `Etc/GMT${hours > 0 ? "-" : "+"}${Math.abs(hours)}`;
 }

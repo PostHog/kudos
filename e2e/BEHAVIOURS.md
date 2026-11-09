@@ -14,7 +14,7 @@ Every user-facing behaviour of HedgeHug, inventoried from the code and the specs
 - [x] Editing a message over the allowance down to what's left swaps the hourglass for the kudos emoji (`edits.e2e.ts`)
 - [x] A redelivered event gives nothing twice (`giving.e2e.ts`)
 - [x] A giver or recipient the app doesn't know yet is looked up, and the kudos lands when Slack answers (every journey: its members are new to the app)
-- [ ] A member Slack doesn't know yet at first lands at a later lookup (clock: the next lookup is a minute on)
+- [x] A member Slack doesn't know yet at first lands at the lookup a minute on (`lateLookup.e2e.ts`)
 - [x] Slack's rate limit delays the mark, never loses it (`giving.e2e.ts`)
 - [x] The allowance refills at the giver's midnight (`allowance.e2e.ts`)
 
@@ -41,25 +41,23 @@ Every user-facing behaviour of HedgeHug, inventoried from the code and the specs
 
 ## Progression, achievements, quests and the album
 
-- [ ] Quests are drawn each week and their progress joins the reply (flags, clock)
+- [x] The onboarding quests, and then a quest drawn each week, show their progress in the giver's reply (`quests.e2e.ts`)
 - [ ] Thoughtful kudos bring packs, stickers and hoggies into the album (flags)
-- [ ] Newly shipped features are announced to members who reached them (flags, clock)
 
 ## Groups, teams and boards
 
-- [ ] User groups sync from Slack, and a member's group pick on App Home puts them on the groups board (flags, clock)
+- [x] User groups sync from Slack, and a member's group pick on App Home puts them on their group's board (`groups.e2e.ts`)
 - [ ] The leaderboards rank givers and receivers by week, month and all time (flags)
 
 ## Scheduled posts
 
-- [ ] The Monday direct message recaps hugs and quests, and its buttons stop and resume it (flags, clock)
-- [ ] The Monday post names the week's top kudos in the announcement channel (flags, clock)
+- [x] The Monday direct message recaps hugs and quests at 9:00 on the member's Monday, and its button stops and resumes the quests (`mondayDm.e2e.ts`)
+- [x] The Monday post names last week's most-hugged kudos in the announcement channel at 9:00 (`mondayPost.e2e.ts`)
 
 ## Channels, links and emoji
 
 - [ ] A new public channel is joined, and a channel that becomes shared or a customer channel is left
 - [ ] Links to the website unfurl into previews (flags)
-- [ ] Custom emoji sync from Slack and can be picked as the kudos emoji (flags, clock)
 
 ## Website
 
@@ -71,4 +69,4 @@ Every user-facing behaviour of HedgeHug, inventoried from the code and the specs
 
 ## Off in production
 
-Their flags were off for production's members at the pause, or on only for the app's owner, so members never saw them and no journey is owed until a flag turns them on: unlocks and their perks, the store, coins and crates, achievements' tiers, the skill tree, team spirit, the hoggie forge, the level-up reveal, random emojis, workspace settings, and the nudge to add the kudos emoji to a thank-you.
+Their flags were off for production's members at the pause, or on only for the app's owner, so members never saw them and no journey is owed until a flag turns them on: unlocks, their perks and the announcement of newly shipped features, the store, coins and crates (and with them picking a custom emoji synced from Slack as the kudos emoji), achievements' tiers, the skill tree, team spirit, the hoggie forge, the level-up reveal, random emojis, workspace settings, and the nudge to add the kudos emoji to a thank-you.

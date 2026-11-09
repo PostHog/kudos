@@ -73,6 +73,9 @@ function control({ slack, postHog, responses }: State, url: URL, body: string) {
       return Response.json(postHog.events().filter((event) => event.event === "$exception").flatMap(({ properties }) => ((properties.$exception_list as ReportedException[] | undefined) ?? []).map(describe)));
     case "/_control/calls":
       return Response.json(slack.callsTo(query("method")));
+    // The messages the app posted in a channel, each as it shows now: its ts, and its text and blocks after any update.
+    case "/_control/messages":
+      return Response.json(slack.messagesShownIn(query("channel")));
     case "/_control/reactions":
       return Response.json(slack.reactionsOn(query("channel"), query("ts")));
     default:
