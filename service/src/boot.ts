@@ -4,6 +4,7 @@ import { readCommit } from "./commit.ts";
 import { runMigrations } from "./db/migrate.ts";
 import { createPool } from "./db/pool.ts";
 import { createApp, type Migrations } from "./http/app.ts";
+import { listenForDueJobs, type Listener } from "./jobs/wakeups.ts";
 import { createWorker, type Worker } from "./jobs/worker.ts";
 import { createLoadControl } from "./load/control.ts";
 import { errorFields, jsonLog, type Log } from "./log.ts";
@@ -59,6 +60,7 @@ export async function boot({
   const off = env.HEDGEHUG_OFF === "1" || env.HEDGEHUG_OFF === "true";
   let migrations: Migrations = databaseUrl ? "pending" : "no-database";
   let stopping = false;
+  let wakeups: Listener | undefined;
 
   const clock = createClock();
   const pool = databaseUrl ? createPool(databaseUrl, { connectTimeoutMs }) : undefined;
@@ -113,7 +115,11 @@ export async function boot({
   function startWorker(worker: Worker): void {
     if (stopping) return;
     worker.start().then(
-      () => log.info("worker started"),
+      () => {
+        log.info("worker started");
+        // A due job wakes the worker once its transaction commits; the poll stays the fallback.
+        if (!stopping && pool) wakeups = listenForDueJobs({ pool, log, retryMs, onDue: () => void worker.tick() });
+      },
       (error: unknown) => {
         log.error("worker start failed, retrying", { ...errorFields(error), retryMs });
         setTimeout(() => startWorker(worker), retryMs).unref();
@@ -131,6 +137,7 @@ export async function boot({
       stopping = true;
       load?.stop();
       // Take no new job, and let the running ones finish while the connections are still open.
+      wakeups?.stop();
       await worker?.stop(jobGraceMs);
       await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
       // A connection stuck mid-query would hold `end` forever; the process exits after `stop` either way.
