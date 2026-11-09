@@ -43,7 +43,7 @@ export async function startClock(backend: LocalBackend, { secret, components }: 
   const unfinished = async (componentPath: string) => {
     const jobs: Job[] = [];
     for (let cursor: string | null = null, isDone = false; !isDone; ) {
-      const page = (await call("_system/cli/tableData", { table: "_scheduled_functions", order: "desc", paginationOpts: { cursor, numItems: 1000 } }, { componentPath, route: "query" })) as {
+      const page = (await call("_system/cli/tableData", { table: "_scheduled_functions", order: "desc", paginationOpts: { cursor, numItems: 200 } }, { componentPath, route: "query" })) as {
         page: Job[];
         isDone: boolean;
         continueCursor: string;
@@ -67,8 +67,19 @@ export async function startClock(backend: LocalBackend, { secret, components }: 
     // Two quiet reads in a row, so a job that a finishing one scheduled is seen before the queue counts as settled.
     for (let quiet = 0; quiet < 2; ) {
       const now = appNow();
-      const jobs = (await Promise.all(["", ...components].map(unfinished))).flat().filter((job) => job.scheduledTime <= now);
-      const crons = (await Promise.all(["", ...components].map((component) => cronsBehind(component, now)))).flat();
+      // The jobs table keeps every finished job, so on a busy machine a read of it can time out; that read is retried,
+      // within the budget, like a busy one.
+      let read;
+      try {
+        read = await Promise.all([Promise.all(["", ...components].map(unfinished)), Promise.all(["", ...components].map((component) => cronsBehind(component, now)))]);
+      } catch (failure) {
+        if (Date.now() > until) throw failure;
+        quiet = 0;
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        continue;
+      }
+      const jobs = read[0].flat().filter((job) => job.scheduledTime <= now);
+      const crons = read[1].flat();
       const due = [...jobs.map((job) => ({ name: job.name, state: `${job.state.kind}, due ${now - job.scheduledTime} ms ago` })), ...crons.map((cron) => ({ name: cron.name, state: `cron ${cron.nextRun!.state.type}` }))];
       for (const job of due) ran.add(job.name);
       quiet = due.length === 0 ? quiet + 1 : 0;
