@@ -48,6 +48,15 @@ function control({ slack, postHog, responses }: State, url: URL, body: string) {
       slack.withChannel(id, options);
       return Response.json({ ok: true });
     }
+    // Slack's side of a channel changing: shared with another organization, or renamed.
+    case "/_control/share-channel":
+      slack.shareChannel((JSON.parse(body) as { id: string }).id);
+      return Response.json({ ok: true });
+    case "/_control/rename-channel": {
+      const { id, name } = JSON.parse(body) as { id: string; name: string };
+      slack.renameChannel(id, name);
+      return Response.json({ ok: true });
+    }
     // A user group as usergroups.list and usergroups.users.list answer it.
     case "/_control/user-groups": {
       const { id, team_id, ...options } = JSON.parse(body) as { id: string; team_id: string } & UserGroupOptions;

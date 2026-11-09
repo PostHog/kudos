@@ -2,6 +2,9 @@ import { button, chosen, headerOf, option, tabsOf } from "../home.ts";
 import { expect, isBoard, receipt, staysEqual, test } from "../test.ts";
 import { emoji, mention, text, type Slack } from "../slack.ts";
 
+// The hugs a member may give a day, where the workspace sets no other number.
+const hugBudget = 10;
+
 const lastHome = async (slack: Slack, member: string) => (await slack.homesOf(member)).at(-1);
 
 test("opening App Home publishes it with the member's tabs, and an admin's has the Admin tab too", async ({ slack }) => {
@@ -18,9 +21,9 @@ test("opening App Home publishes it with the member's tabs, and an admin's has t
 test("App Home's tabs and the leaderboard switch publish it again, and the switch takes the member off every board", async ({ slack }) => {
   const [member, author, onlooker] = [await slack.member(), await slack.member(), await slack.member()];
   const channel = await slack.channel();
-  // Few members hug, so a hug puts the member on the hugs board that everyone sees.
-  await slack.react(member, await slack.post(author, [text("a win")]), "taco");
-  await slack.askUntil(onlooker, channel, "leaderboard", (answer) => answer.includes(`<@${member}> · 1 hug`));
+  // A day's whole hug budget puts the member at the top of the hugs board everyone sees, whatever other journeys gave.
+  for (let win = 1; win <= hugBudget; win++) await slack.react(member, await slack.post(author, [text(`win ${win}`)]), "taco");
+  await slack.askUntil(onlooker, channel, "leaderboard", (answer) => answer.includes(`<@${member}> · ${hugBudget} hugs`));
   await slack.openHome(member);
   await expect.poll(async () => (await lastHome(slack, member)) !== undefined).toBe(true);
 
