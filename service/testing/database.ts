@@ -2,6 +2,7 @@
 import pg from "pg";
 import { afterAll, beforeEach, inject } from "vitest";
 import { runMigrations } from "../src/db/migrate.ts";
+import { createPool } from "../src/db/pool.ts";
 
 export interface TestDatabase {
   /** A pool whose connections use this worker's schema. */
@@ -15,7 +16,7 @@ export interface TestDatabase {
 export function useTestDatabase(): TestDatabase {
   const schema = `test_w${process.env.VITEST_POOL_ID ?? "0"}`;
   const url = withSearchPath(inject("databaseUrl"), schema);
-  const pool = new pg.Pool({ connectionString: url, max: 5 });
+  const pool = createPool(url);
   let ready: Promise<void> | undefined;
 
   beforeEach(async () => {
