@@ -23,6 +23,13 @@ test("user groups sync from Slack, and a member's group pick on App Home puts th
     const [shown] = await slack.responsesTo(await slack.command(member, channel, "leaderboard"));
     return String(shown?.text);
   };
+  // The member's group board: its heading and the lines under it. The workspace's own groups board may come before it,
+  // depending on the groups other journeys left in the workspace.
+  const groupBoard = async (group: string) => {
+    const lines = (await leaderboard()).split("\n");
+    const at = lines.indexOf(`*${group}*`);
+    return at === -1 ? [] : lines.slice(at, at + 2);
+  };
   // The app knows no group until it syncs, so the member sits on no group's board.
   expect(await leaderboard()).not.toContain(tag);
 
@@ -31,8 +38,9 @@ test("user groups sync from Slack, and a member's group pick on App Home puts th
   await time.advance(minuteMs);
   await time.settle();
 
-  // A member counts for the smallest of their groups until they pick another, and its board heads their leaderboard.
-  expect((await leaderboard()).split("\n").slice(0, 2)).toEqual([`*${ferns}*`, "Give kudos this week to join the board."]);
+  // A member counts for the smallest of their groups until they pick another, and their leaderboard shows its board.
+  expect(await groupBoard(ferns)).toEqual([`*${ferns}*`, "Give kudos this week to join the board."]);
+  expect(await groupBoard(oaks)).toEqual([]);
   await slack.openHome(member);
   await expect.poll(async () => (await lastHome(slack, member)) !== undefined).toBe(true);
   await slack.click(member, button((await lastHome(slack, member))!, "Settings"));
@@ -45,6 +53,6 @@ test("user groups sync from Slack, and a member's group pick on App Home puts th
   // From the pick on, their kudos count on the board of the group they picked.
   const thanks = await slack.post(member, [mention(oakMate), text(" "), emoji("taco")]);
   await expect.poll(() => slack.reactionsOn(thanks)).toEqual(["taco"]);
-  await expect.poll(leaderboard).toContain(`*${oaks}*\n🥇 <@${member}> · 1 kudos\n`);
-  expect(await leaderboard()).not.toContain(ferns);
+  await expect.poll(() => groupBoard(oaks)).toEqual([`*${oaks}*`, `🥇 <@${member}> · 1 kudos`]);
+  expect(await groupBoard(ferns)).toEqual([]);
 });
