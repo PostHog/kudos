@@ -12,6 +12,8 @@ export const ledgerPath = "service/testing/testPortLedger.md";
 
 const header = ["Convex test", "Stack", "Ported to", "Waits on"];
 const isStack = (text: string) => /^S([1-9]|1[0-9]|20)$/.test(text);
+// A port is a service test by its plain path from the root: no `.` or `..` step, no backslash, no leading slash.
+const isPortPath = (path: string) => /^service(\/[\w.-]+)+\.test\.ts$/.test(path) && !path.split("/").some((step) => step === "." || step === "..");
 
 interface Row {
   file: string;
@@ -28,7 +30,7 @@ export function checkLedger(text: string, convexTests: readonly string[], exists
   const problems: string[] = [];
   const rows: Row[] = [];
   for (const [i, line] of lines.entries()) {
-    if (i <= start + 1 || !line.startsWith("|")) continue;
+    if (i <= start + 1 || !line.trim().startsWith("|")) continue;
     const row = cells(line);
     if (row.length !== header.length) {
       problems.push(`line ${i + 1} isn't a row of four columns`);
@@ -46,7 +48,8 @@ export function checkLedger(text: string, convexTests: readonly string[], exists
     if (!known.has(file)) problems.push(`${file} is no test of the convex project`);
     if (i > 0 && rows[i - 1]!.file > file) problems.push(`${file} is out of order: rows go by path`);
     for (const named of [stack, ...waits]) if (!isStack(named)) problems.push(`${file}: ${named} is no stack from S1 to S20`);
-    if (port !== "" && !exists(port)) problems.push(`${file}: its port ${port} doesn't exist`);
+    if (port !== "" && !isPortPath(port)) problems.push(`${file}: its port ${port} isn't a test file under service/`);
+    else if (port !== "" && !exists(port)) problems.push(`${file}: its port ${port} doesn't exist`);
     if (port === "" && waits.length > 0) problems.push(`${file} waits on ${waits.join(" ")} but has no port`);
   }
   for (const file of convexTests) if (!seen.has(file)) problems.push(`${file} has no row`);

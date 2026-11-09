@@ -69,4 +69,17 @@ describe("seed helpers", () => {
     expect(await seed.get("items", kept), "the deleted one").toBeNull();
     await expect(seed.patch("items", kept, { turnedAt: 1 }), "patching what isn't there").rejects.toThrow(/no items document/);
   });
+
+  test("patch takes the fields of any variant of a table's union of documents", async () => {
+    const { seed } = setUp();
+    const where = { workspace: "T1", conversation: "C_GENERAL", message: "1.0" };
+    const words = await seed.insert("kudosTexts", { ...where, kind: "words", revision: 1n, author: "U_GIVER", edited: false, segments: [], visibility: "public", gate: null });
+    const tombstone = await seed.insert("kudosTexts", { ...where, kind: "tombstone", why: "removed" });
+
+    await seed.patch("kudosTexts", words, { revision: 2n });
+    await seed.patch("kudosTexts", tombstone, { why: "deleted" });
+
+    expect(await seed.get("kudosTexts", words)).toMatchObject({ kind: "words", revision: 2n });
+    expect(await seed.get("kudosTexts", tombstone)).toMatchObject({ kind: "tombstone", why: "deleted" });
+  });
 });

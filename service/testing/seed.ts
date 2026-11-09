@@ -21,7 +21,9 @@ type Fields<Document> = Document extends unknown ? Omit<Document, "_id" | "_crea
 export type NewDocument<Table extends TableName> = Fields<Doc<Table>> & { _id?: string; _creationTime?: number };
 
 /** A patch: each field it names is set, and one set to `undefined` is removed, as Convex's `patch` does. */
-export type Patch<Table extends TableName> = { [Field in keyof Fields<Doc<Table>>]?: Fields<Doc<Table>>[Field] | undefined };
+export type Patch<Table extends TableName> = PatchOf<Fields<Doc<Table>>>;
+// Distributed over a union, so a patch may name the fields of any one variant.
+type PatchOf<Document> = Document extends unknown ? { [Field in keyof Document]?: Document[Field] | undefined } : never;
 
 function tableNamed(name: string): { table: PgTable; id: Column } {
   const table = tables.get(name);

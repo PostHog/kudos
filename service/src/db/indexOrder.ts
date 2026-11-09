@@ -19,30 +19,55 @@ export interface IndexOrder {
 /** The index on `fields`, in order, of `table`; `_creationTime` and `_id` are appended, as Convex appends them. */
 export function indexOrder<Table extends PgTable>(table: Table, fields: ReadonlyArray<keyof Table["_"]["columns"] & string>): IndexOrder {
   const all = getTableColumns(table);
-  const keys = [...fields, "_creationTime", "_id"];
-  const columns: Column[] = keys.map((key) => {
-    const column = all[key];
-    if (!column) throw new Error(`The table has no field ${key}`);
-    return column;
+  const keys: Key[] = [...fields, "_creationTime", "_id"].flatMap((field) => {
+    const column = all[field];
+    if (!column) throw new Error(`The table has no field ${field}`);
+    // A nested field's generated column, `chatIdentity$workspace`, holds the document's `chatIdentity.workspace`.
+    const path = field.split("$");
+    const key: Key = { expression: column, valueOf: (document) => valueAt(document, path) };
+    if (column.getSQLType() !== "double precision") return [key];
+    // Postgres holds -0 equal to 0, where Convex orders -0 first: a second key tells them apart, false for -0.
+    const zeroSign: Key = {
+      expression: sql`(${column}::text <> '-0')`,
+      valueOf: (document) => {
+        const value = key.valueOf(document);
+        return value === null ? null : !Object.is(value, -0);
+      },
+    };
+    return [key, zeroSign];
   });
 
   return {
-    orderBy: (direction = "asc") => columns.map((column) => (direction === "asc" ? sql`${column} asc nulls first` : sql`${column} desc nulls last`)),
+    orderBy: (direction = "asc") => keys.map(({ expression }) => (direction === "asc" ? sql`${expression} asc nulls first` : sql`${expression} desc nulls last`)),
     after(document, direction = "asc") {
-      const values = keys.map((key) => document[key] ?? null);
-      const terms = columns.map((column, i) => and(...columns.slice(0, i).map((earlier, j) => same(earlier, values[j])), follows(column, values[i], direction)));
+      const values = keys.map((key) => key.valueOf(document));
+      const terms = keys.map((key, i) => and(...keys.slice(0, i).map((earlier, j) => same(earlier.expression, values[j])), follows(key.expression, values[i], direction)));
       return or(...terms)!;
     },
   };
 }
 
-function same(column: Column, value: unknown): SQL {
-  return value === null ? isNull(column) : eq(column, value);
+interface Key {
+  expression: Column | SQL;
+  /** The document's value for the key; null for a missing field. */
+  valueOf(document: Readonly<Record<string, unknown>>): unknown;
+}
+
+function valueAt(document: Readonly<Record<string, unknown>>, path: readonly string[]): unknown {
+  let value: unknown = document;
+  for (const key of path) value = typeof value === "object" && value !== null ? (value as Record<string, unknown>)[key] : undefined;
+  return value ?? null;
+}
+
+// Drizzle's comparisons take a column, which encodes the value as the column does, or an expression, which binds it
+// as it is; the zero-sign key is the one expression, and its values are booleans.
+function same(expression: Column | SQL, value: unknown): SQL {
+  return value === null ? isNull(expression) : eq(expression as Column, value);
 }
 
 // Ascending, NULL comes first: after NULL is any value, after a value only a greater one. Descending is the reverse:
 // after a value comes a smaller one or NULL, and nothing comes after NULL.
-function follows(column: Column, value: unknown, direction: Direction): SQL {
-  if (direction === "asc") return value === null ? isNotNull(column) : gt(column, value);
-  return value === null ? sql`false` : or(lt(column, value), isNull(column))!;
+function follows(expression: Column | SQL, value: unknown, direction: Direction): SQL {
+  if (direction === "asc") return value === null ? isNotNull(expression) : gt(expression as Column, value);
+  return value === null ? sql`false` : or(lt(expression as Column, value), isNull(expression))!;
 }
