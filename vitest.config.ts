@@ -8,13 +8,26 @@ export default defineConfig({
         test: {
           name: "convex",
           include: ["**/*.test.ts"],
-          exclude: ["node_modules/**", "website/**"],
+          exclude: ["node_modules/**", "website/**", "service/**"],
           environment: "edge-runtime",
           server: { deps: { inline: ["convex-test"] } },
           env: { KUDOS_EMOJI: "" },
         },
       },
       "website",
+      {
+        // The rewrite: plain Node on a throwaway Postgres 18 the global setup starts, one schema per worker.
+        test: {
+          name: "service",
+          root: "service",
+          include: ["**/*.test.ts"],
+          exclude: ["node_modules/**"],
+          environment: "node",
+          globalSetup: ["testing/postgres.ts"],
+          testTimeout: 30_000,
+          hookTimeout: 60_000,
+        },
+      },
       {
         test: {
           name: "website-build",

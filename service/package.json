@@ -1,0 +1,27 @@
+{
+  "name": "@kudos/service",
+  "version": "0.0.0",
+  "private": true,
+  "description": "HedgeHug as one Node service on Postgres.",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node src/main.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@hono/node-server": "2.1.5",
+    "drizzle-orm": "0.45.4",
+    "hono": "4.13.14",
+    "pg": "8.23.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "@types/pg": "8.23.1",
+    "embedded-postgres": "18.6.0-beta.19",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.3"
+  }
+}

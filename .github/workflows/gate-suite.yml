@@ -65,3 +65,18 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - run: pnpm test --shard=${{ matrix.shard }}/${{ strategy.job-total }}
+
+  # The root Dockerfile's image, as the host runs it: user 1000, $PORT, the host's memory and CPU limits, with and without a database.
+  image:
+    name: image boots under the host's limits
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      - run: docker build -t hedgehug-service:check .
+
+      - run: service/scripts/check-image.sh hedgehug-service:check "$(git rev-parse HEAD)"

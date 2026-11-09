@@ -11,5 +11,5 @@
     "types": ["node"]
   },
   "include": ["**/*.ts", ".github/**/*.ts"],
-  "exclude": ["node_modules", "website"]
+  "exclude": ["node_modules", "website", "service"]
 }
