@@ -11,6 +11,7 @@ import type { Log } from "../log.ts";
 import { createOperations } from "../operations.ts";
 import { toDocument } from "./documents.ts";
 import { indexOrder, type Direction } from "./indexOrder.ts";
+import { paginate, type Page } from "./page.ts";
 import { items, kudosMessages, teamStickers, users, type TableName } from "./schema/index.ts";
 
 const database = useTestDatabase();
@@ -162,6 +163,26 @@ describe.each(cases)("$index", ({ table, name, fields, documents }) => {
         if (page.length < size) break;
       }
       expect(ids(seen), `pages of ${size}`).toEqual(ids(ordered(direction)));
+    }
+  });
+
+  test.each(["asc", "desc"] as const)("paginate %s with every page size returns each document exactly once, in order, done on its last page", async (direction) => {
+    await seedAll(name, documents);
+
+    for (let size = 1; size <= documents.length + 1; size++) {
+      const seen: Document[] = [];
+      let cursor: string | null = null;
+      for (let pages = 1; ; pages++) {
+        const { page, isDone, continueCursor }: Page<Document> = await paginate<Document>(db, { table, order, direction }, { cursor, numItems: size });
+        seen.push(...page);
+        cursor = continueCursor;
+        // Done exactly on the page that holds the last document, a full one included, never on an extra empty page.
+        expect(isDone, `page ${pages} of ${size} done`).toBe(pages === Math.ceil(documents.length / size));
+        if (isDone) break;
+        expect(page, `a page of ${size} before the last is full`).toHaveLength(size);
+      }
+      expect(seen, `pages of ${size}`).toEqual(ordered(direction).map((document) => expect.objectContaining({ _id: document._id })));
+      expect((await paginate<Document>(db, { table, order, direction }, { cursor, numItems: size })).page, `after the last page of ${size}`).toEqual([]);
     }
   });
 });

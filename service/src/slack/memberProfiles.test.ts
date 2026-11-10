@@ -5,7 +5,8 @@
 // against `fillProfiles`, the directory's write the backfill made, with the page it would have given.
 import { afterEach, beforeEach, describe, expect, test, vi, type MockInstance } from "vitest";
 import { useTestBackend, type TestBackend } from "../../testing/backend.ts";
-import { memberEvent } from "../../testing/slackMessages.ts";
+import { definitionsStored, onForEveryone, postHogDeciding } from "../../testing/flags.ts";
+import { emoji, memberEvent, mention, messageEvent, section } from "../../testing/slackMessages.ts";
 import { waitsOn } from "../../testing/waiting.ts";
 import { notPorted } from "../notPorted.ts";
 import { serviceRegistry } from "../registry.ts";
@@ -93,7 +94,9 @@ describe("F1 F2: users.info keeps a member's Slack profile in the directory", ()
   });
 
   waitsOn(["S5", "S11"], "opening App Home refreshes the member's profile through users.info", async () => {
+    postHogDeciding("sandbox");
     const t = backend();
+    await definitionsStored(t.operations, onForEveryone("xp-levels"));
     await memberChanged(t, "team_join", { id: "U_ANN", profile: { email: "old.ann@example.com" } }, { eventTs: earlierTs });
     t.slack.withMember("U_ANN", { profile: annsProfile });
 
@@ -343,13 +346,18 @@ describe("F6: a Slack answer that can hold a profile is never logged", () => {
 
 // A signed member event through the front door. A handler that reaches a stub answers 500 and the front door logs only
 // the error's class, so a stub reached here is thrown again for `waitsOn`, as the backend's `settle` throws a job's.
-// An event no domain handles yet is acknowledged and dropped, which is thrown as the stub of the handler it waits for.
+// An event no domain handles yet is acknowledged and dropped, which is thrown as the stub of the handler it waits for;
+// memberChanged is this stack's own, so a missing one fails.
 async function memberChanged(t: TestBackend, ...event: Parameters<typeof memberEvent>) {
   return received(t, await t.send("/events", memberEvent(...event)), "memberChanged");
 }
 
 async function received(t: TestBackend, response: Response, kind: EventKind) {
-  if (serviceRegistry.slack.events?.[kind] === undefined) throw notPorted(`the Slack ${kind} event's handler`);
+  if (serviceRegistry.slack.events?.[kind] === undefined) {
+    // S3 registers memberChanged itself, so its absence is a defect, never a wait.
+    if (kind === "memberChanged") throw new Error("the workspace domain registers no memberChanged handler");
+    throw notPorted(`the Slack ${kind} event's handler`);
+  }
   const failed = t.logs.findLast(({ level, message }) => level === "error" && message === "slack request failed");
   if (response.status === 500 && failed?.fields.error === "NotPortedError") throw notPorted(`a body the Slack ${kind} event's handler reaches (the front door logs no path)`);
   return response;
@@ -357,7 +365,7 @@ async function received(t: TestBackend, response: Response, kind: EventKind) {
 
 // A kudos from U_ALICE mentioning `user`, whom the directory doesn't know yet: the engine checks the directory.
 async function kudosFromAlice(t: TestBackend, user: string) {
-  await received(t, await t.event({ type: "message", channel: "C1", user: "U_ALICE", ts: `${now / 1000}.000100`, text: `<@${user}> :taco:` }), "message");
+  await received(t, await t.send("/events", messageEvent([section(mention(user), emoji("taco"))], { user: "U_ALICE", ts: `${now / 1000}.000100` })), "message");
   await t.settle();
 }
 
