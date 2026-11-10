@@ -99,6 +99,7 @@ describe("the custom emoji sync keeps the workspace's custom emoji in the direct
 
     expect(await imagesOf(t, "partyparrot")).toEqual({ partyparrot: undefined });
     for (const spy of logged) expect(spy).not.toHaveBeenCalled();
+    expect(failuresLogged(t)).toEqual([]);
   });
 
   waitsOn(["S3"], "an app that lost the emoji:read scope forgets the custom emoji an earlier listing kept", async () => {
@@ -107,10 +108,12 @@ describe("the custom emoji sync keeps the workspace's custom emoji in the direct
     await sync(t);
 
     t.slack.answering("emoji.list", slackError("missing_scope"));
+    const loggedBefore = t.logs.length;
     await sync(t);
 
     expect(await imagesOf(t, "partyparrot")).toEqual({ partyparrot: undefined });
     for (const spy of logged) expect(spy).not.toHaveBeenCalled();
+    expect(failuresLogged(t, loggedBefore)).toEqual([]);
   });
 
   waitsOn(["S3"], "a rate-limited listing asks again after the Retry-After Slack gave", async () => {
@@ -202,7 +205,10 @@ describe("emoji_changed brings the custom emoji up to date", () => {
     // Today's `vi.runOnlyPendingTimers()`: the refresh the change asked for falls due and starts, and runs on its own.
     moveTo(t, t.clock.now() + 30_000);
     const listing = t.settle();
-    await Promise.race([underWay.reached, listing]);
+    // The listing must be under way, held at Slack's answer; a refresh that settled first proves nothing.
+    let held = false;
+    await Promise.race([underWay.reached.then(() => (held = true)), listing]);
+    if (!held) throw new Error("the refresh settled before it reached Slack's held answer: no listing was under way");
 
     t.slack.withCustomEmoji("taco", tacoPng);
     await emojiChanged(t, { subtype: "add", name: "taco", value: tacoPng });
@@ -213,6 +219,11 @@ describe("emoji_changed brings the custom emoji up to date", () => {
     expect(await imagesOf(t, "partyparrot", "taco")).toEqual({ partyparrot: parrotGif, taco: tacoPng });
   });
 });
+
+/** What the service logged as failing since `from`: an error line, or a job that ended in an error. Today's console spies. */
+function failuresLogged(t: TestBackend, from = 0) {
+  return t.logs.slice(from).filter(({ level, message, fields }) => level === "error" || (message === "job" && fields.error !== undefined));
+}
 
 /** Today's `t.action(internal.slack.customEmoji.syncCustomEmoji, {})`: the sync job's body, run once now. */
 function syncing(t: TestBackend) {
