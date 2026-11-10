@@ -18,14 +18,16 @@ import { inTheAlbumOf } from "./stickers.ts";
 
 const world = vi.hoisted(() => ({
   collects: new Set<string>(),
-  asked: [] as string[],
-  items: [] as Array<{ member: string; milestone: string; tier: string; at: number }>,
+  /** Who was exposed to hype-by-reactions, as deciding it in a mutation exposes them (album/flag.ts). */
+  exposedTo: [] as string[],
+  /** The tier items earned, once each by member and tier, as earnItem dedupes them (S8's items/ledger.ts). */
+  items: new Map<string, { member: string; milestone: string; tier: string; at: number }>(),
 }));
 
 vi.mock("./flag.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./flag.ts")>()),
   hypeByReactionsCollectFor: async (_ctx: unknown, member: string) => {
-    world.asked.push(member);
+    world.exposedTo.push(member);
     return world.collects.has(member);
   },
 }));
@@ -40,7 +42,8 @@ vi.mock("./hoggies/collection.ts", async (importOriginal) => ({
 vi.mock("./items/achievements.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./items/achievements.ts")>()),
   earnTierItem: async (_ctx: unknown, { member }: { member: string }, { milestone, tier }: { milestone: string; tier: string }, at: number) => {
-    world.items.push({ member, milestone, tier, at });
+    const key = `${member} milestone:${milestone}:${tier}`;
+    if (!world.items.has(key)) world.items.set(key, { member, milestone, tier, at });
   },
 }));
 
@@ -57,8 +60,8 @@ let messages = 0;
 beforeEach(async () => {
   t = backend();
   world.collects.clear();
-  world.asked.length = 0;
-  world.items.length = 0;
+  world.exposedTo.length = 0;
+  world.items.clear();
   [alice, bruno, carol] = [await aMember("U_ALICE", "alice-hype"), await aMember("U_BRUNO", "bruno-hype"), await aMember("U_CAROL", "carol-hype")];
   for (const member of [alice, bruno, carol]) world.collects.add(member);
 });
@@ -102,7 +105,7 @@ describe("a teammate's hype emoji is collected by reactions on 10 of their messa
 
     expect(await collectionsOf(carol), "what Carol collected").toEqual([]);
     expect(await inAlbum(carol, carol)).toBe(false);
-    expect(world.asked, "the flag is never asked").toEqual([]);
+    expect(world.exposedTo, "no one is exposed to hype-by-reactions").toEqual([]);
   });
 
   test("a hype reaction delivered twice collects once", async () => {
@@ -129,8 +132,7 @@ describe("a teammate's hype emoji is collected by reactions on 10 of their messa
     await reactOnMessagesOf(carol, { by: bruno, messages: 10 });
 
     expect(await t.seed.all("milestoneTiers")).toEqual([expect.objectContaining({ member: bruno, milestone: "people", tier: "bronze", at: tuesday + 10 * minuteMs })]);
-    // The stand-in keeps no rows, so an attempt the runner retried calls it again: every call names the one tier.
-    expect(new Set(world.items.map((item) => JSON.stringify(item))), "the tier's item").toEqual(new Set([JSON.stringify({ member: bruno, milestone: "people", tier: "bronze", at: tuesday + 10 * minuteMs })]));
+    expect([...world.items.values()], "the tier's item").toEqual([{ member: bruno, milestone: "people", tier: "bronze", at: tuesday + 10 * minuteMs }]);
   });
 
   test("a card already in the album stays as it was", async () => {

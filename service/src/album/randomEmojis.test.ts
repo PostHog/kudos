@@ -13,14 +13,12 @@ import { dropRandomEmojiFrom, holdsRandomEmoji, mostRandomEmojisShown, randomEmo
 import { earnedWorld } from "./testing/earnedWorld.ts";
 import { emojiWorld } from "./testing/emojiWorld.ts";
 
-const roll = vi.hoisted(() => ({ chance: 0, pick: 0, asked: [] as Array<{ member: string; crate: string }> }));
+// The roll each member and crate would draw. Unset, a roll misses the chance, so a drop shows which roll it drew.
+const roll = vi.hoisted(() => ({ chance: 0, pick: 0, of: new Map<string, { chance: number; pick: number }>() }));
 
 vi.mock("./emojiRoll.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./emojiRoll.ts")>()),
-  emojiRollOf: async ({ member, crate }: { member: string; crate: string }) => {
-    roll.asked.push({ member, crate });
-    return { chance: roll.chance, pick: roll.pick };
-  },
+  emojiRollOf: async ({ member, crate }: { member: string; crate: string }) => roll.of.get(`${member} ${crate}`) ?? { chance: roll.chance, pick: roll.pick },
 }));
 vi.mock("../workspace/slackEmoji.ts", async (original) => (await import("./testing/emojiWorld.ts")).standIn(original, "slackEmoji"));
 vi.mock("./flag.ts", async (original) => (await import("./testing/earnedWorld.ts")).standIn(original, "albumFlags"));
@@ -36,7 +34,8 @@ beforeEach(async () => {
   t = backend();
   emojiWorld.reset();
   earnedWorld.reset();
-  Object.assign(roll, { chance: 0, pick: 0, asked: [] });
+  Object.assign(roll, { chance: 0, pick: 0 });
+  roll.of.clear();
   alice = await t.seed.insert("members", { workspace: "T1", user: "U_ALICE", kind: "member", name: "Alice" });
   bruno = await t.seed.insert("members", { workspace: "T1", user: "U_BRUNO", kind: "member", name: "Bruno" });
   earnedWorld.flags.randomEmojis.add(alice);
@@ -48,13 +47,13 @@ beforeEach(async () => {
 });
 
 describe("a pack drops a random emoji the member doesn't hold", () => {
-  test("a roll under the chance drops the emoji the pick lands on among the workspace's random ones, in name order", async () => {
+  test("the member's roll for the crate, under the chance, drops the emoji the pick lands on among the workspace's random ones, in name order", async () => {
     const pack = await aPack(bruno, alice);
-    Object.assign(roll, { chance: randomEmojiChance - 0.01, pick: 0.5 });
+    roll.chance = 1;
+    roll.of.set(`${alice} thoughtful:1`, { chance: randomEmojiChance - 0.01, pick: 0.5 });
 
     await t.run((ctx) => dropRandomEmojiFrom(ctx, alice, pack, "thoughtful:1", tuesday));
 
-    expect(roll.asked).toEqual([{ member: alice, crate: "thoughtful:1" }]);
     expect((await t.seed.all("randomEmojiDrops")).map(({ member, name, pack: from, at }) => ({ member, name, pack: from, at }))).toEqual([{ member: alice, name: "partyparrot", pack, at: tuesday }]);
   });
 
@@ -85,11 +84,11 @@ describe("a pack drops a random emoji the member doesn't hold", () => {
     expect(await t.seed.all("randomEmojiDrops"), "blobwave is first and gone from Slack").toEqual([]);
   });
 
-  test("where random emojis are off, nothing is rolled or dropped", async () => {
+  test("where random emojis are off, even a roll under the chance drops nothing", async () => {
     const pack = await aPack(bruno, alice);
+    roll.of.set(`${bruno} thoughtful:1`, { chance: 0, pick: 0 });
     await t.run((ctx) => dropRandomEmojiFrom(ctx, bruno, pack, "thoughtful:1", tuesday));
 
-    expect(roll.asked).toEqual([]);
     expect(await t.seed.all("randomEmojiDrops")).toEqual([]);
   });
 });

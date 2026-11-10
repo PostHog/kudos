@@ -21,8 +21,10 @@ export const earnedWorld = {
   levels: new Map<string, number>(),
   /** When each member first reached a level, by `member:level`. */
   levelReachedAt: new Map<string, number>(),
-  /** The people whose first pack from the member waits face down, as `member:person`. */
+  /** The people whose first pack from the member waits face down, as `member:person`, oldest first. */
   packsFaceDown: new Set<string>(),
+  /** How many other items wait face down for each member, all older than their packs' items. */
+  otherItemsWaiting: new Map<string, number>(),
   /** Members whose Show me on the leaderboards is off. */
   offTheBoards: new Set<string>(),
 
@@ -31,6 +33,7 @@ export const earnedWorld = {
     this.levels.clear();
     this.levelReachedAt.clear();
     this.packsFaceDown.clear();
+    this.otherItemsWaiting.clear();
     this.offTheBoards.clear();
   },
 };
@@ -48,12 +51,16 @@ const onboarding = { onboardingShownTo: async (_ctx: unknown, member: string) =>
 
 const waitsFaceDown = (member: string, person: string) => earnedWorld.flags.hiddenItems.has(member) && earnedWorld.packsFaceDown.has(`${member}:${person}`);
 
-// convex/album/items/ledger.ts: the items face down, a thanks item naming the person it is for.
+// convex/album/items/ledger.ts: the items face down, oldest first, a thanks item naming the person it is for; at most
+// mostItemsShown of them, with `more` when others wait beyond.
+const mostItemsShown = 100;
 const ledger = {
-  boardOf: async (_ctx: unknown, member: string) => ({
-    items: [...earnedWorld.packsFaceDown].filter((key) => key.startsWith(`${member}:`)).map((key, index) => ({ item: `item-${index}`, earnedAt: 0, reason: { kind: "thanks", person: key.slice(member.length + 1) } })),
-    more: false,
-  }),
+  boardOf: async (_ctx: unknown, member: string) => {
+    const others = Array.from({ length: earnedWorld.otherItemsWaiting.get(member) ?? 0 }, () => ({ kind: "hoggie" as const }));
+    const thanks = [...earnedWorld.packsFaceDown].filter((key) => key.startsWith(`${member}:`)).map((key) => ({ kind: "thanks" as const, person: key.slice(member.length + 1) }));
+    const waiting = [...others, ...thanks].map((reason, index) => ({ item: `item-${index}`, earnedAt: index, reason }));
+    return { items: waiting.slice(0, mostItemsShown), more: waiting.length > mostItemsShown };
+  },
 };
 
 // convex/album/items/hypes.ts
@@ -80,8 +87,17 @@ const packs = {
 // convex/progression/progression.ts: the home's level, the one field the album reads.
 const progression = { progressionHomeOf: async (_ctx: unknown, member: string) => ({ level: earnedWorld.levels.get(member) ?? 1, xp: 0, xpToNextLevel: 0 }) };
 
-// convex/unlocks/levelUps.ts
-const levelUps = { levelFirstReachedAt: async (_ctx: unknown, member: string, level: number) => earnedWorld.levelReachedAt.get(`${member}:${level}`) ?? null };
+// convex/unlocks/levelUps.ts: when the member first reached the level or any above it, by the lowest such level, as
+// the by_member_level index's first row at or above it answers.
+const levelUps = {
+  levelFirstReachedAt: async (_ctx: unknown, member: string, level: number) => {
+    const reached = [...earnedWorld.levelReachedAt]
+      .map(([key, at]) => ({ of: key.slice(0, key.lastIndexOf(":")), level: Number(key.slice(key.lastIndexOf(":") + 1)), at }))
+      .filter(({ of, level: reachedLevel }) => of === member && reachedLevel >= level)
+      .toSorted((one, other) => one.level - other.level);
+    return reached[0]?.at ?? null;
+  },
+};
 
 // convex/leaderboard/visibility.ts: on the boards unless the member turned it off.
 const visibility = { isOnTheBoards: async (_ctx: unknown, member: string) => !earnedWorld.offTheBoards.has(member) };
