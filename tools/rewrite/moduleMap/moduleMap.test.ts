@@ -69,7 +69,7 @@ describe("the closure check", () => {
   test("passes a batch whose imports resolve inside it, to an earlier batch, a built-in or a listed package", () => {
     expect(
       check({
-        "service/src/a/one.ts": 'import { two } from "./two.ts";\nimport type { Id } from "../db/columns.ts";\nimport { z } from "zod";\nimport { join } from "node:path";',
+        "service/src/a/one.ts": 'import { two } from "./two.ts";\nimport type { Id } from "../db/columns.ts";\nimport { z } from "zod";\nimport { join } from "node:path";\nimport { test } from "node:test";',
         "service/src/a/two.ts": 'export { Hono } from "hono/tiny";\nexport type T = import("./one.ts").X;',
       }),
     ).toEqual([]);
@@ -168,6 +168,7 @@ export type Note = z.infer<typeof noteValidator>;
         "convex/ctx/unconvertible.ts:17: reads isOptional of a Convex validator, which zod has no counterpart for",
         "convex/ctx/unconvertible.ts:18: reads isOptional of a Convex validator, which zod has no counterpart for",
         "convex/ctx/unconvertible.ts:19: reads isOptional of a Convex validator, which zod has no counterpart for",
+        "convex/ctx/unconvertible.ts:20: reads a member of an optional Convex validator, which zod wraps in z.optional",
       ],
     });
     expect(convert("convex/ctx/handler.ts")).toEqual({ refusals: ["convex/ctx/handler.ts: imports ../_generated/server, which the service has no counterpart for"] });
@@ -218,7 +219,8 @@ describe("the equivalence check", () => {
     expect(disagreements(v.id("members"), zv.id("members"))).toEqual([]);
     expect(disagreements(v.int64(), z.bigint())).toEqual(['"9223372036854775808n": Convex rejects, zod accepts']);
     expect(disagreements(v.string(), z.string().optional())).toEqual(["undefined: Convex rejects, zod accepts"]);
-    expect(disagreements(v.array(v.string()), z.array(z.string().optional()))).toEqual(["[null]: Convex rejects, zod accepts"]);
+    expect(disagreements(v.array(v.string()), z.array(z.string().optional()))).toEqual(["[undefined]: Convex rejects, zod accepts"]);
+    expect(disagreements(v.record(v.string(), v.string()), z.record(z.string(), z.string().optional()))).toContain('{"key":undefined}: Convex rejects, zod accepts');
     expect(disagreements(v.record(v.string(), v.boolean()), z.record(z.string(), z.boolean()))).toEqual([
       '{"":true}: Convex rejects, zod accepts',
       '{"$dollar":true}: Convex rejects, zod accepts',

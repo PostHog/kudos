@@ -170,6 +170,9 @@ export function validatorEdits(checker: ts.TypeChecker, sourceFile: ts.SourceFil
       (ts.isIndexedAccessTypeNode(node) && validatorClassOf(checker.getTypeFromTypeNode(node.objectType)))
     ) {
       refuse(node, `reads a Convex validator's members other than by name`);
+    } else if ((ts.isObjectBindingPattern(node) || ts.isPropertyAccessExpression(node)) && isOptionalValidator(checker, checker.getTypeAtLocation(ts.isPropertyAccessExpression(node) ? node.expression : node))) {
+      // zod wraps an optional schema in `z.optional`, which has none of the inner schema's members.
+      refuse(node, `reads a member of an optional Convex validator, which zod wraps in z.optional`);
     } else if (ts.isObjectBindingPattern(node) && validatorClassOf(checker.getTypeAtLocation(node))) {
       // `({ value }) => value` reads members by name too: each is renamed as a property read would be.
       const validatorClass = validatorClassOf(checker.getTypeAtLocation(node))!;
@@ -230,6 +233,14 @@ function oneClass(classes: string[]): string | undefined {
   const distinct = new Set(classes);
   if (distinct.size === 0) return undefined;
   return distinct.size === 1 ? [...distinct][0] : "Validator";
+}
+
+/** A validator whose `isOptional` is `"optional"`, such as `v.optional(v.object(…))`. */
+function isOptionalValidator(checker: ts.TypeChecker, type: ts.Type): boolean {
+  if (!validatorClassOf(type)) return false;
+  const property = type.getProperty("isOptional");
+  const optional = property && checker.getTypeOfSymbol(property);
+  return optional !== undefined && optional.isStringLiteral() && optional.value === "optional";
 }
 
 /** A validator class's name, when Convex's own package declares it; an app's class of the same name isn't one. */
