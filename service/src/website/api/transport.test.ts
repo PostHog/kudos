@@ -9,6 +9,7 @@ import { useTestDatabase } from "../../../testing/database.ts";
 import { createClock } from "../../clock.ts";
 import type { HomeMember } from "../../feedback/homes.ts";
 import { createApp } from "../../http/app.ts";
+import { createLiveFeed } from "../../live.ts";
 import { jsonLog } from "../../log.ts";
 import { createOperations } from "../../operations.ts";
 import { websiteClock } from "../../db/schema/website.ts";
@@ -80,7 +81,7 @@ function apiWith({ read = "admit", command = "admit", routes = allRoutes }: { re
     off: false,
     log,
     clock,
-    routes: [apiTransport({ operations, log, routes, identify, check: checkOf({ read, command }), enter: async (_ctx, identity) => ("kind" in identity ? identity : { kind: "entered" }) })],
+    routes: [apiTransport({ operations, log, live: createLiveFeed(), routes, identify, check: checkOf({ read, command }), enter: async (_ctx, identity) => ("kind" in identity ? identity : { kind: "entered" }) })],
   });
   const ticked = async () => (await (await app.request("/api/query/website.test.ticks", sent({}))).json()) as number[];
   return { app, lines, ticked };

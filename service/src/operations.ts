@@ -3,6 +3,7 @@
 //   read before the first attempt and kept across every retry;
 // - a query: one REPEATABLE READ READ ONLY transaction, so every read sees one snapshot, with one `now`;
 // - an action: no transaction; it reads the clock live and runs mutations and queries through the runner.
+// A mutation that wrote a table some website view shows wakes the live views when it commits (live.ts).
 // A mutation or query never runs another: the inner one would commit on its own, outside the outer's transaction.
 // The transaction is the runner's: a handler can't begin, commit or roll it back, only use savepoints inside it.
 // A failure is logged with the operation's name; never its message, which may quote SQL.
@@ -20,6 +21,7 @@ import { publish, type DomainEvent, type Subscribers } from "./bus/publish.ts";
 import type { Clock } from "./clock.ts";
 import { advanceCreationClock, creationClockFloor, readCreationClock } from "./db/creationClock.ts";
 import { createScheduler, type Scheduler } from "./jobs/schedule.ts";
+import { notifyLive, unseenTables } from "./live.ts";
 import { errorFields, type Log } from "./log.ts";
 
 export type Database = NodePgDatabase<Record<string, never>>;
@@ -203,6 +205,8 @@ export function createOperations({ pool, clock, log, maxAttempts = 10, retryDela
   async function inTransaction<T>(name: string, begin: string, handler: (tx: Transaction, stamps: Stamps) => Promise<T>, { stamping = false } = {}): Promise<T> {
     refuseNesting(name);
     const stamps: Stamps = { floor: Number.NEGATIVE_INFINITY };
+    // This attempt's alone: a retry starts on a new transaction, so with nothing written.
+    let shown = false;
     const client = await pool.connect();
     let broken: unknown;
     // A checked-out client has no listener of the pool's; without one, a dropped connection would crash the process.
@@ -229,6 +233,7 @@ export function createOperations({ pool, clock, log, maxAttempts = 10, retryDela
         if (values !== undefined) config.values = values;
         const kind = statementKind(config.text);
         if (kind === "transaction") return Promise.reject(transactionOwned(name));
+        shown ||= writtenTables(config.text).some((table) => !unseenTables.has(table));
         return client.query({ ...config, queryMode: "extended" } as pg.QueryConfig).then(
           (result) => {
             // The transaction is usable again; what failed inside the savepoint no longer aborts it.
@@ -293,7 +298,8 @@ export function createOperations({ pool, clock, log, maxAttempts = 10, retryDela
       scope.open = false;
       // Only a transaction still able to commit moves the clock; an aborted one answers COMMIT with ROLLBACK below.
       const advance = stamps.highest !== undefined && aborted === undefined ? `${advanceCreationClock(stamps.highest)}; ` : "";
-      const committed = await client.query(`${advance}COMMIT`).catch((error: unknown) => {
+      const notify = shown && aborted === undefined ? `${notifyLive}; ` : "";
+      const committed = await client.query(`${notify}${advance}COMMIT`).catch((error: unknown) => {
         // The connection may be gone even when Postgres answered: a session ended at COMMIT answers 57P01 first. A
         // failed advance drops it too, and with it any lock the advance held, and the transaction it left aborted.
         broken ??= error;
@@ -402,6 +408,20 @@ function statementKind(text: string): "transaction" | "rollback to savepoint" | 
   }
   if (first === "prepare") return second === "transaction" ? "transaction" : "other";
   return first !== undefined && ["begin", "start", "commit", "end", "abort"].includes(first) ? "transaction" : "other";
+}
+
+// The tables a statement inserts into, updates or deletes from, as Drizzle and the service's own SQL name them: quoted or
+// bare, perhaps after a schema. An upsert's `do update set` and a `for update` lock name no table.
+const identifier = String.raw`(?:"(?:[^"]|"")+"|[A-Za-z_][\w$]*)`;
+const target = String.raw`(?:${identifier}\s*\.\s*)?(${identifier})`;
+const writes = new RegExp(String.raw`\b(?:insert\s+into|delete\s+from)\s+${target}|\bupdate\s+(?:only\s+)?${target}\s+set\b`, "gi");
+
+function writtenTables(text: string): string[] {
+  return [...text.matchAll(writes)].map((match) => unquoted(match[1] ?? match[2]!));
+}
+
+function unquoted(name: string): string {
+  return name.startsWith('"') ? name.slice(1, -1).replaceAll('""', '"') : name.toLowerCase();
 }
 
 function operationEnded(name: string): Error {

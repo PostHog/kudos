@@ -92,5 +92,9 @@ Peer recognition for Slack on one Convex deployment per workspace; the product r
   handler: apiTransport in service/src/website/api/transport.ts
   trust: browser
   control: none — the same guard as the reads and commands, and any argument gets 400, before anyone is looked up; the person is the one the edge names, as for the reads, and a closed website, a signed-out request or someone who isn't a member gets the denial and writes nothing, while the users row, the greeting and a verification are written only on a first entry or while the person is being verified (service/src/website/entry.test.ts)
+- route GET /api/live: the website follows a member's stream of invalidations, to refetch the reads its open views hold
+  handler: apiTransport in service/src/website/api/transport.ts
+  trust: browser
+  control: none — a request the browser marks cross-site gets 403 before anyone is looked up; the person is the one the edge names, as for the reads, and anyone today's read check doesn't verify gets its denial and no stream; the stream carries no data, only an invalidate at most once a second, holds no database connection and ends when the client leaves or the service stops (service/src/website/live.test.ts)
 
 ## invariants

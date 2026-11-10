@@ -8,6 +8,7 @@ import { describe, expect, inject, onTestFinished, test, vi } from "vitest";
 import { boot } from "./boot.ts";
 import { z } from "zod";
 import { runMigrations } from "./db/migrate.ts";
+import { websiteClock } from "./db/schema/index.ts";
 import { actionJob, mutationJob } from "./jobs/define.ts";
 import { jobsChannel } from "./jobs/wakeups.ts";
 import { createRegistry } from "./registration.ts";
@@ -158,6 +159,24 @@ describe("the worker in the service", () => {
 
     expect(after.now - before.now).toBeGreaterThanOrEqual(3_600_000);
     expect(after.queried - before.queried).toBeGreaterThanOrEqual(3_600_000);
+  });
+
+  test("a committed write reaches the domains' routes through the service's one listener", async () => {
+    const service = await bootFollowing();
+    const followed = await following(service);
+
+    await service.operations!.mutation("write", ({ tx, newRow }) => tx.insert(websiteClock).values({ ...newRow(), tick: 1 }));
+
+    expect(await followed.next()).toBe("invalidate");
+  });
+
+  test("stop ends every open live view, so the server can close", async () => {
+    const service = await bootFollowing();
+    const followed = await following(service);
+
+    await service.stop();
+
+    expect(await followed.next(), "the view's stream ended").toBe("ended");
   });
 
   test("a response body that fails mid-stream prints nothing of its error through the server", async () => {
@@ -342,6 +361,50 @@ describe("migrations", () => {
     expect(JSON.stringify(fields), "the logged fields").not.toContain("hedgehug-fixture-literal");
   });
 });
+
+/** A service whose one route streams what its live feed hears, a line each, starting with `following`. */
+async function bootFollowing() {
+  const registry = createRegistry({
+    website: {
+      routes: ({ live }) =>
+        new Hono().get("/api/follow", () => {
+          let unfollow = () => {};
+          const encoder = new TextEncoder();
+          const body = new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(encoder.encode("following\n"));
+              unfollow = live.follow((event) => (event === "end" ? controller.close() : controller.enqueue(encoder.encode(`${event}\n`))));
+            },
+            cancel: () => unfollow(),
+          });
+          return new Response(body);
+        }),
+    },
+  });
+  const service = await boot({ env: { PORT: "0", DATABASE_URL: database.url }, log: captureLog().log, registry, pollMs: 3_600_000 });
+  // Stops once, whether the test stops it or its end does.
+  let stopped: Promise<void> | undefined;
+  const stop = () => (stopped ??= service.stop());
+  onTestFinished(stop);
+  await service.migrated;
+  const listening = `listen "${jobsChannel(database.schema)}"`;
+  await vi.waitFor(async () => expect((await database.pool.query("select 1 from pg_stat_activity where query = $1 and state = 'idle'", [listening])).rowCount).toBe(1));
+  return { ...service, stop };
+}
+
+/** Follows the service's live feed over HTTP: `next` answers the next line it streams, or `ended`. */
+async function following(service: { port: number }): Promise<{ next(): Promise<string> }> {
+  const answer = await fetch(`http://127.0.0.1:${service.port}/api/follow`);
+  const reader = answer.body!.getReader();
+  onTestFinished(() => reader.cancel().catch(() => {}));
+  const decoder = new TextDecoder();
+  const next = async () => {
+    const { done, value } = await reader.read();
+    return done ? "ended" : decoder.decode(value).trim();
+  };
+  expect(await next()).toBe("following");
+  return { next };
+}
 
 function captureLog(): { log: Log; lines: Array<{ message: string } & LogFields> } {
   const lines: Array<{ message: string } & LogFields> = [];

@@ -288,7 +288,6 @@ export const landed = [
   "convex/website/activityNextFlag.ts",
   "convex/website/activityWeek.ts",
   "convex/website/browserAnalytics.ts",
-  "convex/website/clock.ts",
   "convex/website/collection.ts",
   "convex/website/commands.ts",
   "convex/website/emojiMappings.ts",

@@ -4,6 +4,7 @@ import type { Hono } from "hono";
 import { subscribersOf, type Subscribers, type Subscription } from "./bus/publish.ts";
 import type { Clock } from "./clock.ts";
 import { jobRegistry, type Job, type JobRegistry } from "./jobs/define.ts";
+import type { LiveFeed } from "./live.ts";
 import type { Log } from "./log.ts";
 import type { Operations } from "./operations.ts";
 import type { SlackHandlers } from "./slack/frontDoor.ts";
@@ -13,6 +14,8 @@ export interface RouteRuntime {
   operations: Operations;
   clock: Clock;
   log: Log;
+  /** The process's live feed: what tells open views to refetch. */
+  live: LiveFeed;
 }
 
 /** Builds a domain's website routes at boot. They can't take `/healthz`, `/slack`, `/testing` or `/admin/load`. */
