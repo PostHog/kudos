@@ -9,7 +9,10 @@ import type { MutationContext, QueryContext } from "../operations.ts";
 
 type Keyed = PgTable & { _id: Parameters<typeof eq>[0] };
 
-/** The one row `where` selects, in `order`, or `null`; a second row fails, as `.unique()` did. */
+/**
+ * The one row `where` selects, in `order`, or `null`; a second row fails with `.unique()`'s own error, word for word,
+ * which the analytics boundary recognizes. It gives way to S4's `db/unique.ts` once that lands on main.
+ */
 export async function uniqueRow<Doc>(ctx: QueryContext, table: Keyed, where: SQL | undefined, order: IndexOrder): Promise<Doc | null> {
   const rows = await ctx.tx
     .select()
@@ -17,7 +20,7 @@ export async function uniqueRow<Doc>(ctx: QueryContext, table: Keyed, where: SQL
     .where(where)
     .orderBy(...order.orderBy())
     .limit(2);
-  if (rows.length > 1) throw new Error(`More than one ${getTableName(table)} row where one was expected`);
+  if (rows.length > 1) throw new Error(`unique() query returned more than one result from table ${getTableName(table)}:`);
   return rows[0] ? toDocument<Doc>(table, rows[0]) : null;
 }
 

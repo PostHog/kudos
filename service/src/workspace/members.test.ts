@@ -216,7 +216,7 @@ describe("the directory's members", () => {
     await t.member("U_ALICE");
     await t.member("U_ALICE");
 
-    await expect(t.query((ctx) => lookup(ctx, "T1", "U_ALICE"))).rejects.toThrow("More than one members row");
+    await expect(t.query((ctx) => lookup(ctx, "T1", "U_ALICE"))).rejects.toThrow(new Error("unique() query returned more than one result from table members:"));
   });
 });
 
