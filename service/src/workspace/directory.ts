@@ -1,8 +1,15 @@
-// The module map's skeleton of convex/workspace/directory.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
-// notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
+// The directory of the workspace's people: who each one is, whether a member, their name, time zone, admin flag and
+// profile. Today's convex/workspace/directory.ts; the member reads are ported, and the stubs left throw notPorted until
+// the directory sync (S3 3.2) and the keyset paging they wait on land.
+import { and, eq } from "drizzle-orm";
+import { ReportableError } from "../analytics/exceptions.ts";
+import { toDocument } from "../db/documents.ts";
+import { indexOrder } from "../db/indexOrder.ts";
+import { members } from "../db/schema/index.ts";
+import { rowById, uniqueRow } from "./rows.ts";
 import type { ChatUserId } from "../engine/messageEvent.ts";
 import { directoryEntryValidator } from "./directoryEntry.ts";
-import { memberProfileFields, type MemberProfile } from "./memberProfile.ts";
+import { memberProfileFieldNames, memberProfileFields, type MemberProfile } from "./memberProfile.ts";
 import { z } from "zod";
 import { zv } from "../values.ts";
 import type { Id } from "../db/columns.ts";
@@ -21,55 +28,69 @@ export type MemberFacts =
 export { directoryEntryValidator, type DirectoryEntry } from "./directoryEntry.ts";
 
 export async function lookup(ctx: QueryContext, workspace: string, user: ChatUserId): Promise<MemberFacts | undefined> {
-  throw notPorted("workspace.directory.lookup");
+  const row = await memberRow(ctx, workspace, user);
+  if (row === null) return undefined;
+  if (row.kind === "member") return { kind: "member", member: row._id, timeZone: row.timeZone, admin: row.admin ?? false };
+  return { kind: row.kind };
 }
 
 export async function chatUserOf(ctx: QueryContext, member: MemberId): Promise<{ workspace: string; user: ChatUserId }> {
-  throw notPorted("workspace.directory.chatUserOf");
+  const row = await memberById(ctx, member);
+  if (row === null) throw new ReportableError("no such member in the directory");
+  return { workspace: row.workspace, user: row.user };
 }
 
 export async function emailOf(ctx: QueryContext, member: MemberId): Promise<string | undefined> {
-  throw notPorted("workspace.directory.emailOf");
+  const row = await memberById(ctx, member);
+  return row?.kind === "member" ? row.email : undefined;
 }
 
 export async function isMember(ctx: QueryContext, member: MemberId): Promise<boolean> {
-  throw notPorted("workspace.directory.isMember");
+  return (await memberById(ctx, member))?.kind === "member";
 }
 
 export type NameAndPicture = { name: string | undefined; picture: string | null };
 
 export async function nameAndPictureOf(ctx: QueryContext, member: MemberId): Promise<NameAndPicture> {
-  throw notPorted("workspace.directory.nameAndPictureOf");
+  return (await currentNameAndPictureOf(ctx, member)) ?? { name: undefined, picture: null };
 }
 
 export async function currentNameAndPictureOf(ctx: QueryContext, member: MemberId): Promise<NameAndPicture | null> {
-  throw notPorted("workspace.directory.currentNameAndPictureOf");
+  const row = await memberById(ctx, member);
+  return row?.kind === "member" ? { name: row.name, picture: row.picture ?? null } : null;
 }
 
 export async function isAPersonOf(ctx: QueryContext, workspace: string, member: MemberId): Promise<boolean> {
-  throw notPorted("workspace.directory.isAPersonOf");
+  const row = await memberById(ctx, member);
+  return row !== null && row.workspace === workspace && row.kind !== "bot";
 }
 
 export async function timeZoneOf(ctx: QueryContext, member: MemberId): Promise<string | null> {
-  throw notPorted("workspace.directory.timeZoneOf");
+  const row = await memberById(ctx, member);
+  return row?.kind === "member" ? (row.timeZone ?? null) : null;
 }
 
 export async function currentMemberOfUser(ctx: QueryContext, workspace: string, user: ChatUserId): Promise<{ member: MemberId; name: string | undefined } | undefined> {
-  throw notPorted("workspace.directory.currentMemberOfUser");
+  const row = await memberRow(ctx, workspace, user);
+  return row?.kind === "member" ? { member: row._id, name: row.name } : undefined;
 }
 
 export async function displayNameOf(ctx: QueryContext, member: MemberId): Promise<string | undefined> {
-  throw notPorted("workspace.directory.displayNameOf");
+  const row = await memberById(ctx, member);
+  return row?.kind === "member" ? row.name : undefined;
 }
 
 export async function profileNameOf(ctx: QueryContext, member: MemberId): Promise<string | undefined> {
-  throw notPorted("workspace.directory.profileNameOf");
+  const row = await memberById(ctx, member);
+  return row?.kind === "member" ? (row.displayName ?? row.realName) : undefined;
 }
 
 export type PersonFacts = { workspace: string; user: ChatUserId; admin: boolean } & MemberProfile;
 
 export async function personFactsOf(ctx: QueryContext, member: MemberId): Promise<PersonFacts | null> {
-  throw notPorted("workspace.directory.personFactsOf");
+  const row = await memberById(ctx, member);
+  if (row?.kind !== "member") return null;
+  return { workspace: row.workspace, user: row.user, admin: row.admin ?? false, ...profileOf(row) };
 }
 
 export async function adminsPageIn(ctx: QueryContext, workspace: string, cursor: string | null, numItems: number): Promise<{ admins: string[]; continueCursor: null | string }> {
@@ -109,17 +130,18 @@ export async function record(ctx: MutationContext, { workspace, user, entry, asO
 }
 
 export async function currentMembersOf(ctx: QueryContext, workspace: string): Promise<MemberId[]> {
-  throw notPorted("workspace.directory.currentMembersOf");
+  return (await currentMemberRowsIn(ctx, workspace)).map(({ _id }) => _id);
 }
 
 export type NamedMember = { member: MemberId; fullName: string };
 
 export async function currentMembersNamedIn(ctx: QueryContext, workspace: string): Promise<NamedMember[]> {
-  throw notPorted("workspace.directory.currentMembersNamedIn");
+  return (await currentMemberRowsIn(ctx, workspace)).map((row) => ({ member: row._id, fullName: fullNameIn(row) }));
 }
 
 export async function fullNameOf(ctx: QueryContext, member: MemberId): Promise<string> {
-  throw notPorted("workspace.directory.fullNameOf");
+  const row = await memberById(ctx, member);
+  return row?.kind === "member" ? fullNameIn(row) : "";
 }
 
 export type Person = { user: ChatUserId; name: string | undefined; picture: string | null; former: boolean };
@@ -129,11 +151,16 @@ export type People = Map<MemberId, Person>;
 export type MemberRows = Doc<"members">[];
 
 export function memberRowsIn(ctx: QueryContext, workspace: string): Promise<MemberRows> {
-  throw notPorted("workspace.directory.memberRowsIn");
+  return ctx.tx
+    .select()
+    .from(members)
+    .where(eq(members.workspace, workspace))
+    .orderBy(...byUser.orderBy())
+    .then((rows) => rows.map((row) => toDocument<Doc<"members">>(members, row)));
 }
 
 export async function peopleIn(ctx: QueryContext, workspace: string): Promise<People> {
-  throw notPorted("workspace.directory.peopleIn");
+  return peopleOf(await memberRowsIn(ctx, workspace));
 }
 
 export function peopleOf(rows: MemberRows): People {
@@ -141,9 +168,31 @@ export function peopleOf(rows: MemberRows): People {
 }
 
 export async function teammatesOf(ctx: QueryContext, workspace: string, member: MemberId): Promise<MemberId[]> {
-  throw notPorted("workspace.directory.teammatesOf");
+  return (await currentMembersOf(ctx, workspace)).filter((teammate) => teammate !== member);
 }
 
 export function isOlder(asOf: number, known: number | undefined) {
   return known !== undefined && asOf < known;
+}
+
+function fullNameIn(row: Doc<"members">): string {
+  return row.realName ?? row.name ?? "";
+}
+
+async function currentMemberRowsIn(ctx: QueryContext, workspace: string): Promise<MemberRows> {
+  return (await memberRowsIn(ctx, workspace)).filter(({ kind }) => kind === "member");
+}
+
+function profileOf(row: Doc<"members">): MemberProfile {
+  return Object.fromEntries(memberProfileFieldNames.flatMap((field) => (row[field] === undefined ? [] : [[field, row[field]]])));
+}
+
+const byUser = indexOrder(members, ["workspace", "user"]);
+
+function memberById(ctx: QueryContext, member: MemberId): Promise<Doc<"members"> | null> {
+  return rowById<Doc<"members">>(ctx, members, member);
+}
+
+function memberRow(ctx: QueryContext, workspace: string, user: ChatUserId): Promise<Doc<"members"> | null> {
+  return uniqueRow<Doc<"members">>(ctx, members, and(eq(members.workspace, workspace), eq(members.user, user)), byUser);
 }
