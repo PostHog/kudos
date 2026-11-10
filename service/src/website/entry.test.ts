@@ -3,6 +3,7 @@
 // The effects themselves are S17's `rememberSignedInMember` and S3's verification, so the cases that reach them wait.
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { useTestBackend, type TestBackend } from "../../testing/backend.ts";
+import { slackError } from "../../testing/fakeSlack.ts";
 import { definitionsStored, offForEveryone, onForEveryone, postHogDeciding } from "../../testing/flags.ts";
 import { waitsOn } from "../../testing/waiting.ts";
 import { workspaceKeyOf } from "../analytics/outbox.ts";
@@ -105,15 +106,17 @@ describe("an entry that writes nothing", () => {
   test("is the website's own request with no arguments, refused before anyone is looked up", async () => {
     const t = backend();
     await websiteOpen(t);
-    await juno(t);
+    // An email only Slack could resolve, with Slack failing: looking anyone up first would answer 500.
+    t.slack.answering("users.lookupByEmail", ...Array.from({ length: 5 }, () => slackError("internal_error")));
+    const stranger = as("stranger@example.com");
 
-    const crossSite = await t.app.request("/api/entry", { method: "POST", headers: { "content-type": "application/json", "sec-fetch-site": "cross-site", [apiHeader]: "1", ...as("juno@example.com") }, body: "{}" });
-    const withoutHeader = await t.app.request("/api/entry", { method: "POST", headers: { "content-type": "application/json", ...as("juno@example.com") }, body: "{}" });
-    const withArguments = await sent(t, "/api/entry", as("juno@example.com"), JSON.stringify({ as: "U_RAVI" }));
-    const byGet = await t.app.request("/api/entry", { headers: { [apiHeader]: "1", ...as("juno@example.com") } });
+    const crossSite = await t.app.request("/api/entry", { method: "POST", headers: { "content-type": "application/json", "sec-fetch-site": "cross-site", [apiHeader]: "1", ...stranger }, body: "{}" });
+    const withoutHeader = await t.app.request("/api/entry", { method: "POST", headers: { "content-type": "application/json", ...stranger }, body: "{}" });
+    const withArguments = await sent(t, "/api/entry", stranger, JSON.stringify({ as: "U_RAVI" }));
+    const byGet = await t.app.request("/api/entry", { headers: { [apiHeader]: "1", ...stranger } });
 
     expect([crossSite.status, withoutHeader.status, withArguments.status, byGet.status]).toEqual([403, 403, 400, 404]);
-    expect(t.slack.calls, "nobody was looked up").toEqual([]);
+    expect(await t.seed.all("users")).toEqual([]);
   });
 });
 
