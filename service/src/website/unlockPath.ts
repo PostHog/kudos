@@ -2,7 +2,7 @@
 // notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
 import { scheduled, type ScheduledFeature } from "../unlocks/schedule.ts";
 import type { Feature } from "../unlocks/feature.ts";
-import { type MemberUnlock } from "../unlocks/unlocks.ts";
+import type { MemberUnlock } from "../unlocks/unlocks.ts";
 import type { VerifiedMember } from "./memberQuery.ts";
 import type { QueryContext } from "../operations.ts";
 import { notPorted } from "../notPorted.ts";

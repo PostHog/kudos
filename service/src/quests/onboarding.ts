@@ -3,8 +3,8 @@
 import type { KudosGivenEvent } from "../bus/events.ts";
 import type { MemberId } from "../workspace/directory.ts";
 import { rewardKeyOf } from "./crates.ts";
-import { type QuestFinish } from "./finishes.ts";
-import { type Reward } from "./journey.ts";
+import type { QuestFinish } from "./finishes.ts";
+import type { Reward } from "./journey.ts";
 import { journeyGoalOf } from "./journeyCopy.ts";
 import type { Moved, MovedQuest, ProgressRead, QuestProgress } from "./progress.ts";
 import type { JourneyStep } from "./step.ts";

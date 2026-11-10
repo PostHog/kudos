@@ -2,12 +2,12 @@
 // notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
 import { emojiArtPictureOf } from "../album/emojiCatalogue.ts";
 import { rarestFindsIn, type AlbumHoggie, type AlbumHoggies } from "../album/albumHoggies.ts";
-import { type StoredHolder } from "../companyProfiles/storedFaces.ts";
+import type { StoredHolder } from "../companyProfiles/storedFaces.ts";
 import type { TeamCrestArt } from "../companyProfiles/teams.ts";
 import type { PersonTeam } from "../album/personPage.ts";
 import type { Rarity } from "../album/hoggies/catalogue.ts";
 import { hoggieSharePictureOf } from "../album/items/shareArt.ts";
-import { type BoardPlace, type Boards, type Standing } from "../leaderboard/boards.ts";
+import type { BoardPlace, Boards, Standing } from "../leaderboard/boards.ts";
 import type { MemberId } from "../workspace/directory.ts";
 import type { QueryContext } from "../operations.ts";
 import { notPorted } from "../notPorted.ts";

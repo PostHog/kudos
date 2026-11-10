@@ -1,7 +1,7 @@
 // The module map's skeleton of convex/album/packs.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
 // notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
 import { kudosGivenEventValidator } from "../bus/events.ts";
-import { type MessageRef } from "../engine/messageEvent.ts";
+import type { MessageRef } from "../engine/messageEvent.ts";
 import type { CrateKey } from "./hoggies/crateKey.ts";
 import type { MemberId } from "../workspace/directory.ts";
 import { z } from "zod";
