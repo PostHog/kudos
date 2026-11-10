@@ -46,7 +46,6 @@ const awaitingPort = new Set([
   "leaderboard.groupTotals.countAwardsAttributed",
   "leaderboard.totals.countKudosGiven",
   "progression.questRewards.payQuestFinished",
-  "quests.newWeek.sweep",
   "slack.appHome.publishHome",
   "slack.directory.checkDirectory",
   "slack.userGroups.refreshMembers",
