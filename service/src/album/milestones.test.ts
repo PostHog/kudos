@@ -1,0 +1,274 @@
+// The album's milestones over the service: each tier earned once with its item, the hoggies tier dated by the find that
+// reached it, and the backfills that walk a workspace's members by the directory's cursor and then every sticker
+// holder by the album's own index, a job a page.
+//
+// The directory's pages and chat users (S3), the hoggie collection (S10), team pages (S10), the tier items (S8) and the
+// given messages (S4) are still stubs in the module map. Here they read a world the test gives, through the map's own
+// signatures, so this file proves the album's side today. The faithful port of convex/album/milestones.test.ts waits on
+// those stacks.
+import { eq } from "drizzle-orm";
+import { beforeEach, describe, expect, test, vi } from "vitest";
+import { useTestDatabase } from "../../testing/database.ts";
+import { seeder } from "../../testing/seed.ts";
+import { createClock } from "../clock.ts";
+import { toDocument } from "../db/documents.ts";
+import { jobs } from "../db/schema/service.ts";
+import type { Log } from "../log.ts";
+import { createOperations, type MutationContext } from "../operations.ts";
+import type { MemberId } from "../workspace/directory.ts";
+import { milestoneCatalogue } from "./milestoneCatalogue.ts";
+import {
+  holdersScannedAMutation,
+  kudosGivenMovedSince,
+  membersPerMilestonePage,
+  milestonesOf,
+  recordMilestonesAfterAHoggieDrop,
+  recordMilestonesInWorkspace,
+  recordMilestonesOf,
+  recordMilestonesOfStickerHolders,
+  tiersEarnedBy,
+} from "./milestones.ts";
+import { anEmptyWeek } from "./tallies.ts";
+
+const world = vi.hoisted(() => ({
+  members: [] as Array<{ member: string; workspace: string }>,
+  hoggieFinds: new Map<string, number[]>(),
+  pages: new Map<string, Array<{ state: string; held: number }>>(),
+  pagesRead: [] as string[],
+  items: [] as Array<{ member: string; milestone: string; tier: string; at: number }>,
+  given: null as null | Array<{ created: number; awards: Array<{ award: string }>; annotations: Record<string, unknown> }>,
+}));
+
+vi.mock("../workspace/directory.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../workspace/directory.ts")>()),
+  membersPageIn: async (_ctx: unknown, workspace: string, cursor: string | null, numItems: number) => {
+    const members = world.members.filter((each) => each.workspace === workspace).map(({ member }) => member);
+    const from = cursor === null ? 0 : Number(cursor);
+    return { members: members.slice(from, from + numItems), continueCursor: from + numItems < members.length ? String(from + numItems) : null };
+  },
+  chatUserOf: async (_ctx: unknown, member: string) => {
+    const found = world.members.find((each) => each.member === member);
+    if (!found) throw new Error(`No member ${member}`);
+    return { workspace: found.workspace, user: `U_${member}` };
+  },
+}));
+
+vi.mock("./hoggies/collection.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./hoggies/collection.ts")>()),
+  collectionOf: async (_ctx: unknown, member: string) => ({
+    rarities: [],
+    hoggies: (world.hoggieFinds.get(member) ?? []).map((firstAt, index) => ({ slug: `h${index}`, count: 1, firstAt })),
+    owned: 0,
+    total: 0,
+  }),
+}));
+
+vi.mock("./teamPages.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./teamPages.ts")>()),
+  teamPagesOf: async (_ctx: unknown, { member }: { member: string }) => {
+    world.pagesRead.push(member);
+    return world.pages.get(member) ?? [];
+  },
+}));
+
+vi.mock("./items/achievements.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./items/achievements.ts")>()),
+  earnTierItem: async (_ctx: unknown, { member }: { member: string }, { milestone, tier }: { milestone: string; tier: string }, at: number) => {
+    world.items.push({ member, milestone, tier, at });
+  },
+}));
+
+vi.mock("../engine/awards.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../engine/awards.ts")>()),
+  messagesGivenDecidedAfter: async () => world.given,
+}));
+
+const database = useTestDatabase();
+const quiet: Log = { info: () => {}, error: () => {} };
+const start = Date.parse("2026-10-13T10:00:00Z");
+const minute = 60_000;
+const alice = "m_alice" as MemberId;
+const bob = "m_bob" as MemberId;
+
+const clock = createClock({ real: () => start });
+const operations = createOperations({ pool: database.pool, clock, log: quiet, retryDelayMs: () => 1 });
+const seed = seeder(operations);
+
+beforeEach(() => {
+  world.members.length = 0;
+  world.hoggieFinds.clear();
+  world.pages.clear();
+  world.pagesRead.length = 0;
+  world.items.length = 0;
+  world.given = null;
+});
+
+describe("a tier is earned once, with its item", () => {
+  test("a first thoughtful kudos and a first face earn their bronze tiers, each item given at the moment", async () => {
+    member(alice, "T1");
+    await gaveThoughtfully(alice, 1);
+    await holds(alice, bob);
+
+    const reached = await mutation((ctx) => recordMilestonesOf(ctx, { workspace: "T1", member: alice }, start));
+
+    expect(reached).toEqual([
+      { milestone: "people", tier: "bronze" },
+      { milestone: "thoughtful", tier: "bronze" },
+    ]);
+    expect(world.items).toEqual([
+      { member: alice, milestone: "people", tier: "bronze", at: start },
+      { member: alice, milestone: "thoughtful", tier: "bronze", at: start },
+    ]);
+    expect(await mutation((ctx) => recordMilestonesOf(ctx, { workspace: "T1", member: alice }, start + minute)), "a second run earns nothing").toEqual([]);
+    expect(await seed.all("milestoneTiers")).toHaveLength(2);
+  });
+
+  test("the hoggies tier is dated by the find that reached it, and the people tiers read the team pages only when someone is held", async () => {
+    member(alice, "T1");
+    const finds = Array.from({ length: 12 }, (_, index) => start - (12 - index) * minute);
+    world.hoggieFinds.set(alice, finds.toReversed());
+
+    await mutation((ctx) => recordMilestonesOf(ctx, { workspace: "T1", member: alice }, start));
+
+    expect(await seed.all("milestoneTiers")).toEqual([expect.objectContaining({ member: alice, milestone: "hoggies", tier: "bronze", at: finds[9], catalogue: milestoneCatalogue.version })]);
+    expect(world.pagesRead, "nobody held, so no team page is read").toEqual([]);
+  });
+
+  test("full team pages and pages with someone held count for teams and reach", async () => {
+    member(alice, "T1");
+    await holds(alice, bob);
+    world.pages.set(alice, [
+      { state: "unlocked", held: 3 },
+      { state: "locked", held: 1 },
+      { state: "locked", held: 1 },
+    ]);
+
+    await mutation((ctx) => recordMilestonesOf(ctx, { workspace: "T1", member: alice }, start));
+
+    expect(await query((ctx) => tiersEarnedBy(ctx, alice))).toEqual([
+      { milestone: "people", tier: "bronze" },
+      { milestone: "teams", tier: "bronze" },
+      { milestone: "reach", tier: "bronze" },
+    ]);
+    const answer = await query((ctx) => milestonesOf(ctx, { workspace: "T1", member: alice }, []));
+    expect(answer.find(({ id }) => id === "people")).toMatchObject({ count: 1, tiers: [expect.objectContaining({ tier: "bronze", earnedAt: start }), expect.objectContaining({ tier: "silver", earnedAt: null }), expect.anything(), expect.anything()] });
+    expect(answer.find(({ id }) => id === "teams"), "milestonesOf counts the pages it is given").toMatchObject({ count: 0 });
+  });
+
+  test("a hoggie drop records the dropped member's milestones at the drop", async () => {
+    member(alice, "T1");
+    world.hoggieFinds.set(alice, Array.from({ length: 10 }, (_, index) => start - index * minute));
+
+    await mutation((ctx) => recordMilestonesAfterAHoggieDrop(ctx, { event: { type: "hoggieDropped", workspace: "T1", member: alice, crate: "quest:1", hoggie: "h1", rarity: "common", copy: 1, at: start + minute } }));
+
+    expect(world.items).toEqual([{ member: alice, milestone: "hoggies", tier: "bronze", at: start + minute }]);
+  });
+});
+
+describe("the backfills walk by cursor, a job a page", () => {
+  test(`members go ${membersPerMilestonePage} a job by the directory's cursor, sticker holders are left for the holders' walk, which follows once`, async () => {
+    const crowd = Array.from({ length: membersPerMilestonePage + 5 }, (_, index) => `m_${String(index).padStart(2, "0")}` as MemberId);
+    for (const each of crowd) {
+      member(each, "T1");
+      await gaveThoughtfully(each, 1);
+    }
+    await holds(crowd[0]!, crowd[1]!);
+
+    await mutation((ctx) => recordMilestonesInWorkspace(ctx, { workspace: "T1", cursor: null }));
+    expect(await pending()).toEqual([{ name: "album.milestones.recordMilestonesInWorkspace", args: { workspace: "T1", cursor: String(membersPerMilestonePage) } }]);
+    await mutation((ctx) => recordMilestonesInWorkspace(ctx, { workspace: "T1", cursor: String(membersPerMilestonePage) }));
+
+    const tiered = new Set((await seed.all("milestoneTiers")).map(({ member }) => member));
+    expect(tiered.size, "everyone but the one sticker holder").toBe(crowd.length - 1);
+    expect(tiered.has(crowd[0]!)).toBe(false);
+    expect(world.pagesRead, "the workspace walk reads no team page").toEqual([]);
+    expect((await pending()).at(-1)).toEqual({ name: "album.milestones.recordMilestonesOfStickerHolders", args: { workspace: "T1", after: null } });
+  });
+
+  test("the holders' walk records one holder of the workspace a job, in member order, skipping other workspaces, and ends", async () => {
+    for (const [each, workspace] of [["m_a", "T1"], ["m_b", "T2"], ["m_c", "T1"]] as const) {
+      member(each as MemberId, workspace);
+      await holds(each as MemberId, bob);
+    }
+
+    const walked: string[] = [];
+    let after: MemberId | null = null;
+    for (let job = 0; job < 5; job++) {
+      await mutation((ctx) => recordMilestonesOfStickerHolders(ctx, { workspace: "T1", after }));
+      walked.push(...world.items.splice(0).map(({ member }) => member));
+      const next = (await pending()).filter(({ name }) => name === "album.milestones.recordMilestonesOfStickerHolders").at(-1);
+      await clearJobs();
+      if (next === undefined) break;
+      after = (next.args as { after: MemberId }).after;
+    }
+
+    expect(walked).toEqual(["m_a", "m_c"]);
+  });
+
+  test(`a job scans at most ${holdersScannedAMutation} holders of other workspaces, then hands on where it stopped`, async () => {
+    const others = Array.from({ length: holdersScannedAMutation + 1 }, (_, index) => `m_${String(index).padStart(3, "0")}` as MemberId);
+    for (const each of others) {
+      member(each, "T2");
+      await holds(each, bob);
+    }
+
+    await mutation((ctx) => recordMilestonesOfStickerHolders(ctx, { workspace: "T1", after: null }));
+
+    expect(world.items).toEqual([]);
+    expect(await pending()).toEqual([{ name: "album.milestones.recordMilestonesOfStickerHolders", args: { workspace: "T1", after: others[holdersScannedAMutation - 1] } }]);
+  });
+});
+
+describe("thoughtful progress since a moment", () => {
+  test("counts the tallied awards decided since, up to the next step, from what was given before", async () => {
+    await gaveThoughtfully(alice, 3);
+    await seed.insert("talliedAwards", { award: "a1", everyKudos: true });
+    await seed.insert("talliedAwards", { award: "a2" });
+    world.given = [
+      { created: start - minute, awards: [{ award: "a1" }], annotations: {} },
+      { created: start + minute, awards: [{ award: "a2" }], annotations: { gate: { version: 1, thoughtful: true, words: 6 } } },
+      { created: start, awards: [{ award: "a3" }], annotations: {} },
+    ];
+
+    const moved = await query((ctx) => kudosGivenMovedSince(ctx, alice, { since: start - 2 * minute, until: start, mostAwards: 50 }));
+
+    expect(moved, "two of three given count; the one after `until` doesn't move it yet").toEqual([{ name: "Generous soul", from: 1, to: 2, of: 25 }]);
+  });
+
+  test("nothing given since moves nothing", async () => {
+    expect(await query((ctx) => kudosGivenMovedSince(ctx, alice, { since: start, until: start, mostAwards: 50 }))).toEqual([]);
+  });
+});
+
+function member(member: MemberId, workspace: string) {
+  world.members.push({ member, workspace });
+}
+
+async function gaveThoughtfully(member: MemberId, awards: number) {
+  await seed.insert("weekTallies", { member, week: "2026-10-12", ...anEmptyWeek(), thoughtfulGiven: awards });
+}
+
+async function holds(member: MemberId, person: MemberId) {
+  await seed.insert("albumStickers", { member, person, from: "history", at: start - minute });
+}
+
+function mutation<T>(handler: (ctx: MutationContext) => Promise<T>): Promise<T> {
+  return operations.mutation("test.album.milestones", handler);
+}
+
+function query<T>(handler: Parameters<typeof operations.query<T>>[1]): Promise<T> {
+  return operations.query("test.album.milestones.read", handler);
+}
+
+async function pending() {
+  return operations.query("test.album.jobs", async ({ tx }) => {
+    const rows = await tx.select().from(jobs).where(eq(jobs.state, "pending"));
+    return rows.map((row) => toDocument<{ name: string; args: unknown; _creationTime: number }>(jobs, row)).toSorted((a, b) => a._creationTime - b._creationTime).map(({ name, args }) => ({ name, args }));
+  });
+}
+
+async function clearJobs() {
+  await operations.mutation("test.album.clearJobs", async ({ tx }) => {
+    await tx.delete(jobs);
+  });
+}
