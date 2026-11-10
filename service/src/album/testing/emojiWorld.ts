@@ -11,7 +11,8 @@ import { standardEmojiListed, standardEmojiNamed, standardEmojiStartingWith } fr
 
 type ListedEmoji = { name: string; image: string };
 type CustomEmoji = ListedEmoji & { aliasOf?: string };
-type Member = { workspace: string; user: string; fullName: string; current: boolean; admin?: boolean };
+// `name` is the Slack display name (`members.name`), the full name unless a test gives one; `picture` is Slack's.
+type Member = { workspace: string; user: string; fullName: string; name?: string; picture?: string; current: boolean; admin?: boolean };
 
 export const emojiWorld = {
   members: new Map<string, Member>(),
@@ -38,7 +39,7 @@ export const emojiWorld = {
     for (const on of Object.values(this.flags)) on.clear();
   },
   member(member: string, fields: Partial<Member> & { fullName: string }) {
-    this.members.set(member, { workspace: "T1", user: `U_${member}`, current: true, ...fields });
+    this.members.set(member, { workspace: "T1", user: `U_${member}`, name: fields.fullName, current: true, ...fields });
   },
   slackHas(workspace: string, ...emoji: CustomEmoji[]) {
     this.customEmoji.set(workspace, [...(this.customEmoji.get(workspace) ?? []), ...emoji]);
@@ -80,7 +81,8 @@ const slackEmoji = {
   },
 };
 
-// convex/workspace/directory.ts: a member row of kind "member" is current; a former member keeps their row.
+// convex/workspace/directory.ts: a member row of kind "member" is current; a former member keeps their row. A workspace's
+// rows come in its by_user index's order: by Slack user, then by creation, which is the order the test made them in.
 const directory = {
   personFactsOf: async (_ctx: unknown, member: string) => {
     const found = emojiWorld.members.get(member);
@@ -91,26 +93,51 @@ const directory = {
     return found?.current ? found.fullName : "";
   },
   currentMembersNamedIn: async (_ctx: unknown, workspace: string) =>
-    [...emojiWorld.members].filter(([, { workspace: of, current }]) => of === workspace && current).map(([member, { fullName }]) => ({ member, fullName })),
+    [...emojiWorld.members]
+      .filter(([, { workspace: of, current }]) => of === workspace && current)
+      .toSorted(([, one], [, other]) => (one.user < other.user ? -1 : one.user > other.user ? 1 : 0))
+      .map(([member, { fullName }]) => ({ member, fullName })),
 };
 
 const isEarned = (member: string, id: string) => emojiWorld.earned.get(member)?.has(id) ?? false;
+const holdsDrop = (member: string, name: string) => emojiWorld.drops.get(member)?.has(name) ?? false;
+// convex/workspace/slackEmoji.ts's withoutSkinTone; that module may be the one a mock factory is loading.
+const withoutSkinTone = (emoji: string) => emoji.replace(/::skin-tone-[2-6]$/, "");
+// convex/album/earnedEmojis.ts: up to this many distinct names are looked up one by one, more through the whole registry.
+const mostEmojiNamesLookedUpOneByOne = 50;
+type NamedEmoji = { name: string; emoji: string; dropped: boolean };
 
-// convex/album/earnedEmojis.ts: what the member earned, a random drop by its Slack name.
+// convex/album/earnedEmojis.ts: what the member earned, a random drop by its Slack name. A hype face is the current
+// member's display name and Slack picture, "A teammate" and the hype emblem where the row is gone, a former member's, or
+// has neither; no company face is stored in this world.
 const earnedEmojis = {
   isEarnedBy: async (_ctx: unknown, member: string, id: string) => isEarned(member, id),
-  holdsEarnedEmoji: async (_ctx: unknown, member: string, emoji: string) => (emoji.startsWith("random:") ? (emojiWorld.drops.get(member)?.has(emoji.slice("random:".length)) ?? false) : isEarned(member, emoji)),
-  hypeFaceOf: async (_ctx: unknown, _workspace: string, person: string) => ({ name: emojiWorld.members.get(person)?.fullName ?? "Someone", picture: `https://faces.example/${person}.png` }),
+  holdsEarnedEmoji: async (_ctx: unknown, member: string, emoji: string) => (emoji.startsWith("random:") ? holdsDrop(member, emoji.slice("random:".length)) : isEarned(member, emoji)),
+  hypeFaceOf: async (_ctx: unknown, _workspace: string, person: string) => {
+    const found = emojiWorld.members.get(person);
+    const current = found?.current ? found : undefined;
+    return { name: current?.name ?? "A teammate", picture: current?.picture ?? "/emoji/hype.png" };
+  },
   earnedEmojisAmong: async (ctx: QueryContext, workspace: string, member: string, names: string[], counts: (emoji: string) => boolean | Promise<boolean>) => {
     // Read when called, so loading this module never loads the album's while a mock factory runs.
     const { namesHeldIn } = await import("../emojiNames.ts");
     const registry = await namesHeldIn(ctx, workspace);
+    const distinct = [...new Set(names)];
+    // One by one, a drop and a registered name are found by the bare name; through the registry, a drop by the name as
+    // written. Either way the claim keeps the name as written, skin tone and all.
+    const named: NamedEmoji[] =
+      distinct.length <= mostEmojiNamesLookedUpOneByOne
+        ? distinct.flatMap((name) => {
+            const bare = withoutSkinTone(name);
+            const registered = registry.get(bare);
+            return [...(holdsDrop(member, bare) ? [{ name, emoji: `random:${bare}`, dropped: true }] : []), ...(registered === undefined ? [] : [{ name, emoji: registered, dropped: false }])];
+          })
+        : distinct.flatMap((name) => {
+            const registered = registry.get(withoutSkinTone(name));
+            return [...(holdsDrop(member, name) ? [{ name, emoji: `random:${name}`, dropped: true }] : []), ...(registered === undefined ? [] : [{ name, emoji: registered, dropped: false }])];
+          });
     const earned = new Map<string, string>();
-    for (const name of new Set(names)) {
-      const dropped = emojiWorld.drops.get(member)?.has(name) ?? false;
-      const candidates = [...(dropped ? [{ emoji: `random:${name}`, dropped }] : []), ...(registry.has(name) ? [{ emoji: registry.get(name)!, dropped: false }] : [])];
-      for (const { emoji, dropped: isDrop } of candidates) if (!earned.has(name) && (await counts(emoji)) && (isDrop || isEarned(member, emoji))) earned.set(name, emoji);
-    }
+    for (const { name, emoji, dropped } of named) if (!earned.has(name) && (await counts(emoji)) && (dropped || isEarned(member, emoji))) earned.set(name, emoji);
     return [...earned].map(([name, emoji]) => ({ name, emoji }));
   },
 };

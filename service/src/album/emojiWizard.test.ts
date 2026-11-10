@@ -359,6 +359,25 @@ describe("AL80: behind admin-hype-emojis, the maintainer lists every current mem
     expect(unheld).toEqual(unheld.toSorted((one, other) => one.localeCompare(other)));
   });
 
+  test("unnamed namesakes take the hinted names in the directory's Slack user order, not the order they joined in", async () => {
+    emojiWorld.member("m_sam_late", { fullName: "Sam Rivera", user: "UZ" });
+    emojiWorld.member("m_sam_early", { fullName: "Sam Rivera", user: "UA" });
+
+    const hinted = (await appEmojisOf({ everyHype: true })).rows.filter(({ from }) => from === "Sam Rivera").map(({ emoji, name }) => [emoji, name] as const);
+
+    expect(new Map(hinted)).toEqual(new Map<string, string>([["hype:m_sam_early", "sam-rivera-hype"], ["hype:m_sam_late", "sam-rivera-2-hype"]]));
+  });
+
+  test("a hype row shows the member's display name and Slack picture, and the hype emblem and A teammate where Slack has neither", async () => {
+    emojiWorld.member("m_pictured", { fullName: "Pia Lindqvist", name: "pia", picture: "https://images.example/pia.png" });
+    emojiWorld.member("m_bare", { fullName: "Bo Lund", name: undefined });
+
+    const rows = (await appEmojisOf({ everyHype: true })).rows;
+
+    expect(rows.find(({ emoji }) => emoji === `hype:${"m_pictured" as MemberId}`)).toMatchObject({ from: "pia", picture: "https://images.example/pia.png" });
+    expect(rows.find(({ emoji }) => emoji === `hype:${"m_bare" as MemberId}`)).toMatchObject({ from: "A teammate", picture: "/emoji/hype.png" });
+  });
+
   test("a former member's hype emoji stays off the list, named or not", async () => {
     await aliceCollects(lanterns[0]!);
     for (const left of lanterns) emojiWorld.members.get(left)!.current = false;

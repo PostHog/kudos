@@ -147,6 +147,14 @@ describe("the earned emoji hook claims a kudos message's earned emojis for the p
     ]);
   });
 
+  test("an earned emoji with a skin tone counts under the name as written, one by one and in a message of many emoji", async () => {
+    emojiWorld.flags.kudosEmojiPicks.clear();
+    const many = Array.from({ length: 60 }, (_, n) => `not-earned-${n}`);
+
+    expect(await claimsOf(members.alice, ["level-5::skin-tone-3"], [])).toEqual([{ name: "level-5::skin-tone-3" }]);
+    expect(await claimsOf(members.alice, [...many, "level-5::skin-tone-3"], [])).toEqual([{ name: "level-5::skin-tone-3" }]);
+  });
+
   test("a message with no giver claims nothing", async () => {
     expect(await t.run((ctx) => earnedEmojiHook.kudosEmoji!(ctx, { workspace: "T1", giver: undefined }, { emoji: ["team-otters"], mentions: [] }))).toEqual([]);
   });
