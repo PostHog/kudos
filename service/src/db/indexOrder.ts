@@ -4,16 +4,26 @@
 // - `after`: the rows that follow a document in that order, for keyset paging. A plain row-value comparison,
 //   `(a, b) > ($1, $2)`, yields NULL where a field is NULL and drops those rows, so this one is spelled out field by
 //   field: equal on every earlier field and after on this one, where both "equal" and "after" know NULL.
-import { and, eq, getTableColumns, gt, isNotNull, isNull, lt, or, sql, type Column, type SQL } from "drizzle-orm";
+// - Paging: an index over a jsonb field can't be paged. Postgres orders jsonb by its own rules, not Convex's, and a
+//   missing field (SQL NULL) and a JSON null would share one place, so a walk could repeat or skip rows.
+import { and, eq, getTableColumns, getTableName, gt, isNotNull, isNull, lt, or, sql, type Column, type SQL } from "drizzle-orm";
 import type { PgTable } from "drizzle-orm/pg-core";
 
 export type Direction = "asc" | "desc";
 
 export interface IndexOrder {
+  /** The table and the index's fields, `users(chatIdentity$workspace, chatIdentity$user)`. */
+  readonly name: string;
   /** The index's ORDER BY, `_creationTime` and `_id` last. */
   orderBy(direction?: Direction): SQL[];
   /** Holds for the rows after `document` in this order: a document as `toDocument` reads it, a missing field absent. */
   after(document: Readonly<Record<string, unknown>>, direction?: Direction): SQL;
+  /** The part of `document` its place in this order needs: the index's fields, `_creationTime` and `_id`. `after` takes it. */
+  keyOf(document: Readonly<Record<string, unknown>>): Record<string, unknown>;
+  /** Whether `place` is one `keyOf` could give: each key there, of its column's kind, null only where it may be missing. */
+  isPlace(place: unknown): place is Record<string, unknown>;
+  /** Throws when the index can't be paged, because a field of it is stored as jsonb; `after` and `keyOf` throw too. */
+  refuseUnpageable(): void;
 }
 
 /**
@@ -28,33 +38,81 @@ export function indexOrder<Table extends PgTable>(table: Table, fields: Readonly
     if (!column) throw new Error(`The table has no field ${field}`);
     // A nested field's generated column, `chatIdentity$workspace`, holds the document's `chatIdentity.workspace`.
     const path = field.split("$");
-    const key: Key = { expression: column, valueOf: (document) => valueAt(document, path) };
+    const key: Key = { expression: column, path, valueOf: (document) => valueAt(document, path), accepts: acceptsOf(column) };
     if (column.getSQLType() !== "double precision") return [key];
     // Postgres holds -0 equal to 0, where Convex orders -0 first: a second key tells them apart, false for -0.
     const zeroSign: Key = {
       expression: sql`(${column}::text <> '-0')`,
+      path,
       valueOf: (document) => {
         const value = key.valueOf(document);
         return value === null ? null : !Object.is(value, -0);
       },
+      accepts: key.accepts,
     };
     return [key, zeroSign];
   });
 
-  return {
+  const name = `${getTableName(table)}(${fields.join(", ")})`;
+  const jsonb = fields.filter((field) => all[field]!.getSQLType() === "jsonb");
+  const refuseUnpageable = () => {
+    if (jsonb.length > 0) throw new Error(`${name} can't be paged: ${jsonb.join(", ")} is stored as jsonb, which Postgres orders unlike Convex`);
+  };
+
+  const order: IndexOrder = {
+    name,
+    refuseUnpageable,
     orderBy: (direction = "asc") => keys.map(({ expression }) => (direction === "asc" ? sql`${expression} asc nulls first` : sql`${expression} desc nulls last`)),
     after(document, direction = "asc") {
+      refuseUnpageable();
       const values = keys.map((key) => key.valueOf(document));
       const terms = keys.map((key, i) => and(...keys.slice(0, i).map((earlier, j) => same(earlier.expression, values[j])), follows(key.expression, values[i], direction)));
       return or(...terms)!;
     },
+    keyOf(document) {
+      refuseUnpageable();
+      const key: Record<string, unknown> = {};
+      for (const { path } of keys) {
+        let into = key;
+        for (const step of path.slice(0, -1)) into = (into[step] ??= {}) as Record<string, unknown>;
+        // A missing field and a null one hold the same place, as `after` reads them: both are kept as null.
+        into[path.at(-1)!] = valueAt(document, path);
+      }
+      return key;
+    },
+    isPlace(place): place is Record<string, unknown> {
+      if (typeof place !== "object" || place === null || Array.isArray(place) || place instanceof ArrayBuffer) return false;
+      const document = place as Record<string, unknown>;
+      // Nothing beyond the keys, and every key there: keyOf over the place gives the place back, key for key.
+      if (!sameShape(order.keyOf(document), document)) return false;
+      return keys.every(({ path, accepts }) => accepts(valueAt(document, path)));
+    },
   };
+  return order;
+}
+
+// A column's values: a value of its kind, or null where the field may be missing. `_creationTime` and `_id` never are.
+function acceptsOf(column: Column): (value: unknown) => boolean {
+  const kind = ({ 'text COLLATE "C"': "string", "double precision": "number", boolean: "boolean", bigint: "bigint" } as Record<string, string>)[column.getSQLType()];
+  return (value) => (value === null ? !column.notNull && column.name !== "_creationTime" && column.name !== "_id" : kind === undefined || typeof value === kind);
+}
+
+function sameShape(expected: unknown, actual: unknown): boolean {
+  if (typeof expected !== "object" || expected === null) return typeof actual !== "object" || actual === null || actual instanceof ArrayBuffer;
+  if (typeof actual !== "object" || actual === null || Array.isArray(actual)) return false;
+  const expectedKeys = Object.keys(expected);
+  const actualKeys = Object.keys(actual);
+  return expectedKeys.length === actualKeys.length && expectedKeys.every((key) => key in actual && sameShape((expected as Record<string, unknown>)[key], (actual as Record<string, unknown>)[key]));
 }
 
 interface Key {
   expression: Column | SQL;
+  /** The field's path in a document: `["chatIdentity", "workspace"]` for the column `chatIdentity$workspace`. */
+  path: readonly string[];
   /** The document's value for the key; null for a missing field. */
   valueOf(document: Readonly<Record<string, unknown>>): unknown;
+  /** Whether a cursor's place may hold `value` for this key. */
+  accepts(value: unknown): boolean;
 }
 
 function valueAt(document: Readonly<Record<string, unknown>>, path: readonly string[]): unknown {
