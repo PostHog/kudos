@@ -22,6 +22,14 @@ export function departuresSince(ctx: QueryContext, workspace: string, user: Chat
   throw notPorted("groups.transitions.departuresSince");
 }
 
+export class KeepingChanges {
+  constructor(_ctx: MutationContext) {}
+
+  async record(group: LoggedGroup, keepsMembers: boolean, at: number): Promise<void> {
+    throw notPorted("groups.transitions.KeepingChanges.record");
+  }
+}
+
 export async function recordCountingChange(ctx: MutationContext, group: LoggedGroup, counts: boolean, at: number): Promise<void> {
   throw notPorted("groups.transitions.recordCountingChange");
 }

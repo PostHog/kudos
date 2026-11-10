@@ -32,6 +32,10 @@ export function groupSettingsRow(ctx: QueryContext, workspace: string): Promise<
   throw notPorted("groups.groups.groupSettingsRow");
 }
 
+export async function userGroupsIn(ctx: QueryContext, workspace: string): Promise<Doc<"userGroups">[]> {
+  throw notPorted("groups.groups.userGroupsIn");
+}
+
 export async function availableIn(ctx: QueryContext, workspace: string): Promise<boolean> {
   throw notPorted("groups.groups.availableIn");
 }

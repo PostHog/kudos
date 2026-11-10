@@ -1,11 +1,13 @@
 // The bootstrap: lands the modules `landed.ts` lists in the service. A module that names nothing of Convex lands
 // through the copy tool, one with validators through the codemod, one that names Convex's machinery (a builder, a
 // context, `internal`) through the skeleton generator, and the whole list only once the closure check finds it closed.
-// A module S1 ported in part (`partlyPorted`) keeps S1's code, with the skeleton's stubs for the rest after it.
+// A module S1 ported in part (`partlyPorted`) keeps S1's code; the skeleton of the rest lands beside it as
+// `<module>.map.ts`, which S1's module re-exports by one generated last line. An export the generator can't print that
+// another stack imports lands through its contract (`contracts.ts`).
 // Run it from the repository's root to write them:
 //   node --experimental-strip-types tools/rewrite/moduleMap/bootstrap.ts
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript5";
 import { closureCheck, servicePackages } from "./closure.ts";
@@ -13,12 +15,14 @@ import { convertModule, validatorEdits } from "./codemod.ts";
 import { convexPackage, copyModule, type Landed } from "./copy.ts";
 import { convexRoot, servicePathOf } from "./imports.ts";
 import { landed, partlyPorted } from "./landed.ts";
-import { overContext, portedPart, reachedByName, skeletonModule, type Skeleton } from "./skeleton.ts";
+import { contracts } from "./contracts.ts";
+import { overContext, reachedByName, siblingOf, skeletonModule, type Skeleton } from "./skeleton.ts";
 
 export interface LandedModule {
   convexPath: string;
   servicePath: string;
-  tool: "copy" | "convert" | "skeleton";
+  /** `reexport`: S1's module, with the line that re-exports its sibling's stubs. */
+  tool: "copy" | "convert" | "skeleton" | "reexport";
   text: string;
   /** What the skeleton generator left out, with why. */
   omitted: string[];
@@ -39,21 +43,40 @@ export function landAll(repo: string, paths: readonly string[] = landed, partly:
     const text = readFileSync(join(repo, convexPath), "utf8");
     const sourceFile = program.getSourceFile(join(repo, convexPath))!;
     const tool = toolOf(program, sourceFile, convexPath);
-    const result: Skeleton | Landed = tool === "skeleton" ? skeletonModule(program, sourceFile, convexPath, reached(), exists) : tool === "convert" ? convertModule(program, sourceFile, convexPath, exists) : copyModule(convexPath, text, exists);
+    const result: Skeleton | Landed = tool === "skeleton" ? skeletonModule(program, sourceFile, convexPath, reached(), exists, { contracts }) : tool === "convert" ? convertModule(program, sourceFile, convexPath, exists) : copyModule(convexPath, text, exists);
     if ("refusals" in result) problems.push(...result.refusals);
     else modules.push({ convexPath, servicePath: result.servicePath, tool, text: result.text, omitted: (result as Partial<Skeleton>).omitted ?? [] });
   }
   for (const convexPath of partly) {
     const servicePath = servicePathOf(convexPath);
-    const ported = portedPart(readFileSync(join(repo, servicePath), "utf8"));
-    const result = skeletonModule(program, program.getSourceFile(join(repo, convexPath))!, convexPath, reached(), exists, ported);
+    const s1 = { servicePath, text: s1Part(servicePath, readFileSync(join(repo, servicePath), "utf8")) };
+    const result = skeletonModule(program, program.getSourceFile(join(repo, convexPath))!, convexPath, reached(), exists, { s1, contracts });
     if ("refusals" in result) problems.push(...result.refusals);
-    else modules.push({ convexPath, servicePath, tool: "skeleton", text: result.text, omitted: result.omitted });
+    else {
+      modules.push({ convexPath, servicePath: result.servicePath, tool: "skeleton", text: result.text, omitted: result.omitted });
+      modules.push({ convexPath, servicePath, tool: "reexport", text: withReexport(s1, result.exports), omitted: [] });
+    }
   }
   const batch = new Map(modules.map(({ servicePath, text }) => [servicePath, text]));
   // A landed module's own file on disk is what the batch replaces, so only the batch speaks for it.
   problems.push(...closureCheck(batch, (path) => !batch.has(path) && exists(path), servicePackages(repo)));
   return { modules, problems };
+}
+
+/** The line S1's module ends with that re-exports its sibling's stubs. */
+const reexportLine = (servicePath: string, { values, types }: Skeleton["exports"]) =>
+  `export { ${[...values.map((name) => [name, name] as const), ...types.map((name) => [name, `type ${name}`] as const)].sort(([a], [b]) => a.localeCompare(b)).map(([, text]) => text).join(", ")} } from "./${basename(siblingOf(servicePath))}";`;
+
+/** S1's module as S1 wrote it: without the last line a landing gave it. */
+export function s1Part(servicePath: string, text: string): string {
+  const last = `from "./${basename(siblingOf(servicePath))}";\n`;
+  const at = text.lastIndexOf("\nexport { ");
+  return at !== -1 && text.endsWith(last) && !text.slice(at + 1, -1).includes("\n") ? text.slice(0, at) : text;
+}
+
+function withReexport(s1: { servicePath: string; text: string }, exports: Skeleton["exports"]): string {
+  if (exports.values.length + exports.types.length === 0) return s1.text;
+  return `${s1.text}\n${reexportLine(s1.servicePath, exports)}\n`;
 }
 
 /** The tool a module lands through: the skeleton generator for one over a context, else the codemod for one with validators, else the copy tool. */

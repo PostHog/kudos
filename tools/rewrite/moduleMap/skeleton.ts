@@ -115,49 +115,59 @@ export interface Skeleton {
   text: string;
   /** Exports left out, with why. */
   omitted: string[];
+  /** What it exports, by namespace: a module beside S1's is re-exported by name. */
+  exports: { values: string[]; types: string[] };
 }
 
-/** The first line of what the module map appends to a module S1 ported in part. */
-const restLine = (convexPath: string) => `// The module map's stubs of the rest of ${convexPath}, written by tools/rewrite/moduleMap/skeleton.ts: what S1 left of it`;
-const restLinePattern = /\n\/\/ The module map's stubs of the rest of \S+\.ts, written by tools\/rewrite\/moduleMap\/skeleton\.ts: what S1 left of it\n/;
+/** The module beside S1's partial port of a Convex module that holds the module map's stubs of the rest. */
+export const siblingOf = (servicePath: string) => servicePath.replace(/\.ts$/, ".map.ts");
 
-/** What S1 wrote of a module it ported in part: the text before the module map's stubs, known by their whole first line. */
-export function portedPart(text: string): string {
-  const at = restLinePattern.exec(text)?.index;
-  return at === undefined ? text : text.slice(0, at);
+/** What S1's port of part of a module owns: the names it exports, and the Convex paths of the jobs it registers. */
+export function s1Owns(servicePath: string, text: string): { exports: Set<string>; jobs: Set<string> } {
+  const file = parse(servicePath, text);
+  const exports = new Set<string>();
+  const builders = new Set<string>();
+  for (const statement of file.statements) {
+    if (ts.isImportDeclaration(statement) && posix.join(posix.dirname(servicePath), (statement.moduleSpecifier as ts.StringLiteral).text) === `${serviceRoot}/jobs/define.ts`) {
+      for (const { local, imported } of importedNames(statement)) if (imported === "mutationJob" || imported === "actionJob") builders.add(local);
+    }
+    if (ts.isExportDeclaration(statement) && statement.exportClause && ts.isNamedExports(statement.exportClause)) statement.exportClause.elements.forEach((element) => exports.add(element.name.text));
+    else if (isExported(statement)) declaredNames(statement).forEach((name) => exports.add(name));
+  }
+  // Its jobs by the calls of the service's job builders, however it imports them.
+  const jobs = new Set<string>();
+  walk(file, (node) => {
+    const [name] = ts.isCallExpression(node) && ts.isIdentifier(node.expression) && builders.has(node.expression.text) ? node.arguments : [];
+    if (name && ts.isStringLiteralLike(name)) jobs.add(name.text);
+  });
+  return { exports, jobs };
 }
 
-/** The namespace a top-level statement binds its names in. */
-const namespaceOf = (statement: ts.Statement): "type" | "value" | "both" =>
-  ts.isTypeAliasDeclaration(statement) || ts.isInterfaceDeclaration(statement) ? "type" : ts.isClassDeclaration(statement) || ts.isEnumDeclaration(statement) ? "both" : "value";
+/** A service declaration for an export the generator can't print that another stack imports, keyed by Convex path and name. */
+export type Contracts = Readonly<Record<string, Readonly<Record<string, { text: string; uses?: readonly string[] }>>>>;
+
+export interface SkeletonOptions {
+  /** S1's port of part of the module: the skeleton is then its sibling, of only what S1 doesn't own. */
+  s1?: { servicePath: string; text: string };
+  contracts?: Contracts;
+}
 
 /**
- * The skeleton of a Convex module. Given `ported`, S1's port of part of it, it is that text as it stands and, after a
- * marker, stubs for what S1 left: a name S1's code binds, and a job S1 registers under its Convex path, stay S1's.
+ * The skeleton of a Convex module. Given S1's port of part of it, it is the sibling module of the rest: what S1 exports
+ * and the jobs S1 registers stay S1's, and a type of S1's a stub names is imported from S1's module by type only.
  */
-export function skeletonModule(program: ts.Program, sourceFile: ts.SourceFile, convexPath: string, reached: Reached, exists: (path: string) => boolean, ported?: string): Skeleton | { refusals: string[] } {
+export function skeletonModule(program: ts.Program, sourceFile: ts.SourceFile, convexPath: string, reached: Reached, exists: (path: string) => boolean, options: SkeletonOptions = {}): Skeleton | { refusals: string[] } {
   const checker = program.getTypeChecker(); // binds the files, which sets the parents the walk reads
   const text = sourceFile.text;
-  const servicePath = servicePathOf(convexPath);
+  const { s1, contracts = {} } = options;
+  const servicePath = s1 ? siblingOf(s1.servicePath) : servicePathOf(convexPath);
   const refusals: string[] = [];
   const omitted: string[] = [];
   const line = (node: ts.Node) => `${convexPath}:${sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1}`;
-  const portedFile = ported === undefined ? undefined : parse(servicePath, ported);
-  // What S1's code binds at the top level: its imports by the module they name, and its own declarations.
-  const portedImports = new Map<string, { module: string; imported: string }>();
-  const portedNames = new Map<string, ts.Statement>();
-  for (const statement of portedFile?.statements ?? []) {
-    if (!ts.isImportDeclaration(statement)) declaredNames(statement).forEach((name) => portedNames.set(name, statement));
-    else for (const { local, imported } of importedNames(statement)) portedImports.set(local, { module: posix.join(posix.dirname(servicePath), (statement.moduleSpecifier as ts.StringLiteral).text), imported });
-  }
-  // S1's jobs, by the calls of the service's job builders however S1 imports them: their Convex paths stay S1's.
-  const builders = new Set([...portedImports].filter(([, { module, imported }]) => module === `${serviceRoot}/jobs/define.ts` && (imported === "mutationJob" || imported === "actionJob")).map(([local]) => local));
-  const portedJobs = new Set<string>();
-  if (portedFile) walk(portedFile, (node) => {
-    const [name] = ts.isCallExpression(node) && ts.isIdentifier(node.expression) && builders.has(node.expression.text) ? node.arguments : [];
-    if (name && ts.isStringLiteralLike(name)) portedJobs.add(name.text);
-  });
-  const portedDeclarations = new Set<Declaration>();
+  const owned = s1 ? s1Owns(s1.servicePath, s1.text) : { exports: new Set<string>(), jobs: new Set<string>() };
+  const s1Declarations = new Set<Declaration>();
+  /** S1's types the stubs name, imported from its module by type only: a value would close a cycle at load. */
+  const fromS1 = new Set<string>();
 
   // Imports: which local names come from Convex's machinery, which from elsewhere.
   // Machinery is known by symbol, so an alias (`QueryCtx as Q`) is still Convex's and a local of the same name isn't.
@@ -227,21 +237,12 @@ export function skeletonModule(program: ts.Program, sourceFile: ts.SourceFile, c
       declaration.valueUses.delete(name);
     }
   }
-  // A declaration stays S1's when S1 binds each of its names in its namespace: by an import, or a declaration of its own.
+  // An export of the module stays S1's when S1 exports each of its names.
   for (const declaration of declarations) {
-    const bound = declaration.names.filter((name) => portedImports.has(name) || portedNames.has(name));
-    if (bound.length === 0) continue;
-    if (bound.length < declaration.names.length) {
-      refusals.push(`${convexPath}: S1's ${servicePath} binds ${bound.join(", ")} of ${declaration.names.join(", ")}, which one statement declares; port them together`);
-      continue;
-    }
-    const clash = bound.find((name) => {
-      const own = portedNames.get(name);
-      const [theirs, ours] = [own ? namespaceOf(own) : "both", namespaceOf(declaration.statement)];
-      return theirs !== ours && theirs !== "both" && ours !== "both";
-    });
-    if (clash) refusals.push(`${convexPath}: S1's ${servicePath} binds ${clash} as a ${namespaceOf(portedNames.get(clash)!)}, where the module declares it as a ${namespaceOf(declaration.statement)}`);
-    else portedDeclarations.add(declaration);
+    const ownedNames = declaration.exported ? declaration.names.filter((name) => owned.exports.has(name)) : [];
+    if (ownedNames.length === 0) continue;
+    if (ownedNames.length < declaration.names.length) refusals.push(`${convexPath}: S1's ${s1!.servicePath} exports ${ownedNames.join(", ")} of ${declaration.names.join(", ")}, which one statement declares; port them together`);
+    else s1Declarations.add(declaration);
   }
   // A declaration the codemod can't convert (it reads a validator's own fields, say) is ported by hand, like one over a
   // context: a function of it becomes a stub. A refusal in what still lands refuses the module below.
@@ -292,7 +293,12 @@ export function skeletonModule(program: ts.Program, sourceFile: ts.SourceFile, c
   const need = (names: Iterable<string>) => {
     for (const name of names) {
       for (const declaration of declarationsOf(name)) {
-        if (needed.has(declaration) || portedDeclarations.has(declaration)) continue;
+        if (s1Declarations.has(declaration)) {
+          if (declaration.isType) fromS1.add(name);
+          else refusals.push(`${convexPath}: its stubs need S1's ${name} as a value, which an import from ${s1!.servicePath} would close a cycle for`);
+          continue;
+        }
+        if (needed.has(declaration)) continue;
         needed.add(declaration);
         if (!declaration.convex) need(declaration.uses);
       }
@@ -334,7 +340,7 @@ export function skeletonModule(program: ts.Program, sourceFile: ts.SourceFile, c
       needed.add(declaration);
       continue;
     }
-    if (portedDeclarations.has(declaration)) continue;
+    if (s1Declarations.has(declaration)) continue;
     if (declaration.names.length === 0 && !ts.isExportAssignment(statement)) {
       // A top-level statement with effects, such as filling a table, runs where its module lands.
       if (declaration.convex || declaration.machinery) refusals.push(`${line(statement)}: a top-level statement over a context or Convex's machinery`);
@@ -396,7 +402,7 @@ export function skeletonModule(program: ts.Program, sourceFile: ts.SourceFile, c
           omitted.push(`${name}: ${(error as Error).message}`);
         }
       }
-    } else if (portedJobs.has(path)) omitted.push(`${name}: S1 ported it as the job ${path}`);
+    } else if (owned.jobs.has(path)) omitted.push(`${name}: S1 ported it as the job ${path}`);
     else if (!reached.has(path)) omitted.push(`${name}: a registered ${registration.kind} no module reaches by name`);
     else if (registration.unreadable) refusals.push(`${line(statement)}: ${name} ${registration.unreadable}, so its args can't be read; write them out`);
     else {
@@ -406,6 +412,19 @@ export function skeletonModule(program: ts.Program, sourceFile: ts.SourceFile, c
       } catch (error) {
         omitted.push(`${name}: ${(error as Error).message}`);
       }
+    }
+  }
+  // A contract stands where the generator leaves an export out, and only there.
+  for (const [name, contract] of Object.entries(contracts[convexPath] ?? {})) {
+    const declaration = declarationsOf(name).find((candidate) => candidate.exported);
+    const left = omitted.findIndex((entry) => entry.startsWith(`${name}: `));
+    if (!declaration) refusals.push(`${convexPath}: a contract for ${name}, which the module doesn't export; delete the contract`);
+    else if (left === -1) refusals.push(`${convexPath}: a contract for ${name}, which the generator lands itself; delete the contract`);
+    else {
+      omitted.splice(left, 1);
+      pieces.set(declaration, `\n\n${contract.text}`);
+      generated.add("notPorted");
+      need(contract.uses ?? []);
     }
   }
   // An inferred return type may name a type of this module that no export needed so far.
@@ -442,13 +461,11 @@ export function skeletonModule(program: ts.Program, sourceFile: ts.SourceFile, c
   if (refusals.length > 0) return { refusals };
 
   const header = `// The module map's skeleton of ${convexPath}, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw\n// notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.\n`;
-  const allImports = importsFor(body, printed.imports);
-  if (typeof allImports !== "string") return allImports;
-  const importText = portedFile ? importsBeside(allImports) : allImports;
-  if (typeof importText !== "string") return importText;
-  const parts = [importText, body].filter(Boolean).map((part) => `${part}\n`).join("\n");
-  const restHeader = `${restLine(convexPath)}\n// throws notPorted until the stack that owns it ports it. Above this line is S1's own.\n`;
-  const output = ported === undefined ? `${header}${parts}` : `${ported}\n${restHeader}${parts}`;
+  const siblingHeader = s1 && `// The module map's skeleton of what S1 left of ${convexPath}, written by tools/rewrite/moduleMap/skeleton.ts. S1's\n// ${s1.servicePath} re-exports it; its stubs throw notPorted until the stack that owns the module ports their bodies.\n`;
+  const imported = importsFor(body, printed.imports);
+  if (typeof imported !== "string") return imported;
+  const importText = [imported, ...(fromS1.size > 0 ? [`import type { ${[...fromS1].sort().join(", ")} } from "${specifierFrom(servicePath, s1!.servicePath)}";`] : [])].filter(Boolean).join("\n");
+  const output = `${siblingHeader ?? header}${[importText, body].filter(Boolean).map((part) => `${part}\n`).join("\n")}`;
   // Nothing it writes reaches Convex, whatever the form of import; `import.meta` reaches no module, so it may stay.
   const writtenFile = parse(servicePath, output);
   const reachesConvex = [
@@ -456,7 +473,14 @@ export function skeletonModule(program: ts.Program, sourceFile: ts.SourceFile, c
     ...dynamicImports(writtenFile).filter((what) => !what.endsWith(": import.meta")),
   ];
   if (reachesConvex.length > 0) return { refusals: reachesConvex.map((what) => `${convexPath}: its skeleton ${what}, which no skeleton may`) };
-  return { servicePath, text: output, omitted: [...new Set(omitted)] };
+  // What it exports, read from what it writes: a stub's args schema and job are exports beside its function.
+  const exports: Skeleton["exports"] = { values: [], types: [] };
+  for (const statement of writtenFile.statements) {
+    if (!isExported(statement)) continue;
+    const isType = ts.isTypeAliasDeclaration(statement) || ts.isInterfaceDeclaration(statement);
+    (isType ? exports.types : exports.values).push(...declaredNames(statement));
+  }
+  return { servicePath, text: output, omitted: [...new Set(omitted)], exports };
 
   function helperStub(fn: ts.SignatureDeclaration & { body?: ts.Node }, statement: ts.Statement, path: string): string {
     // An overload keeps its signature in the service's types; only the implementation throws.
@@ -501,43 +525,6 @@ export function skeletonModule(program: ts.Program, sourceFile: ts.SourceFile, c
     ];
     if (reach.has("job") && kind !== "query") lines.push(`export const ${fresh(`${name}Job`)} = ${kind}Job("${path}", ${argsName}, ${name});`);
     return lines.join("\n");
-  }
-
-  /**
-   * Whether S1's declaration of a name the stubs import says what the module the convex source imports it from does: a
-   * type alias of the same parameters and type, written alike (S1's `type MemberId = Id<"members">`). A stub's body
-   * throws, so the typecheck alone wouldn't hold a stub to the type its signature meant.
-   */
-  function sameTypeAlias(own: ts.Statement, local: string): boolean {
-    const element = imports.flatMap((statement) => importedNames(statement).filter((binding) => binding.local === local).map(() => statement))[0];
-    const node = element && importedIdentifiers(element).find((identifier) => identifier.node.text === local)?.node;
-    const symbol = node && checker.getSymbolAtLocation(node);
-    const source = symbol && (symbol.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(symbol) : symbol).declarations?.[0];
-    const said = (alias: ts.TypeAliasDeclaration) => `${(alias.typeParameters ?? []).map((parameter) => parameter.getText()).join(",")}=${alias.type.getText()}`.replace(/\s+/g, "");
-    return source !== undefined && ts.isTypeAliasDeclaration(source) && ts.isTypeAliasDeclaration(own) && said(source) === said(own);
-  }
-
-  /**
-   * The stubs' imports less what S1's code binds: by an import of the same module, or by its own declaration of a type
-   * that says the same. A name S1 imports from another module, or declares otherwise, is refused.
-   */
-  function importsBeside(importText: string): string | { refusals: string[] } {
-    const refused: string[] = [];
-    const lines = parse(servicePath, importText).statements.filter(ts.isImportDeclaration).flatMap((statement) => {
-      const specifier = (statement.moduleSpecifier as ts.StringLiteral).text;
-      const module = posix.join(posix.dirname(servicePath), specifier);
-      const kept = importedNames(statement).filter(({ local }) => {
-        if (portedImports.get(local)?.module === module) return false;
-        if (portedImports.has(local)) refused.push(`${convexPath}: its stubs import ${local} from ${specifier}, which S1's ${servicePath} binds otherwise`);
-        else if (portedNames.has(local)) {
-          if (sameTypeAlias(portedNames.get(local)!, local)) return false;
-          refused.push(`${convexPath}: its stubs import ${local} from ${specifier}, which S1's ${servicePath} declares otherwise`);
-        }
-        return true;
-      });
-      return kept.length > 0 ? [importLine(statement, kept, specifier)] : [];
-    });
-    return refused.length > 0 ? { refusals: refused } : lines.join("\n");
   }
 
   function importsFor(body: string, printedImports: ReadonlyMap<string, Set<string>>): string | { refusals: string[] } {
