@@ -1,16 +1,13 @@
 // The item fill and the paged ledger read, on S11's shared paginate: the fill walks every member in the order they
 // joined, page by page through its own jobs, and earns the items of what came before the item ledger. Its level-up step
 // reaches S10's drops.
-import { asc, eq } from "drizzle-orm";
 import { describe, expect, test } from "vitest";
 import { useTestBackend } from "../../testing/backend.ts";
 import { stillWaiting } from "../../testing/waiting.ts";
 import type { Id } from "../db/columns.ts";
-import { toDocument } from "../db/documents.ts";
-import { jobs } from "../db/schema/index.ts";
 import type { MessageRef } from "../engine/messageEvent.ts";
 import type { MemberId } from "../workspace/directory.ts";
-import { fillItemsJob, mostFilledOfAKind } from "./items/fill.ts";
+import { fillItems, fillItemsJob, mostFilledOfAKind } from "./items/fill.ts";
 import { waitingPageOf } from "./items/ledger.ts";
 import { trayKeyOf } from "./opening.ts";
 import { crateKeyOf } from "./packs.ts";
@@ -23,7 +20,8 @@ function backend() {
   const t = startBackend();
   return {
     ...t,
-    member: (user: string) => t.seed.insert("members", { workspace: "T1", user, kind: "member" }) as Promise<MemberId>,
+    member: (user: string, _creationTime?: number) => t.seed.insert("members", { workspace: "T1", user, kind: "member", ...(_creationTime === undefined ? {} : { _creationTime }) }) as Promise<MemberId>,
+    joinedAt: async (member: MemberId) => (await t.seed.get("members", member))!._creationTime,
     pack: (giver: MemberId, recipient: MemberId, extra: { holdsSticker?: boolean; openedAt?: number } = {}) =>
       t.seed.insert("thoughtfulPacks", { workspace: "T1", giver, recipient, week: "2026-10-12", message: ref, holdsSticker: extra.holdsSticker ?? false, at, ...(extra.openedAt === undefined ? {} : { openedAt: extra.openedAt }) }),
     hoggieInTheTray: (member: MemberId, pack: Id<"thoughtfulPacks">, putInAt?: number) =>
@@ -35,9 +33,9 @@ function backend() {
       await t.run((ctx) => ctx.jobs.enqueue(fillItemsJob, {}));
       expect((await t.settle()).done).toBe(true);
     },
+    // Runs only the fill's first page, as the operator's start does, and none of the pages it schedules.
+    fillTheFirstPage: () => t.run((ctx) => fillItems(ctx, {})),
     earned: async () => (await t.seed.all("items")).map(({ member, source, key }) => ({ member, source, key })),
-    fillSteps: () =>
-      t.query(async ({ tx }) => (await tx.select().from(jobs).where(eq(jobs.name, fillItemsJob.name)).orderBy(asc(jobs._creationTime), asc(jobs._id))).map((row) => fillItemsJob.args.parse(toDocument<{ args: unknown }>(jobs, row).args).step)),
   };
 }
 
@@ -58,26 +56,32 @@ describe("the item fill", () => {
       { member: alice, source: "sticker", key: unopened },
       { member: bob, source: "hoggie", key: trayKeyOf(waiting) },
     ]);
-    expect((await t.fillSteps()).map((step) => step && { member: step.member, kind: step.kind })).toEqual([
-      undefined,
-      { member: alice, kind: "tray" },
-      { member: alice, kind: "levels" },
-      { member: bob, kind: "packs" },
-      { member: bob, kind: "tray" },
-      { member: bob, kind: "levels" },
-    ]);
   });
 
-  test("walks more than a page from the cursor its job carries, and a walk started again from the start earns nothing more", async () => {
+  test("fills a member who joined at the same instant as the one before, as members loaded from Convex can", async () => {
+    const t = backend();
+    const alice = await t.member("U_ALICE");
+    const bob = await t.member("U_BOB", await t.joinedAt(alice));
+    const alicesPack = await t.pack(alice, bob);
+    const bobsPack = await t.pack(bob, alice);
+
+    await t.fill();
+
+    expect((await t.earned()).map(({ key }) => key).sort()).toEqual([crateKeyOf(alicesPack), crateKeyOf(bobsPack)].sort());
+  });
+
+  test("earns a page at a time, the next page where the last one stopped, and a walk started again from the start earns nothing more", async () => {
     const t = backend();
     const [alice, bob] = [await t.member("U_ALICE"), await t.member("U_BOB")];
     const packs: Id<"thoughtfulPacks">[] = [];
     for (let n = 0; n <= mostFilledOfAKind; n++) packs.push(await t.pack(alice, bob));
 
-    await t.fill();
+    await t.fillTheFirstPage();
+    expect((await t.earned()).map(({ key }) => key)).toEqual(packs.slice(0, mostFilledOfAKind).map(crateKeyOf));
+
+    expect((await t.settle()).done).toBe(true);
     const firstWalk = await t.earned();
-    expect(firstWalk.map(({ key }) => key).sort()).toEqual(packs.map(crateKeyOf).sort());
-    expect((await t.fillSteps()).filter((step) => step?.kind === "packs" && step.cursor !== undefined)).toHaveLength(1);
+    expect(firstWalk.map(({ key }) => key)).toEqual(packs.map(crateKeyOf));
 
     await t.fill();
     expect(await t.earned()).toEqual(firstWalk);

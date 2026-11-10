@@ -2,7 +2,7 @@
 // items that came before the item ledger, then drops the hoggies of the level-ups that wait face down. Each page is one
 // job, scheduled by the one before, so a member's walk resumes where it stopped. Today's convex/album/items/fill.ts over
 // the service's transaction; every per-row write is guarded against running twice, which the move's restart relies on.
-import { and, eq, gt, isNull } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { zv } from "../../values.ts";
 import { toDocument } from "../../db/documents.ts";
@@ -32,7 +32,7 @@ const byCreationTime = indexOrder(members, []);
 
 export const fillItemsArgs = z.strictObject({ step: z.optional(fillStepValidator) });
 export async function fillItems(ctx: MutationContext, { step }: z.infer<typeof fillItemsArgs>): Promise<null> {
-  const filling = step ?? (await firstStepAfter(ctx, 0));
+  const filling = step ?? (await firstStepAfter(ctx, null));
   const next = filling === null ? null : await fill(ctx, filling);
   if (next !== null) await ctx.jobs.enqueue(fillItemsJob, { step: next });
   return null;
@@ -49,9 +49,11 @@ async function fill(ctx: MutationContext, step: FillStep): Promise<FillStep | nu
   return stepAfterTheMember(ctx, step.member);
 }
 
+// The next member in the order they joined: by `_creationTime`, then `_id`, so one loaded with the same stamp as the
+// member just filled is next, not skipped.
 async function stepAfterTheMember(ctx: QueryContext, member: MemberId): Promise<FillStep | null> {
-  const [filled] = await ctx.tx.select({ _creationTime: members._creationTime }).from(members).where(eq(members._id, member));
-  return filled === undefined ? null : firstStepAfter(ctx, filled._creationTime);
+  const [filled] = await ctx.tx.select({ _id: members._id, _creationTime: members._creationTime }).from(members).where(eq(members._id, member));
+  return filled === undefined ? null : firstStepAfter(ctx, filled);
 }
 
 async function fillPacks(ctx: MutationContext, { member, cursor }: FillStep): Promise<Filled> {
@@ -85,7 +87,7 @@ async function earnTrayItemOf(ctx: MutationContext, item: Doc<"trayItems">) {
   if (row !== undefined) await earnTrayItem(ctx, item, toDocument<Doc<"thoughtfulPacks">>(thoughtfulPacks, row));
 }
 
-async function firstStepAfter(ctx: QueryContext, after: number): Promise<FillStep | null> {
-  const [next] = await ctx.tx.select({ _id: members._id }).from(members).where(gt(members._creationTime, after)).orderBy(...byCreationTime.orderBy()).limit(1);
+async function firstStepAfter(ctx: QueryContext, after: { _id: string; _creationTime: number } | null): Promise<FillStep | null> {
+  const [next] = await ctx.tx.select({ _id: members._id }).from(members).where(after === null ? undefined : byCreationTime.after(after)).orderBy(...byCreationTime.orderBy()).limit(1);
   return next === undefined ? null : { member: next._id as MemberId, kind: "packs" };
 }
