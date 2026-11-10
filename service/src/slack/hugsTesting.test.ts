@@ -46,6 +46,16 @@ describe("sends at once", () => {
     await expect(both).rejects.toThrow("a real failure");
   });
 
+  test("end in a real failure whatever it rejected with, undefined among them", async () => {
+    for (const reason of [undefined, null, "a string"]) {
+      const both = atOnce([Promise.reject(notPorted(path)), Promise.reject(reason)]);
+      await both.then(
+        () => expect.unreachable("the sends were expected to fail"),
+        (failure: unknown) => expect(failure).toBe(reason),
+      );
+    }
+  });
+
   test("end at the stub when no send failed for real, and answer every send when none failed", async () => {
     await expect(atOnce([Promise.reject(notPorted(path)), Promise.resolve(1)])).rejects.toBeInstanceOf(NotPortedError);
     expect(await atOnce([Promise.resolve(1), Promise.resolve("two")])).toEqual([1, "two"]);
