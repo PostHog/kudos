@@ -13,6 +13,7 @@ import { fromDocument, toDocument } from "../db/documents.ts";
 import { indexOrder, type Direction, type IndexOrder } from "../db/indexOrder.ts";
 import { paginate, type Page, type PageOptions } from "../db/page.ts";
 import { awards, kudosMessages, type Doc } from "../db/schema/index.ts";
+import { streamed } from "../db/stream.ts";
 import { unique } from "../db/unique.ts";
 import type { MutationContext, QueryContext, Transaction } from "../operations.ts";
 
@@ -220,7 +221,7 @@ export async function earliestAwardFrom({ tx }: QueryContext, giver: MemberId, r
 }
 
 export async function thankedAtOrBefore({ tx }: QueryContext, giver: MemberId, recipient: MemberId, atOrBefore: number): Promise<boolean> {
-  for await (const { at } of streamed(tx, byGiverRecipient, and(eq(awards.giver, giver), eq(awards.recipient, recipient)))) if (at <= atOrBefore) return true;
+  for await (const { at } of streamedAwards(tx, byGiverRecipient, and(eq(awards.giver, giver), eq(awards.recipient, recipient)))) if (at <= atOrBefore) return true;
   return false;
 }
 
@@ -249,7 +250,7 @@ async function everThankedBy(ctx: QueryContext, giver: MemberId, atOrBefore: num
 // next walk starts past them, as today's skip over a much-thanked teammate does.
 async function thankedUntilOneRepeats({ tx }: QueryContext, giver: MemberId, past: MemberId | null, atOrBefore: number, thanked: Set<MemberId>): Promise<MemberId | null> {
   let repeats = 0;
-  for await (const { recipient, at } of streamed(tx, byGiverRecipient, and(eq(awards.giver, giver), past === null ? undefined : gt(awards.recipient, past)))) {
+  for await (const { recipient, at } of streamedAwards(tx, byGiverRecipient, and(eq(awards.giver, giver), past === null ? undefined : gt(awards.recipient, past)))) {
     if (!thanked.has(recipient)) {
       if (at <= atOrBefore) thanked.add(recipient);
       repeats = 0;
@@ -399,7 +400,7 @@ export type AtRange = { kind: "instant"; at: number; createdBefore?: number } | 
 
 export async function* awardsReceivedNewestFirst({ tx }: QueryContext, recipient: MemberId, before: Before): AsyncGenerator<ReceivedAward> {
   for (const range of rangesBefore(before)) {
-    for await (const row of streamed(tx, byRecipientAt, and(eq(awards.recipient, recipient), withinRange(range)), "desc")) yield receivedAwardOf(row);
+    for await (const row of streamedAwards(tx, byRecipientAt, and(eq(awards.recipient, recipient), withinRange(range)), "desc")) yield receivedAwardOf(row);
   }
 }
 
@@ -427,7 +428,7 @@ async function* groupedByMessage(rows: AsyncIterable<AwardRow>): AsyncGenerator<
 }
 
 async function* awardsGivenNewestFirst(tx: Transaction, giver: MemberId, before: Before): AsyncGenerator<AwardRow> {
-  for (const range of rangesBefore(before)) yield* streamed(tx, byGiverAt, and(eq(awards.giver, giver), withinRange(range)), "desc");
+  for (const range of rangesBefore(before)) yield* streamedAwards(tx, byGiverAt, and(eq(awards.giver, giver), withinRange(range)), "desc");
 }
 
 // One range of `rangesBefore` on an index whose last field is `at`, as today's `.withIndex` bounds read it.
@@ -458,7 +459,7 @@ function decidedWithin({ decided, inclusive, above }: DecidedBelow): SQL | undef
 }
 
 export async function* awardsReceivedByDecision({ tx }: QueryContext, recipient: MemberId, below: DecidedBelow): AsyncGenerator<ReceivedAward> {
-  for await (const row of streamed(tx, byRecipientDecided, and(eq(awards.recipient, recipient), decidedWithin(below)), "desc")) yield receivedAwardOf(row);
+  for await (const row of streamedAwards(tx, byRecipientDecided, and(eq(awards.recipient, recipient), decidedWithin(below)), "desc")) yield receivedAwardOf(row);
 }
 
 export type AnnotatedGivenMessage = GivenMessageAwards & { annotations: Annotations };
@@ -476,7 +477,7 @@ export async function messagesGivenDecidedAfter(ctx: QueryContext, giver: Member
 }
 
 export function messagesGivenByDecision({ tx }: QueryContext, giver: MemberId, below: DecidedBelow): AsyncGenerator<GivenMessageAwards> {
-  return groupedByMessage(streamed(tx, byGiverDecided, and(eq(awards.giver, giver), decidedWithin(below)), "desc"));
+  return groupedByMessage(streamedAwards(tx, byGiverDecided, and(eq(awards.giver, giver), decidedWithin(below)), "desc"));
 }
 
 export function rangesBefore({ at, created }: Before): AtRange[] {
@@ -514,16 +515,7 @@ async function awardsWhere(tx: Transaction, order: IndexOrder, where: SQL | unde
   return rows.map((row) => toDocument<AwardRow>(awards, row));
 }
 
-// How many rows a streamed read takes at once; a caller that stops early reads no more pages.
-const streamPage = 100;
-
 /** The awards `where` holds for, in the index's order, a page at a time, as a `for await` over a query streamed them. */
-async function* streamed(tx: Transaction, order: IndexOrder, where: SQL | undefined, direction: Direction = "asc"): AsyncGenerator<AwardRow> {
-  let last: AwardRow | undefined;
-  for (;;) {
-    const page = await awardsWhere(tx, order, and(where, last === undefined ? undefined : order.after(last, direction)), { direction, atMost: streamPage });
-    yield* page;
-    if (page.length < streamPage) return;
-    last = page.at(-1);
-  }
+function streamedAwards(tx: Transaction, order: IndexOrder, where: SQL | undefined, direction: Direction = "asc"): AsyncGenerator<AwardRow> {
+  return streamed<AwardRow>(tx, { table: awards, order, where, direction });
 }
