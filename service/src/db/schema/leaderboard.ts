@@ -1,8 +1,8 @@
 // Generated once from convex/schema.ts by tools/rewrite/drizzle; owned by hand from here on.
-import { index, pgTable } from "drizzle-orm/pg-core";
-import { bool, creationTime, f64, i64, id, str, value, type Id } from "../columns.ts";
+import { index } from "drizzle-orm/pg-core";
+import { bool, creationTime, documentTable, f64, i64, id, type Id, str, value } from "../columns.ts";
 
-export const countedKudosGiven = pgTable(
+export const countedKudosGiven = documentTable(
   "countedKudosGiven",
   {
     _id: id(),
@@ -16,7 +16,7 @@ export const countedKudosGiven = pgTable(
   ],
 );
 
-export const countedRecognitions = pgTable(
+export const countedRecognitions = documentTable(
   "countedRecognitions",
   {
     _id: id(),
@@ -29,7 +29,7 @@ export const countedRecognitions = pgTable(
   ],
 );
 
-export const givenByDay = pgTable(
+export const givenByDay = documentTable(
   "givenByDay",
   {
     _id: id(),
@@ -48,7 +48,7 @@ export const givenByDay = pgTable(
   ],
 );
 
-export const attributedTotals = pgTable(
+export const attributedTotals = documentTable(
   "attributedTotals",
   {
     _id: id(),
@@ -66,7 +66,7 @@ export const attributedTotals = pgTable(
   ],
 );
 
-export const attributedGroupTotals = pgTable(
+export const attributedGroupTotals = documentTable(
   "attributedGroupTotals",
   {
     _id: id(),
@@ -82,7 +82,7 @@ export const attributedGroupTotals = pgTable(
   ],
 );
 
-export const countedAttributions = pgTable(
+export const countedAttributions = documentTable(
   "countedAttributions",
   {
     _id: id(),
@@ -96,7 +96,7 @@ export const countedAttributions = pgTable(
   ],
 );
 
-export const hugRunningTotals = pgTable(
+export const hugRunningTotals = documentTable(
   "hugRunningTotals",
   {
     _id: id(),
@@ -112,7 +112,7 @@ export const hugRunningTotals = pgTable(
   ],
 );
 
-export const givenTotals = pgTable(
+export const givenTotals = documentTable(
   "givenTotals",
   {
     _id: id(),
@@ -133,7 +133,7 @@ export const givenTotals = pgTable(
   ],
 );
 
-export const mondayPostSettings = pgTable(
+export const mondayPostSettings = documentTable(
   "mondayPostSettings",
   {
     _id: id(),
@@ -151,7 +151,7 @@ export const mondayPostSettings = pgTable(
   ],
 );
 
-export const mondayPostClaims = pgTable(
+export const mondayPostClaims = documentTable(
   "mondayPostClaims",
   {
     _id: id(),
@@ -167,7 +167,7 @@ export const mondayPostClaims = pgTable(
   ],
 );
 
-export const featuredNewGivers = pgTable(
+export const featuredNewGivers = documentTable(
   "featuredNewGivers",
   {
     _id: id(),
@@ -182,7 +182,7 @@ export const featuredNewGivers = pgTable(
   ],
 );
 
-export const weekThankers = pgTable(
+export const weekThankers = documentTable(
   "weekThankers",
   {
     _id: id(),
@@ -196,7 +196,7 @@ export const weekThankers = pgTable(
   ],
 );
 
-export const leaderboardSettings = pgTable(
+export const leaderboardSettings = documentTable(
   "leaderboardSettings",
   {
     _id: id(),
