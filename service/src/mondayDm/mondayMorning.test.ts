@@ -47,7 +47,16 @@ vi.mock("../hugs/recap.ts", async (original) => ({
   hugsSectionFor: async (_ctx: unknown, member: string) => personOf(member).hugs,
   hugsSentInTheMondayDm: async () => {},
 }));
-vi.mock("../hugs/weeks.ts", async (original) => ({ ...(await original<object>()), hugWeeksSince: async () => ({ weeks: standIn.hugWeeks, next: null }) }));
+// As the hugWeeks by_week index reads them: the weeks from `since` on, in week order, a page at a time.
+vi.mock("../hugs/weeks.ts", async (original) => ({
+  ...(await original<object>()),
+  hugWeeksSince: async (_ctx: unknown, since: string, { numItems, cursor }: { numItems: number; cursor: string | null }) => {
+    const from = cursor === null ? 0 : Number(cursor);
+    const weeks = standIn.hugWeeks.filter(({ week }) => week >= since).sort((one, other) => one.week.localeCompare(other.week));
+    const to = from + numItems;
+    return { weeks: weeks.slice(from, to), next: to >= weeks.length ? null : String(to) };
+  },
+}));
 vi.mock("../welcome/welcome.ts", async (original) => ({
   ...(await original<object>()),
   welcomeOf: async (_ctx: unknown, member: string) => {
@@ -131,6 +140,14 @@ async function setUp(startsAt: string) {
     return member;
   }
 
+  /** A member off the Monday path who only had hugs, so only the hug-weeks sweep finds them. */
+  async function hugger(user: string, week: string): Promise<MemberId> {
+    const member = await seed.insert("members", { workspace: "T1", user, kind: "member", timeZone: "Europe/Berlin" });
+    standIn.people.set(member, { user, timeZone: "Europe/Berlin", inTheWorkspace: true, xpLevelsOn: false, welcomedAt: null, quests: null, hugs: hugsRecap, place: "dm" });
+    standIn.hugWeeks.push({ member, week });
+    return member;
+  }
+
   /** Runs every job due by `until` on both copies at once, moving the clock to each next job. */
   async function settleUntil(until: string) {
     const end = Date.parse(until);
@@ -155,6 +172,7 @@ async function setUp(startsAt: string) {
     first,
     second,
     person,
+    hugger,
     settleUntil,
     sweepAt,
     /** The DM jobs still to run, by when. */
@@ -243,15 +261,28 @@ describe("the Monday DM reaches each member at 9:00 on Monday in their own time 
     expect(await t.dms()).toEqual([]);
   });
 
-  test("a member with a hug week last week is booked the hugs recap, though not on the Monday path", async () => {
+  test("a member with a hug week this week is booked the hugs recap, though not on the Monday path", async () => {
     const t = await setUp("2026-10-14T10:00:00Z");
-    const ann = await t.person("U_ANN", "Europe/Berlin", { xpLevelsOn: false, quests: null, hugs: hugsRecap });
-    standIn.hugWeeks = [{ member: ann, week: "2026-10-12" }];
+    await t.hugger("U_ANN", "2026-10-12");
 
     await t.sweepAt("2026-10-14T10:00:00Z");
     await t.settleUntil("2026-10-19T12:00:00Z");
     expect(postsTo("U_ANN")).toEqual([{ at: Date.parse("2026-10-19T07:00:00Z"), channel: "U_ANN", text: expect.stringContaining("You hugged 2 teammates last week.\nKeep them coming."), blocks: undefined }]);
     expect(postsTo("U_ANN")[0]!.text).toContain("change what I send you");
+  });
+
+  test("the hug-weeks sweep reads every hug week since last week, page after page, and none before it", async () => {
+    const t = await setUp("2026-10-14T10:00:00Z");
+    const huggers: MemberId[] = [];
+    for (let index = 0; index < 101; index++) huggers.push(await t.hugger(`U_HUG${String(index).padStart(3, "0")}`, "2026-10-12"));
+    const old = await t.hugger("U_OLD", "2026-09-28");
+
+    await t.sweepAt("2026-10-14T10:00:00Z");
+    await t.settleUntil("2026-10-14T10:01:00Z");
+    const dms = await t.dms();
+    expect(dms.filter(({ member }) => member === old)).toEqual([]);
+    expect(new Set(dms.map(({ member }) => member))).toEqual(new Set(huggers));
+    expect(new Set(dms.map(({ monday }) => monday))).toEqual(new Set(["2026-10-19"]));
   });
 });
 
@@ -292,12 +323,14 @@ describe("the Monday DM's try", () => {
   test("three rate-limited tries and the DM has failed: no fourth", async () => {
     const t = await setUp("2026-10-14T10:00:00Z");
     await t.person("U_ANN", "Europe/Berlin");
-    slack.answering("chat.postMessage", rateLimitedFor(30), rateLimitedFor(30), rateLimitedFor(30), rateLimitedFor(30));
+    // A fourth try would land: Slack answers as usual after three refusals.
+    slack.answering("chat.postMessage", rateLimitedFor(30), rateLimitedFor(30), rateLimitedFor(30));
     await t.sweepAt("2026-10-14T10:00:00Z");
 
     await t.settleUntil("2026-10-20T12:00:00Z");
     expect(posts).toEqual([]);
-    expect(slack.callsTo("chat.postMessage")).toHaveLength(3);
+    expect(slack.messagesIn("U_ANN")).toEqual([]);
+    expect(await t.bookedTries()).toEqual([]);
     expect((await t.dms())[0]).toMatchObject({ state: "failed", tries: 3 });
   });
 
@@ -372,12 +405,14 @@ describe("the Monday DM's buttons", () => {
   });
 
   test("a press on someone else's DM changes nothing", async () => {
-    const { t, dm, pressedIn } = await sentDm();
+    const { t, ann, dm, pressedIn } = await sentDm();
     const ben = await t.person("U_BEN", "Europe/Berlin");
+    const shownBefore = slack.messagesShownIn("U_ANN");
 
     await t.operations.mutation("commands.stopMondayQuests", (ctx) => stopMondayQuests(ctx, "T1", ben, dm, pressedIn));
     await t.settleUntil("2026-10-19T12:01:00Z");
+    expect(personOf(ann).place).toBe("dm");
     expect(personOf(ben).place).toBe("dm");
-    expect(slack.callsTo("chat.update")).toEqual([]);
+    expect(slack.messagesShownIn("U_ANN")).toEqual(shownBefore);
   });
 });
