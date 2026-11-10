@@ -275,14 +275,16 @@ describe("the Monday DM reaches each member at 9:00 on Monday in their own time 
     const t = await setUp("2026-10-14T10:00:00Z");
     const huggers: MemberId[] = [];
     for (let index = 0; index < 101; index++) huggers.push(await t.hugger(`U_HUG${String(index).padStart(3, "0")}`, "2026-10-12"));
+    const lastWeeks = await t.hugger("U_LAST", "2026-10-05");
     const old = await t.hugger("U_OLD", "2026-09-28");
 
     await t.sweepAt("2026-10-14T10:00:00Z");
     await t.settleUntil("2026-10-14T10:01:00Z");
-    const dms = await t.dms();
-    expect(dms.filter(({ member }) => member === old)).toEqual([]);
-    expect(new Set(dms.map(({ member }) => member))).toEqual(new Set(huggers));
-    expect(new Set(dms.map(({ monday }) => monday))).toEqual(new Set(["2026-10-19"]));
+    const mondayOf = new Map((await t.dms()).map(({ member, monday }) => [member, monday]));
+    expect(mondayOf.has(old)).toBe(false);
+    expect(mondayOf.get(lastWeeks)).toBe("2026-10-12");
+    expect(huggers.map((member) => mondayOf.get(member))).toEqual(huggers.map(() => "2026-10-19"));
+    expect(mondayOf.size).toBe(huggers.length + 1);
   });
 });
 
