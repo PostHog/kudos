@@ -28,6 +28,22 @@ describe("the failed jobs the sweep has yet to take in", () => {
     }
   });
 
+  test("leave out every job a sweep took in, so the index holds only the backlog", async () => {
+    const client = await database.pool.connect();
+    try {
+      await client.query("begin");
+      await client.query("set local enable_seqscan = off");
+      // A read of the failures a sweep already took in can't come from an index that holds none of them.
+      const { rows } = await client.query<{ "QUERY PLAN": string }>(
+        `explain select "_id" from "jobs" where "state" = 'failed' and "sweptAt" is not null order by "completedAt", "_id" limit 100`,
+      );
+      expect(rows.map((row) => row["QUERY PLAN"]).join("\n")).not.toContain("jobs_failed_and_unswept");
+    } finally {
+      await client.query("rollback");
+      client.release();
+    }
+  });
+
   test("are exactly the failed jobs with no sweptAt", async () => {
     const job = (id: string, state: string, completedAt: number | null, sweptAt: number | null) =>
       database.pool.query(
