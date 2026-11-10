@@ -11,6 +11,7 @@ import { notPorted, NotPortedError } from "../notPorted.ts";
 import { memberCommand, memberRead, type Route } from "../website/api/route.ts";
 import { apiTransport, type MemberCheck, type SignedIn } from "../website/api/transport.ts";
 import type { Verified } from "../website/memberQuery.ts";
+import type { Routes } from "../registration.ts";
 import type { MemberId } from "../workspace/directory.ts";
 import { callThroughTheTable, keepingFailures, registry } from "./albumPorts.testing.ts";
 
@@ -31,23 +32,28 @@ const table: readonly Route[] = [
 // A test can hold the stub route's failed request after the helper has kept its failure and before its caller reads it,
 // so another call can fail and be read in between.
 let hold: { kept: () => void; released: Promise<void> } | null = null;
-const holdingTheStub = new Hono().use("/api/mutation/website.test.stub", async (_c, next) => {
-  try {
-    await next();
-  } catch (error) {
-    if (hold !== null) {
-      hold.kept();
-      await hold.released;
-    }
-    throw error;
-  }
-});
+const holdingTheStub =
+  (routes: Routes): Routes =>
+  (runtime) =>
+    new Hono()
+      .use("/api/mutation/website.test.stub", async (_c, next) => {
+        try {
+          await next();
+        } catch (error) {
+          if (hold !== null) {
+            hold.kept();
+            await hold.released;
+          }
+          throw error;
+        }
+      })
+      .route("/", routes(runtime));
 
 const startBackend = useTestBackend({
   // First, before the service's own transport, which answers every other `/api/*` name with 404.
   registry: {
     ...registry,
-    routes: [(runtime) => holdingTheStub.route("/", keepingFailures(({ operations, log }) => apiTransport({ operations, log, routes: table, identify: async () => juno, check: admitsAnyone }))(runtime)), ...registry.routes],
+    routes: [holdingTheStub(keepingFailures(({ operations, log }) => apiTransport({ operations, log, routes: table, identify: async () => juno, check: admitsAnyone }))), ...registry.routes],
   },
 });
 
