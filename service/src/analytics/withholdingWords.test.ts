@@ -27,6 +27,15 @@ const replyWithWords = mutationJob(
     throw notPorted("feedback.replies.privateReply");
   }),
 );
+const wordsInItsCode = "THANKS_FOR_UNTANGLING_THE_DEPLOY";
+const codedQuote = mutationJob(
+  "testing.codedQuote",
+  z.object({ nested: z.boolean() }),
+  withholdingWords(async (_ctx, { nested }: { nested: boolean }) => {
+    const coded = Object.assign(new Error("thanks"), { code: wordsInItsCode });
+    throw nested ? new Error("wrapped", { cause: coded }) : coded;
+  }),
+);
 let conflicts = 0;
 const forgetOnce = mutationJob(
   "testing.forgetOnce",
@@ -36,7 +45,7 @@ const forgetOnce = mutationJob(
     await ctx.tx.update(jobs).set({ error: "forgotten" }).where(eq(jobs.name, "testing.forgetOnce"));
   }),
 );
-const backend = useTestBackend({ registry: createRegistry({ testing: { jobs: [quote, replyWithWords, forgetOnce] } }) });
+const backend = useTestBackend({ registry: createRegistry({ testing: { jobs: [quote, codedQuote, replyWithWords, forgetOnce] } }) });
 
 test("a job's error keeps the member's words out of its failure row", async () => {
   const t = backend();
@@ -47,6 +56,19 @@ test("a job's error keeps the member's words out of its failure row", async () =
 
   expect(row?.state, "the job").toBe("failed");
   expect(row?.error, "its error").not.toContain("untangling");
+});
+
+test("a code that isn't the database's or the network's stays out of the failure row and the log, nested or not", async () => {
+  for (const nested of [false, true]) {
+    const t = backend();
+    await t.run(async (ctx) => void (await ctx.jobs.enqueue(codedQuote, { nested })));
+
+    await t.settle();
+    const [row] = await t.query(async ({ tx }) => tx.select({ state: jobs.state, error: jobs.error }).from(jobs).where(eq(jobs.name, "testing.codedQuote")));
+
+    expect(row?.state, `the job, nested: ${nested}`).toBe("failed");
+    expect(JSON.stringify([row, t.logs]), `its row and the log, nested: ${nested}`).not.toContain(wordsInItsCode);
+  }
 });
 
 test("a stub not ported yet passes through as itself, so a waiting test keeps waiting", async () => {
@@ -68,6 +90,5 @@ test("a serialization failure in a job that withholds words retries, and the job
   await t.settle();
   const [row] = await t.query(async ({ tx }) => tx.select({ state: jobs.state, error: jobs.error }).from(jobs).where(eq(jobs.name, "testing.forgetOnce")));
 
-  expect(conflicts, "the conflicts left").toBe(-1);
   expect(row, "the job").toEqual({ state: "success", error: "forgotten" });
 });

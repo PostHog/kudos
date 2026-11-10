@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { errorFields } from "../log.ts";
+import { errorFields, knownConnectionCodes } from "../log.ts";
 import { NotPortedError } from "../notPorted.ts";
 import { zv } from "../values.ts";
 
@@ -38,10 +38,19 @@ export function withheldExceptionOf(error: unknown): Exception {
 export function withheldErrorOf(error: unknown): Error {
   const withheld = new Error(`${wordsWithheld} (${typeOf(error)})`);
   if (error instanceof Error) withheld.stack = [`Error: ${withheld.message}`, ...stackLinesAfterTheMessage(error)].join("\n");
-  // The service reads whether a failure is the database's, and retries one that is, by its code alone; a code is never
-  // a member's words.
+  // The service reads whether a failure is the database's, and retries one that is, by its code alone, so the code is
+  // kept when it is one of those: any other code could be a member's words.
   const { code } = errorFields(error);
-  return code === undefined ? withheld : Object.assign(withheld, { code });
+  return code !== undefined && isTroubleCode(code) ? Object.assign(withheld, { code }) : withheld;
+}
+
+// Postgres's SQLSTATEs of the classes the service retries or waits out (a connection, a transaction rolled back,
+// resources, the operator, the system, a lock not available), Node's network errors and our own connection codes.
+const troubleState = /^(?:08|40|53|55|57|58)[0-9A-Z]{3}$/;
+const networkErrors: ReadonlySet<string> = new Set(["ECONNREFUSED", "ECONNRESET", "ECONNABORTED", "ETIMEDOUT", "EPIPE", "ENOTFOUND", "EHOSTUNREACH", "ENETUNREACH", "EAI_AGAIN"]);
+
+function isTroubleCode(code: string): boolean {
+  return troubleState.test(code) || networkErrors.has(code) || knownConnectionCodes.has(code);
 }
 
 export function withholdingWords<Ctx, Args extends unknown[], Output>(handler: (ctx: Ctx, ...args: Args) => Promise<Output>) {
