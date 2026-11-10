@@ -21,14 +21,6 @@ export type Reach = "run" | "job";
 /** Every registered function reached by name, by dotted path, and how. */
 export type Reached = ReadonlyMap<string, ReadonlySet<Reach>>;
 
-const builders: Record<string, "query" | "mutation" | "action"> = {
-  query: "query",
-  internalQuery: "query",
-  mutation: "mutation",
-  internalMutation: "mutation",
-  action: "action",
-  internalAction: "action",
-};
 const contexts = { query: "QueryContext", mutation: "MutationContext", action: "ActionContext" } as const;
 
 /** Convex's types a signature may name, as the service names them; any other Convex type is refused. */
@@ -131,24 +123,6 @@ export function skeletonModule(program: ts.Program, sourceFile: ts.SourceFile, c
     const symbol = ts.isShorthandPropertyAssignment(node.parent) ? checker.getShorthandAssignmentValueSymbol(node.parent) : checker.getSymbolAtLocation(node);
     return symbol ? machinerySymbols.get(symbol) : undefined;
   };
-  /**
-   * The builder a registration calls, by the name Convex exports it under: through a local alias (`const q =
-   * internalQuery`) too. The app's own wrappers (`memberQuery`) count by what their call returns, Convex's registered
-   * query, mutation or action, so an imported helper that only shares a builder's name is none.
-   */
-  const builderOf = (node: ts.Identifier): string | undefined => {
-    let symbol = checker.getSymbolAtLocation(node);
-    for (let hops = 0; symbol && hops < 8; hops++) {
-      const convex = machinerySymbols.get(symbol);
-      if (convex) return convex;
-      const declaration = symbol.declarations?.[0];
-      if (declaration && ts.isImportSpecifier(declaration)) return ts.isCallExpression(node.parent) ? registeredKind(checker.getTypeAtLocation(node.parent)) : undefined;
-      if (!declaration || !ts.isVariableDeclaration(declaration) || !declaration.initializer || !ts.isIdentifier(declaration.initializer)) return undefined;
-      if (!(ts.getCombinedNodeFlags(declaration) & ts.NodeFlags.Const)) return undefined;
-      symbol = checker.getSymbolAtLocation(declaration.initializer);
-    }
-    return undefined;
-  };
   /** A Convex type a signature names that the service has no counterpart for. */
   const foreignIn = (nodes: readonly ts.Node[]) => {
     let found: string | undefined;
@@ -161,7 +135,9 @@ export function skeletonModule(program: ts.Program, sourceFile: ts.SourceFile, c
 
   // Top-level declarations and what they refer to.
   const declarations: Declaration[] = [];
-  const byName = new Map<string, Declaration>();
+  // A name may have several declarations: overloads, or an interface merged from parts. Each one lands with it.
+  const byName = new Map<string, Declaration[]>();
+  const declarationsOf = (name: string) => byName.get(name) ?? [];
   // A use is an identifier that resolves to a top-level declaration of this module, not a local of the same name.
   const topLevel = (node: ts.Identifier) => {
     // `{ crate }` names the property and the value both; the value is what lands.
@@ -188,7 +164,7 @@ export function skeletonModule(program: ts.Program, sourceFile: ts.SourceFile, c
       if (topLevel(node)) declaration.uses.add(node.text);
     });
     declarations.push(declaration);
-    for (const name of names) byName.set(name, declaration);
+    for (const name of names) byName.set(name, [...declarationsOf(name), declaration]);
   }
   for (const declaration of declarations) for (const name of declaration.names) declaration.uses.delete(name);
   // A declaration the codemod can't convert (it reads a validator's own fields, say) is ported by hand, like one over a
@@ -198,14 +174,14 @@ export function skeletonModule(program: ts.Program, sourceFile: ts.SourceFile, c
     const { statement } = declaration;
     if (!declaration.isType && editRefusals.some(({ start }) => start >= statement.getStart(sourceFile) && start < statement.getEnd())) declaration.convex = true;
     // A registration is over a context, whether its builder is Convex's or a wrapper of this app's (`memberQuery`).
-    if (registrationOf(statement, builderOf)) declaration.convex = true;
+    if (registrationOf(checker, statement)) declaration.convex = true;
   }
   // A value that refers to a value over a context needs one too.
   for (let changed = true; changed; ) {
     changed = false;
     for (const declaration of declarations) {
       if (declaration.convex || declaration.isType) continue;
-      if ([...declaration.uses].some((name) => byName.get(name)?.convex && !byName.get(name)!.isType)) changed = declaration.convex = true;
+      if ([...declaration.uses].some((name) => declarationsOf(name).some((used) => used.convex && !used.isType))) changed = declaration.convex = true;
     }
   }
 
@@ -239,8 +215,8 @@ export function skeletonModule(program: ts.Program, sourceFile: ts.SourceFile, c
   const generated = new Set<string>();
   const need = (names: Iterable<string>) => {
     for (const name of names) {
-      const declaration = byName.get(name);
-      if (declaration && !needed.has(declaration)) {
+      for (const declaration of declarationsOf(name)) {
+        if (needed.has(declaration)) continue;
         needed.add(declaration);
         if (!declaration.convex) need(declaration.uses);
       }
@@ -276,7 +252,7 @@ export function skeletonModule(program: ts.Program, sourceFile: ts.SourceFile, c
       }
       if (exportedMachinery.length > 0) refusals.push(`${line(statement)}: exports Convex's ${exportedMachinery.join(", ")} in a list beside the module's own`);
       const locals = elements.map((element) => (element.propertyName ?? element.name).text);
-      const overContext = locals.filter((local) => byName.get(local)?.convex);
+      const overContext = locals.filter((local) => declarationsOf(local).some((used) => used.convex));
       if (overContext.length > 0) refusals.push(`${line(statement)}: exports ${overContext.join(", ")} by a list; export the declaration itself`);
       need(locals.filter((local) => !overContext.includes(local)));
       needed.add(declaration);
@@ -324,7 +300,7 @@ export function skeletonModule(program: ts.Program, sourceFile: ts.SourceFile, c
       }
       continue;
     }
-    const registration = registrationOf(statement, builderOf);
+    const registration = registrationOf(checker, statement);
     const name = declaration.names[0]!;
     const path = dottedPath(convexPath, name);
     if (!registration) {
@@ -344,6 +320,7 @@ export function skeletonModule(program: ts.Program, sourceFile: ts.SourceFile, c
         }
       }
     } else if (!reached.has(path)) omitted.push(`${name}: a registered ${registration.kind} no module reaches by name`);
+    else if (registration.unreadable) refusals.push(`${line(statement)}: ${name} ${registration.unreadable}, so its args can't be read; write them out`);
     else {
       try {
         pieces.set(declaration, registeredStub(name, path, registration, reached.get(path)!));
@@ -419,18 +396,19 @@ export function skeletonModule(program: ts.Program, sourceFile: ts.SourceFile, c
     return `${head}{\n  throw notPorted("${path}");\n}${textOf(fn.body.getEnd(), statement.getEnd())}`;
   }
 
-  function registeredStub(name: string, path: string, { kind, args, handler }: Registration, reach: ReadonlySet<Reach>): string {
+  function registeredStub(name: string, path: string, { kind, args, argsType, returns: returnsType }: Registration, reach: ReadonlySet<Reach>): string {
     const argsName = fresh(`${name}Args`);
-    const returns = printed.unwrapPromise(printed.returnOfType(checker.getTypeAtLocation(handler)));
+    // What Convex registered, whatever wrapper built it: its own args and return types.
+    const settled = returnsType.getSymbol()?.name === "Promise" ? checker.getTypeArguments(returnsType as ts.TypeReference)[0]! : returnsType;
+    const returns = printed.print(settled);
     // Args are a map of fields, or already a validator (`v.object(…)`), which the codemod made a schema of.
     let schema: string;
     if (args) {
       const argsText = textOf(args.getStart(sourceFile), args.getEnd());
       schema = validatorClassOf(checker.getTypeAtLocation(args)) ? argsText : `z.strictObject(${argsText})`;
     } else {
-      // Convex checks nothing for a registration that declares no args: the handler's own type is the whole contract.
-      const second = checker.getTypeAtLocation(handler).getCallSignatures()[0]?.parameters[1];
-      schema = `z.custom<${second ? printed.print(checker.getTypeOfSymbolAtLocation(second, handler)) : "Record<string, unknown>"}>()`;
+      // Convex checks nothing for a registration that declares no args: its args type is the whole contract.
+      schema = `z.custom<${printed.print(argsType)}>()`;
     }
     generated.add("notPorted").add("z").add(contexts[kind]);
     if (reach.has("job") && kind !== "query") generated.add(`${kind}Job`);
@@ -494,39 +472,49 @@ export function skeletonModule(program: ts.Program, sourceFile: ts.SourceFile, c
 
 interface Registration {
   kind: "query" | "mutation" | "action";
+  /** The args validator or fields the definition gives, when it gives them. */
   args?: ts.Expression;
-  handler: ts.Expression;
+  argsType: ts.Type;
+  returns: ts.Type;
+  /** Why the definition's args can't be read, such as a spread. */
+  unreadable?: string;
 }
 
 /**
- * `export const name = internalMutation({ args, handler })`, or a builder given the handler alone; a builder imported
- * from Convex is known by the name Convex exports it under, the app's own (`memberQuery`) by its name.
+ * `export const name = <call>`, where the call's type is Convex's `RegisteredQuery<Visibility, Args, Returns>` or its
+ * kin: whichever builder, alias or wrapper made it, that type names its kind, args and return. Its args validator is
+ * read from the definition, `{ args, handler }` or a handler alone.
  */
-function registrationOf(statement: ts.Statement, builderOf: (node: ts.Identifier) => string | undefined): Registration | undefined {
-  if (!ts.isVariableStatement(statement)) return undefined;
-  const initializer = statement.declarationList.declarations[0]?.initializer;
-  if (!initializer || !ts.isCallExpression(initializer) || !ts.isIdentifier(initializer.expression)) return undefined;
-  const builder = builderOf(initializer.expression);
-  const kind = builder ? builders[builder] : undefined;
-  const definition = initializer.arguments[0];
-  if (!kind || !definition) return undefined;
-  if (!ts.isObjectLiteralExpression(definition)) return { kind, handler: definition };
-  // `{ args }` names its value as `args: args` would.
-  const property = (name: string): ts.Expression | undefined => {
-    const found = definition.properties.find((p) => (ts.isPropertyAssignment(p) || ts.isShorthandPropertyAssignment(p)) && p.name.getText() === name);
-    return found && (ts.isPropertyAssignment(found) ? found.initializer : (found as ts.ShorthandPropertyAssignment).name);
-  };
-  const handler = property("handler") ?? definition.properties.find((p) => ts.isMethodDeclaration(p) && p.name.getText() === "handler");
-  if (!handler) return undefined;
-  return { kind, args: property("args"), handler: handler as ts.Expression };
-}
-
-/** What a call returns when it registers a function: Convex's `RegisteredQuery<…>` and its kin, not a name alone. */
-function registeredKind(type: ts.Type): Registration["kind"] | undefined {
+function registrationOf(checker: ts.TypeChecker, statement: ts.Statement): Registration | undefined {
+  if (!ts.isVariableStatement(statement) || statement.declarationList.declarations.length !== 1) return undefined;
+  const initializer = statement.declarationList.declarations[0]!.initializer;
+  if (!initializer || !ts.isCallExpression(initializer)) return undefined;
+  const type = checker.getTypeAtLocation(initializer);
   const alias = type.aliasSymbol;
   const match = alias && /^Registered(Query|Mutation|Action)$/.exec(alias.name);
   if (!match || !alias!.declarations?.some((declaration) => /\/node_modules\/convex\//.test(declaration.getSourceFile().fileName))) return undefined;
-  return match[1]!.toLowerCase() as Registration["kind"];
+  const [, argsType, returns] = type.aliasTypeArguments ?? [];
+  if (!argsType || !returns) return undefined;
+  const registration: Registration = { kind: match[1]!.toLowerCase() as Registration["kind"], argsType, returns };
+  const definition = initializer.arguments[0];
+  if (definition && (ts.isArrowFunction(definition) || ts.isFunctionExpression(definition))) return registration;
+  if (!definition || !ts.isObjectLiteralExpression(definition)) return { ...registration, unreadable: "registers a definition given by reference" };
+  if (definition.properties.some((p) => ts.isSpreadAssignment(p) || (p.name !== undefined && ts.isComputedPropertyName(p.name)))) {
+    return { ...registration, unreadable: "spreads or computes its definition" };
+  }
+  // `{ args }` names its value as `args: args` would.
+  const args = definition.properties.find((p) => (ts.isPropertyAssignment(p) || ts.isShorthandPropertyAssignment(p)) && p.name.getText() === "args");
+  return { ...registration, args: args && (ts.isPropertyAssignment(args) ? args.initializer : (args as ts.ShorthandPropertyAssignment).name) };
+}
+
+/**
+ * A property callers can't assign: declared `readonly`, or made so by the checker (`as const`, `Readonly<T>`), which
+ * marks it with a check flag the public API doesn't type.
+ */
+function isReadonly(property: ts.Symbol): boolean {
+  const checkFlags = (ts as unknown as { getCheckFlags(symbol: ts.Symbol): number }).getCheckFlags(property);
+  const readonlyFlag = (ts as unknown as { CheckFlags: { Readonly: number } }).CheckFlags.Readonly;
+  return (checkFlags & readonlyFlag) !== 0 || (property.declarations ?? []).some((declaration) => (ts.getCombinedModifierFlags(declaration) & ts.ModifierFlags.Readonly) !== 0);
 }
 
 /** Convex's query, mutation or action context, however a module names it. */
@@ -657,7 +645,10 @@ function typePrinter(checker: ts.TypeChecker, servicePath: string, localNames: R
       });
       return `${target.readonly ? "readonly " : ""}[${elements.join(", ")}]`;
     }
-    if (checker.isArrayType(type)) return `${parenthesize(print(checker.getTypeArguments(type as ts.TypeReference)[0]!))}[]`;
+    if (checker.isArrayType(type)) {
+      const readonly = type.getSymbol()?.name === "ReadonlyArray" ? "readonly " : "";
+      return `${readonly}${parenthesize(print(checker.getTypeArguments(type as ts.TypeReference)[0]!))}[]`;
+    }
     if (symbol && (symbol.flags & (ts.SymbolFlags.Interface | ts.SymbolFlags.Class)) !== 0) {
       if (symbol.name in serverTypes && symbol.declarations?.[0]?.getSourceFile().fileName.includes("/convex/dist/")) {
         return mapServerType(symbol.name, (type as ts.TypeReference).typeArguments);
@@ -691,9 +682,9 @@ function typePrinter(checker: ts.TypeChecker, servicePath: string, localNames: R
         const propertyType = checker.getTypeOfSymbol(property);
         // An optional property's `| undefined` is the `?` itself.
         const printedType = optional && propertyType.isUnion() ? printUnion(propertyType.types.filter((member) => !(member.flags & ts.TypeFlags.Undefined))) : print(propertyType);
-        return `${/^[A-Za-z_$][\w$]*$/.test(property.name) ? property.name : JSON.stringify(property.name)}${optional ? "?" : ""}: ${printedType}`;
+        return `${isReadonly(property) ? "readonly " : ""}${/^[A-Za-z_$][\w$]*$/.test(property.name) ? property.name : JSON.stringify(property.name)}${optional ? "?" : ""}: ${printedType}`;
       });
-      const index = checker.getIndexInfosOfType(type).map((info) => `[key: ${print(info.keyType)}]: ${print(info.type)}`);
+      const index = checker.getIndexInfosOfType(type).map((info) => `${info.isReadonly ? "readonly " : ""}[key: ${print(info.keyType)}]: ${print(info.type)}`);
       if (checker.getSignaturesOfType(type, ts.SignatureKind.Call).length > 0) throw new Error(`returns a function, ${checker.typeToString(type)}`);
       if (checker.getSignaturesOfType(type, ts.SignatureKind.Construct).length > 0) throw new Error(`returns a constructor, ${checker.typeToString(type)}`);
       return `{ ${[...properties, ...index].join("; ")} }`;
@@ -713,19 +704,12 @@ function typePrinter(checker: ts.TypeChecker, servicePath: string, localNames: R
   };
   const typeArguments = (args: readonly ts.Type[] | undefined) => (args && args.length > 0 ? `<${args.map(print).join(", ")}>` : "");
   const parenthesize = (printed: string) => (/[|&]/.test(printed) && !/^[{[(]/.test(printed) ? `(${printed})` : printed);
-  const returnOfType = (type: ts.Type) => {
-    const signature = type.getCallSignatures()[0];
-    if (!signature) throw new Error(`has a handler of no call signature`);
-    return print(checker.getReturnTypeOfSignature(signature));
-  };
   return {
     imports: imports as ReadonlyMap<string, Set<string>>,
     /** This module's own types the printer named. */
     locals: locals as ReadonlySet<string>,
     print,
     returnOf: (fn: ts.SignatureDeclaration) => print(checker.getReturnTypeOfSignature(checker.getSignatureFromDeclaration(fn)!)),
-    returnOfType,
-    unwrapPromise: (printed: string) => (printed.startsWith("Promise<") && printed.endsWith(">") ? printed.slice(8, -1) : printed),
     servicePath,
   };
 }
@@ -820,7 +804,10 @@ function isDeclarationNode(node: ts.Node): boolean {
     ts.isVariableDeclaration(node) ||
     ts.isBindingElement(node) ||
     ts.isFunctionDeclaration(node) ||
+    // `function notPorted() {}` as a value names a binding inside its own body.
+    ts.isFunctionExpression(node) ||
     ts.isClassDeclaration(node) ||
+    ts.isClassExpression(node) ||
     ts.isInterfaceDeclaration(node) ||
     ts.isTypeAliasDeclaration(node) ||
     ts.isEnumDeclaration(node)

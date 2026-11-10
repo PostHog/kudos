@@ -1,5 +1,7 @@
 // What a skeleton can't stub without changing what other modules see, so the generator refuses it.
 import type { QueryCtx } from "../_generated/server";
+import { internalMutation } from "../_generated/server";
+import { v } from "convex/values";
 
 type QueryContext = { local: true };
 export const local: QueryContext = { local: true };
@@ -22,3 +24,12 @@ readers.push(async (ctx: QueryCtx) => ctx.db.query("members").first());
 export enum Mode {
   On,
 }
+
+// A stub named like the service's helper would call itself.
+export const read = function notPorted(ctx: QueryCtx): number {
+  return 1;
+};
+
+// A reached registration whose args come through a spread can't be read.
+const options = { args: { note: v.string() } };
+export const spread = internalMutation({ ...options, handler: async (_ctx, { note }) => note });

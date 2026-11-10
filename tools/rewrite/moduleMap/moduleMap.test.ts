@@ -260,7 +260,7 @@ describe("the equivalence check", () => {
 });
 
 describe("the skeleton generator", () => {
-  const modules = ["convex/skeleton/awards.ts", "convex/skeleton/caller.ts", "convex/skeleton/tangled.ts", "convex/skeleton/edges.ts", "convex/skeleton/refused.ts", "convex/skeleton/inline.ts", "convex/skeleton/shadowed.ts", "convex/skeleton/appTypes.ts", "convex/skeleton/helpers.ts"];
+  const modules = ["convex/skeleton/awards.ts", "convex/skeleton/caller.ts", "convex/skeleton/tangled.ts", "convex/skeleton/edges.ts", "convex/skeleton/refused.ts", "convex/skeleton/inline.ts", "convex/skeleton/shadowed.ts", "convex/skeleton/appTypes.ts", "convex/skeleton/helpers.ts", "convex/skeleton/wrapped.ts"];
   const program = ts.createProgram(modules.map(onDisk), compilerOptions);
   const sourceFiles = modules.map((module) => program.getSourceFile(onDisk(module))!);
   const reached = reachedByName(sourceFiles);
@@ -269,6 +269,7 @@ describe("the skeleton generator", () => {
   const edges = landed(skeleton(3));
   const appTypes = landed(skeleton(7));
   const helpers = landed(skeleton(8));
+  const wrapped = landed(skeleton(9));
 
   test("finds every function reached by name: run in place by an action, or later by the scheduler, a cron or the bus", () => {
     expect(Object.fromEntries([...reached].map(([path, how]) => [path, [...how]]))).toEqual({
@@ -278,6 +279,8 @@ describe("the skeleton generator", () => {
       "skeleton.edges.byShorthand": ["job"],
       "skeleton.edges.viaAlias": ["job"],
       "skeleton.appTypes.noArgs": ["job"],
+      "skeleton.wrapped.save": ["job"],
+      "skeleton.refused.spread": ["job"],
       "skeleton.awards.memberOf": ["run"],
       "skeleton.awards.recordAward": ["run"],
     });
@@ -498,6 +501,38 @@ export function keyed(ctx: QueryContext, key: string): string {
     expect(appTypes.omitted).toEqual(["kind: names the enum Kind, which the service's erasableSyntaxOnly has no counterpart for"]);
   });
 
+  test("knows a registration by Convex's registered type, whatever wrapper made it, and keeps merged and readonly types", () => {
+    expect(wrapped.text).toBe(`// The module map's skeleton of convex/skeleton/wrapped.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
+// notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
+import { z } from "zod";
+import type { MutationContext, QueryContext } from "../operations.ts";
+import { notPorted } from "../notPorted.ts";
+import { mutationJob } from "../jobs/define.ts";
+
+export const saveArgs = z.strictObject({ note: z.string() });
+export async function save(ctx: MutationContext, args: z.infer<typeof saveArgs>): Promise<void> {
+  throw notPorted("skeleton.wrapped.save");
+}
+export const saveJob = mutationJob("skeleton.wrapped.save", saveArgs, save);
+
+interface Row {
+  a: string;
+}
+interface Row {
+  b: number;
+}
+
+export async function row(ctx: QueryContext): Promise<Row> {
+  throw notPorted("skeleton.wrapped.row");
+}
+
+export function frozen(ctx: QueryContext): { readonly value: number; readonly list: readonly number[] } {
+  throw notPorted("skeleton.wrapped.frozen");
+}
+`);
+    expect(wrapped.omitted).toEqual([]);
+  });
+
   test("imports a service helper only where a stub writes it, not for a module's own of the same name", () => {
     expect(helpers.text).toBe(`// The module map's skeleton of convex/skeleton/helpers.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
 // notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
@@ -515,11 +550,13 @@ export function notPorted() {
   test("refuses what it can't stub without changing what other modules see, and any way of reaching Convex in what it writes", () => {
     expect(skeleton(4)).toEqual({
       refusals: [
-        "convex/skeleton/refused.ts:14: exports viaList by a list; export the declaration itself",
-        "convex/skeleton/refused.ts:16: declares one, two in one statement over a context; declare each on its own",
-        "convex/skeleton/refused.ts:19: a top-level statement over a context or Convex's machinery",
-        "convex/skeleton/refused.ts:22: declares the enum Mode, which the service's erasableSyntaxOnly forbids; port it as a union of literals",
+        "convex/skeleton/refused.ts:16: exports viaList by a list; export the declaration itself",
+        "convex/skeleton/refused.ts:18: declares one, two in one statement over a context; declare each on its own",
+        "convex/skeleton/refused.ts:21: a top-level statement over a context or Convex's machinery",
+        "convex/skeleton/refused.ts:35: spread spreads or computes its definition, so its args can't be read; write them out",
+        "convex/skeleton/refused.ts:24: declares the enum Mode, which the service's erasableSyntaxOnly forbids; port it as a union of literals",
         "convex/skeleton/refused.ts: declares or imports QueryContext, a name the skeleton writes for the service's own",
+        "convex/skeleton/refused.ts:29: declares notPorted, a name the skeleton writes for the service's own",
       ],
     });
     expect(skeleton(5)).toEqual({
@@ -539,7 +576,7 @@ export function notPorted() {
 
   describe("its output in the service", () => {
     const serviceModules = ["values.ts", "notPorted.ts", "operations.ts", "jobs/define.ts", "db/columns.ts", "db/schema/index.ts", "db/page.ts"];
-    const scratch = scratchService(serviceModules, [awards, edges, appTypes, helpers]);
+    const scratch = scratchService(serviceModules, [awards, edges, appTypes, helpers, wrapped]);
 
     test("typechecks under the service's compiler options", () => {
       expect(scratch.diagnostics()).toEqual([]);
@@ -580,6 +617,10 @@ export function notPorted() {
       expect(appModule.settings).toEqual({ ready: true }); // Object.assign on a module value still ran
       expect(appModule.noArgsJob.args.safeParse({ note: "x", more: 1 }).success).toBe(true); // Convex checks no args it wasn't given
       expect(appModule.answer).toBe(42); // an imported helper named like a builder is no builder
+
+      const wrappedModule = await import(scratch.path(wrapped.servicePath));
+      expect(wrappedModule.saveJob).toMatchObject({ name: "skeleton.wrapped.save", kind: "mutation" }); // a local wrapper's registration
+      expect(wrappedModule.saveJob.args.safeParse({ note: "x", extra: 1 }).success).toBe(false);
     });
   });
 });
