@@ -1,4 +1,5 @@
 // The service's own tables, beside the ones generated from convex/schema.ts.
+import { sql } from "drizzle-orm";
 import { doublePrecision, index, jsonb, pgSequence, pgTable, primaryKey, text } from "drizzle-orm/pg-core";
 import type { FlagDefinitions } from "../../analytics/evaluator/types.ts";
 import { bytes, creationTime, f64, id, str, value } from "../columns.ts";
@@ -52,8 +53,14 @@ export const jobs = pgTable(
     error: str(),
     completedAt: f64(),
     deadline: f64(),
+    /** When the failed-job sweep took a failed job in, by the app's clock; NULL until it has. */
+    sweptAt: f64(),
   },
-  (t) => [index("jobs_by_state_and_runAt").on(t.state, t.runAt, t._creationTime, t._id)],
+  (t) => [
+    index("jobs_by_state_and_runAt").on(t.state, t.runAt, t._creationTime, t._id),
+    // The failed jobs the sweep has yet to take in, in the order they finished: what it reads stays as small as its backlog.
+    index("jobs_failed_and_unswept").on(t.completedAt, t._id).where(sql`${t.state} = 'failed' and ${t.sweptAt} is null`),
+  ],
 );
 
 /** Each cron's next run; the copy that moves it forward fires the cron. */
