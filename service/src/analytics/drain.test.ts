@@ -423,7 +423,13 @@ describe("the drain and the requests that wake it", () => {
     // A database user that may read and write every table, but only write the outbox and the jobs.
     const user = `recorder_${database.schema}_${Date.now()}`;
     const admin = (statement: string) => database.pool.query(statement);
+    let pool: ReturnType<typeof createPool> | undefined;
     await admin(`create role "${user}" login password 'recorder'`);
+    onTestFinished(async () => {
+      await pool?.end();
+      await admin(`drop owned by "${user}"`);
+      await admin(`drop role "${user}"`);
+    });
     await admin(`grant usage on schema "${database.schema}" to "${user}"`);
     await admin(`grant select, insert, update, delete on all tables in schema "${database.schema}" to "${user}"`);
     await admin(`grant usage, select, update on all sequences in schema "${database.schema}" to "${user}"`);
@@ -431,12 +437,7 @@ describe("the drain and the requests that wake it", () => {
     const url = new URL(database.url);
     url.username = user;
     url.password = "recorder";
-    const pool = createPool(url.toString());
-    onTestFinished(async () => {
-      await pool.end();
-      await admin(`drop owned by "${user}"`);
-      await admin(`drop role "${user}"`);
-    });
+    pool = createPool(url.toString());
     const recorder = createOperations({ pool, clock, log: quiet, retryDelayMs: () => 1 });
 
     await recorder.mutation("test.request", (ctx) =>
