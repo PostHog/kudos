@@ -211,6 +211,11 @@ export async function dayThankedBefore({ tx }: QueryContext, award: AwardId): Pr
   return previous?.day ?? null;
 }
 
+/** When the award was recorded, its row's creation time, or null when there is no such award: today's `ctx.db.get`. */
+export async function awardRecordedAt({ tx }: QueryContext, award: AwardId): Promise<number | null> {
+  return (await awardById(tx, award))?._creationTime ?? null;
+}
+
 export type GivenKudos = { award: AwardId; message: MessageRef; at: number };
 
 export async function givenRecordedAfter({ tx }: QueryContext, giver: MemberId, after: number): Promise<GivenKudos[]> {
