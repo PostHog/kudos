@@ -1,8 +1,8 @@
 // The module map's skeleton of convex/website/skillTree.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
 // notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
 import type { PerkId } from "../progression/tree.ts";
-import { type Denial, type VerifiedMember } from "./memberQuery.ts";
-import { type PageWaits, type UnlockPath } from "./unlockPath.ts";
+import type { Denial, VerifiedMember } from "./memberQuery.ts";
+import type { PageWaits, UnlockPath } from "./unlockPath.ts";
 import type { QueryContext } from "../operations.ts";
 import { notPorted } from "../notPorted.ts";
 

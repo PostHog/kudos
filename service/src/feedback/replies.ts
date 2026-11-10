@@ -1,11 +1,11 @@
 // The module map's skeleton of convex/feedback/replies.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
 // notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
-import { type ChatUserId, type Mention, type MessageRef } from "../engine/messageEvent.ts";
+import type { ChatUserId, Mention, MessageRef } from "../engine/messageEvent.ts";
 import { bonusLineValidator } from "../progression/progress.ts";
 import { journeyStepValidator } from "../quests/step.ts";
 import type { MovedQuest } from "../quests/progress.ts";
 import type { ThoughtfulPacksGrantedEvent } from "../bus/events.ts";
-import { type MemberId } from "../workspace/directory.ts";
+import type { MemberId } from "../workspace/directory.ts";
 import type { Line } from "./segments.ts";
 import { z } from "zod";
 import { zv } from "../values.ts";
