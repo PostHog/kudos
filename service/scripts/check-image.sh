@@ -56,8 +56,16 @@ docker run -d --name "$run_id-app" "${limits[@]}" --network "$run_id" -e PORT=90
 app_port="$(docker port "$run_id-app" 9090/tcp | head -1 | sed 's/.*://')"
 health="$(wait_for_health "$app_port" '"migrations":"done"')"
 [[ "$health" == *"\"commit\":\"$commit\""* ]] || fail "/healthz serves '$health', not commit $commit"
-[[ "$(status_of "$app_port" /nowhere)" == "404" ]] || fail "an unknown route after the migrations did not answer 404"
+[[ "$(status_of "$app_port" /nowhere.txt)" == "404" ]] || fail "an unknown file after the migrations did not answer 404"
 echo "ok: migrates under --memory 512m --cpus 0.5 on \$PORT and serves commit $commit"
+
+# The website's build is in the image: its page, with the policy, at any address, and its hashed files cached for good.
+page_headers="$(curl -fsS -D - -o /dev/null "http://127.0.0.1:$app_port/leaderboard")" || fail "the website's page did not answer"
+[[ "$page_headers" == *"content-security-policy: default-src 'self'"* ]] || fail "the website's page came without its policy: $page_headers"
+asset="$(curl -fsS "http://127.0.0.1:$app_port/" | grep -o '/assets/index-[A-Za-z0-9_-]*\.js' | head -1)"
+[[ -n "$asset" ]] || fail "the website's page names no built script"
+[[ "$(curl -fsS -D - -o /dev/null "http://127.0.0.1:$app_port$asset")" == *"cache-control: public, max-age=31536000, immutable"* ]] || fail "$asset is not cached for good"
+echo "ok: serves the website's build with its policy and cache headers"
 docker stats --no-stream --format 'memory after boot: {{.MemUsage}}' "$run_id-app"
 
 # fetch goes through HTTPS_PROXY: a proxy that refuses connections makes a public fetch fail on the proxy's port.

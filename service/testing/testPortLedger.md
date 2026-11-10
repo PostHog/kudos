@@ -260,7 +260,7 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/website/features.test.ts | S15 | | |
 | convex/website/groupBoards.test.ts | S16 | | |
 | convex/website/hoggieForge.test.ts | S16 | | |
-| convex/website/hosting.test.ts | S15 | | |
+| convex/website/hosting.test.ts | S15 | service/src/website/hosting.test.ts | |
 | convex/website/inventory.test.ts | S16 | | |
 | convex/website/lastVisit.test.ts | S17 | | |
 | convex/website/leaderboard.test.ts | S16 | | |
@@ -288,7 +288,7 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/website/weeklyPost.test.ts | S17 | | |
 | convex/website/xpMoment.test.ts | S17 | | |
 | convex/welcome/welcome.test.ts | S5 | | |
-| convex/workspace/workspaceSettings.test.ts | S3 | | |
+| convex/workspace/workspaceSettings.test.ts | S3 | service/src/workspace/workspaceSettings.test.ts | S4 S17 |
 | e2e/edgeSignIn.test.ts | S20 | | |
 | e2e/fakes/server.test.ts | S20 | | |
 | e2e/local/edge.test.ts | S20 | | |
