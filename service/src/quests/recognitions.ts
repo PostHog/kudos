@@ -13,6 +13,7 @@ import type { WeekKey } from "./week.ts";
 import { z } from "zod";
 import { zv } from "../values.ts";
 import type { MutationContext, QueryContext } from "../operations.ts";
+import { unique } from "../db/unique.ts";
 
 export const recognitionFactValidator = z.strictObject({
   source: z.union([z.literal("kudos"), z.literal("hug")]),
@@ -75,6 +76,5 @@ async function isRecognized(ctx: QueryContext, giver: MemberId, key: string): Pr
     .where(and(eq(questRecognitions.giver, giver), eq(questRecognitions.key, key)))
     .orderBy(...byGiverKey.orderBy())
     .limit(2);
-  if (rows.length > 1) throw new Error("The giver has more than one recognition under one key");
-  return rows.length === 1;
+  return unique("questRecognitions", rows) !== null;
 }
