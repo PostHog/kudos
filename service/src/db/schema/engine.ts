@@ -1,9 +1,9 @@
 // Generated once from convex/schema.ts by tools/rewrite/drizzle; owned by hand from here on.
-import { index, pgTable } from "drizzle-orm/pg-core";
-import { bool, creationTime, f64, i64, id, str, value, type Id } from "../columns.ts";
+import { index } from "drizzle-orm/pg-core";
+import { bool, creationTime, documentTable, f64, i64, id, type Id, str, value } from "../columns.ts";
 import { nullValued } from "../documents.ts";
 
-export const kudosMessages = pgTable(
+export const kudosMessages = documentTable(
   "kudosMessages",
   {
     _id: id(),
@@ -29,7 +29,7 @@ export const kudosMessages = pgTable(
   ],
 );
 
-export const kudosTexts = pgTable(
+export const kudosTexts = documentTable(
   "kudosTexts",
   {
     _id: id(),
@@ -52,7 +52,7 @@ export const kudosTexts = pgTable(
   ],
 );
 
-export const wordDeletionRequests = pgTable(
+export const wordDeletionRequests = documentTable(
   "wordDeletionRequests",
   {
     _id: id(),
@@ -66,7 +66,7 @@ export const wordDeletionRequests = pgTable(
 );
 nullValued(wordDeletionRequests, ["author"]);
 
-export const spotlightDraws = pgTable(
+export const spotlightDraws = documentTable(
   "spotlightDraws",
   {
     _id: id(),
@@ -82,7 +82,7 @@ export const spotlightDraws = pgTable(
   ],
 );
 
-export const awards = pgTable(
+export const awards = documentTable(
   "awards",
   {
     _id: id(),
@@ -110,7 +110,7 @@ export const awards = pgTable(
   ],
 );
 
-export const kudosTotals = pgTable(
+export const kudosTotals = documentTable(
   "kudosTotals",
   {
     _id: id(),
@@ -124,7 +124,7 @@ export const kudosTotals = pgTable(
   ],
 );
 
-export const allowanceSpending = pgTable(
+export const allowanceSpending = documentTable(
   "allowanceSpending",
   {
     _id: id(),

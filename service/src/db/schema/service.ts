@@ -1,14 +1,14 @@
 // The service's own tables, beside the ones generated from convex/schema.ts.
 import { doublePrecision, index, jsonb, pgSequence, pgTable, primaryKey, text } from "drizzle-orm/pg-core";
 import type { FlagDefinitions } from "../../analytics/evaluator/types.ts";
-import { bytes, creationTime, f64, id, str, value } from "../columns.ts";
+import { bytes, creationTime, documentTable, f64, id, str, value } from "../columns.ts";
 
 /**
  * Rows of Convex tables the rewrite doesn't use, kept verbatim: Convex Auth's tables other than `users`, the
  * components' private tables and every exported `_scheduled_functions` row. `document` is the whole document in the
  * codec's stored encoding; nothing is dropped.
  */
-export const archive = pgTable(
+export const archive = documentTable(
   "archive",
   {
     /** Where the row came from: `app`, or the component's path in the export, such as `_components/posthog`. */
@@ -25,7 +25,7 @@ export const archive = pgTable(
  * Stored files, such as card pictures: Convex's `_storage` document field by field, with its bytes.
  * `contentType` is optional in `_storage`, so NULL means it was missing.
  */
-export const files = pgTable("files", {
+export const files = documentTable("files", {
   _id: id(),
   _creationTime: creationTime(),
   sha256: str().notNull(),
@@ -38,7 +38,7 @@ export const files = pgTable("files", {
  * Every job, pending or done: the one job history, which the failed-job sweep and the bus's replay read. `args` is in
  * the codec's stored encoding; `deadline` is set on an action job when it starts running.
  */
-export const jobs = pgTable(
+export const jobs = documentTable(
   "jobs",
   {
     _id: id(),
