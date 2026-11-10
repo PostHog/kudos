@@ -6,18 +6,9 @@ import { zv } from "../values.ts";
 import type { ActionContext, MutationContext } from "../operations.ts";
 import { notPorted } from "../notPorted.ts";
 
-type ActionDefinition<Args extends z.ZodRawShape, Output> = {
-  args: Args;
-  handler: (ctx: ActionContext, args: z.infer<z.ZodObject<Args>>) => Promise<Output>;
-};
-
 type Observation = { carriesWords?: boolean };
 
 const observedFunctions = new WeakSet<object>();
-
-export function observedAction<Args extends z.ZodRawShape, Output>(definition: ActionDefinition<Args, Output>, observation: Observation = {}): { isConvexFunction: true; isAction: true } & { _visibility: "internal" } & { isInternal: true } {
-  throw notPorted("analytics.boundary.observedAction");
-}
 
 export function observedHttpAction(handler: (ctx: ActionContext, request: Request) => Promise<Response>, observation: Observation = {}): { isHttp: true } {
   throw notPorted("analytics.boundary.observedHttpAction");

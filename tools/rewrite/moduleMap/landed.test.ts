@@ -11,6 +11,7 @@ import { landAll } from "./bootstrap.ts";
 import { importOnlyDiff } from "./copy.ts";
 import { disagreements } from "./equivalence.ts";
 import { servicePathOf } from "./imports.ts";
+import { portedPart } from "./skeleton.ts";
 
 const repo = fileURLToPath(new URL("../../..", import.meta.url));
 const read = (path: string) => readFileSync(join(repo, path), "utf8");
@@ -55,7 +56,11 @@ test("nothing the module map wrote is registered yet", async () => {
   const { serviceRegistry } = await load("service/src/registry.ts");
   const registered = (serviceRegistry as { jobs: ReadonlyMap<string, unknown> }).jobs;
   const isJob = (value: unknown): value is { name: string; kind: string } => typeof value === "object" && value !== null && "handler" in value && "kind" in value && "name" in value;
-  const jobs = (await Promise.all(modules.filter(({ convexPath }) => !isTest(convexPath)).map(({ servicePath }) => load(servicePath)))).flatMap((exports) => Object.values(exports).filter(isJob));
+  // In a module S1 ported in part, only what follows S1's code is the map's.
+  const wrote = (text: string) => text.slice(portedPart(text) === text ? 0 : portedPart(text).length);
+  const jobsOf = async ({ servicePath, text }: (typeof modules)[number]) =>
+    Object.entries(await load(servicePath)).flatMap(([name, value]) => (isJob(value) && new RegExp(`export const ${name}\\b`).test(wrote(text)) ? [value] : []));
+  const jobs = (await Promise.all(modules.filter(({ convexPath }) => !isTest(convexPath)).map(jobsOf))).flat();
 
   expect(jobs.length).toBeGreaterThan(0);
   // By the job itself, not its name: S1 holds a placeholder under a name the map writes too (`analytics.drain.drain`),

@@ -15,7 +15,7 @@ import { convertModule } from "./codemod.ts";
 import { toolOf } from "./bootstrap.ts";
 import { copyModule, importOnlyDiff } from "./copy.ts";
 import { convexAccepts, disagreements } from "./equivalence.ts";
-import { reachedByName, skeletonModule } from "./skeleton.ts";
+import { portedPart, reachedByName, skeletonModule } from "./skeleton.ts";
 
 const repo = fileURLToPath(new URL("../../..", import.meta.url));
 const fixtures = fileURLToPath(new URL("./fixtures", import.meta.url));
@@ -275,7 +275,7 @@ describe("the bootstrap's choice of tool", () => {
 });
 
 describe("the skeleton generator", () => {
-  const modules = ["convex/skeleton/awards.ts", "convex/skeleton/caller.ts", "convex/skeleton/tangled.ts", "convex/skeleton/edges.ts", "convex/skeleton/refused.ts", "convex/skeleton/inline.ts", "convex/skeleton/shadowed.ts", "convex/skeleton/appTypes.ts", "convex/skeleton/helpers.ts", "convex/skeleton/wrapped.ts", "convex/skeleton/printed.ts"];
+  const modules = ["convex/skeleton/awards.ts", "convex/skeleton/caller.ts", "convex/skeleton/tangled.ts", "convex/skeleton/edges.ts", "convex/skeleton/refused.ts", "convex/skeleton/inline.ts", "convex/skeleton/shadowed.ts", "convex/skeleton/appTypes.ts", "convex/skeleton/helpers.ts", "convex/skeleton/wrapped.ts", "convex/skeleton/printed.ts", "convex/wrapping/builder.ts"];
   const program = ts.createProgram(modules.map(onDisk), compilerOptions);
   const sourceFiles = modules.map((module) => program.getSourceFile(onDisk(module))!);
   const reached = reachedByName(sourceFiles);
@@ -286,6 +286,7 @@ describe("the skeleton generator", () => {
   const helpers = landed(skeleton(8));
   const wrapped = landed(skeleton(9));
   const printed = landed(skeleton(10));
+  const builder = landed(skeleton(11));
 
   test("prints an ID that lost its alias as the service's Id, parenthesizes a union of objects in an array, and leaves out a type the checker can't resolve", () => {
     expect(printed.text).toContain('export async function tagged(ctx: QueryContext): Promise<Id<"members">> {');
@@ -294,6 +295,59 @@ describe("the skeleton generator", () => {
     expect(printed.text).toContain('export async function indexed(ctx: QueryContext): Promise<string & { __tableName: "members"; [key: string]: unknown }> {');
     expect(printed.text).not.toContain("sorted");
     expect(printed.omitted).toEqual(["sorted: names a type the checker can't resolve, so its signature can't be printed"]);
+  });
+
+  test("leaves out a builder that returns Convex's registration, which the service's operations replace", () => {
+    expect(builder.text).not.toContain("memberRead");
+    expect(builder.omitted).toEqual(["memberRead: returns a Convex function registration, which the service's operations replace"]);
+  });
+
+  describe("over a module S1 ported in part", () => {
+    // S1's port of the awards module: one helper by the same name, and one job under the Convex path of another.
+    const ported = [
+      "// S1's port of part of convex/skeleton/awards.ts.",
+      'import { z } from "zod";',
+      'import { mutationJob } from "../jobs/define.ts";',
+      'import type { MutationContext } from "../operations.ts";',
+      "",
+      "export function dayOf(at: number): number {",
+      "  return Math.floor(at / 86_400_000);",
+      "}",
+      "",
+      'export const sweepJob = mutationJob("skeleton.awards.sweepAwards", z.strictObject({}), async (ctx: MutationContext) => {});',
+      "",
+    ].join("\n");
+    const rest = landed(skeletonModule(program, sourceFiles[0]!, modules[0]!, reached, exists, ported));
+    const stubs = rest.text.slice(ported.length);
+
+    test("keeps S1's code as it is and appends stubs for only what S1 left, under the module map's marker", () => {
+      expect(rest.text.startsWith(ported)).toBe(true);
+      expect(stubs).toMatch(/^\n\/\/ The module map's stubs of the rest of convex\/skeleton\/awards\.ts/);
+      expect(stubs).toContain("export async function grant(ctx: MutationContext, member: Id<\"members\">, award: AwardId): Promise<void> {");
+      expect(stubs).not.toContain("function dayOf");
+      expect(stubs).not.toContain("sweepAwards");
+      expect(rest.omitted).toContain("sweepAwards: S1 ported it as the job skeleton.awards.sweepAwards");
+    });
+
+    test("imports only what S1's code doesn't bind already", () => {
+      expect(rest.text.match(/from "zod"/g)).toHaveLength(1);
+      expect(stubs).not.toMatch(/\bMutationContext\b[^\n]*from "\.\.\/operations\.ts"/);
+      expect(stubs).toMatch(/import type \{ ActionContext, QueryContext \} from "\.\.\/operations\.ts";/);
+    });
+
+    test("lands the same text again from what it wrote", () => {
+      expect(landed(skeletonModule(program, sourceFiles[0]!, modules[0]!, reached, exists, portedPart(rest.text))).text).toBe(rest.text);
+    });
+
+    test("refuses when S1's code imports a name the stubs import from another module", () => {
+      const refused = skeletonModule(program, sourceFiles[0]!, modules[0]!, reached, exists, 'import { notPorted } from "../elsewhere.ts";\n');
+      expect(refused).toEqual({ refusals: ["convex/skeleton/awards.ts: its stubs import notPorted from ../notPorted.ts, which S1's service/src/skeleton/awards.ts binds otherwise"] });
+    });
+
+    test("lets S1's own declaration of a name stand for the stubs' import of it", () => {
+      const own = landed(skeletonModule(program, sourceFiles[0]!, modules[0]!, reached, exists, 'type Id<T extends string> = string & { __tableName: T };\n'));
+      expect(own.text.slice(own.text.indexOf("\n// The module map's stubs"))).not.toContain("import type { Id }");
+    });
   });
 
   test("finds every function reached by name: run in place by an action, or later by the scheduler, a cron or the bus", () => {

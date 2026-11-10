@@ -411,12 +411,16 @@ export const landed = [
   "convex/workspace/workspaceSettings.ts",
 ];
 
+/**
+ * The convex/ modules S1 ported in part, whose service file holds S1's code: the module map appends stubs for what S1
+ * left of each, which other stacks reach (`workspace/directory` follows members through `analytics/person`).
+ */
+export const partlyPorted = ["convex/analytics/flags.ts", "convex/analytics/person.ts", "convex/slack/receipts.ts"];
+
 /** The convex/ modules that never land, with why. */
 export const notLanded: Record<string, string> = {
   "convex/analytics/capture.ts": "S1 ported it to service/src/analytics/capture.ts",
-  "convex/analytics/flags.ts": "S1 ported it to service/src/analytics/flags.ts",
   "convex/analytics/outbox.ts": "S1 ported it to service/src/analytics/outbox.ts",
-  "convex/analytics/person.ts": "S1 ported it to service/src/analytics/person.ts",
   "convex/auth.config.ts": "Convex Auth's provider configuration, for Convex's own runtime",
   "convex/auth.ts": "Convex Auth's wiring; the website platform's sign-in replaces it",
   "convex/bus/publish.ts": "S1 ported it to service/src/bus/publish.ts",
@@ -424,7 +428,6 @@ export const notLanded: Record<string, string> = {
   "convex/crons.ts": "Convex's cron table; S1's service/src/jobs/crons.ts names every cron",
   "convex/http.ts": "Convex's HTTP router; S1's front door routes the service",
   "convex/schema.ts": "Convex's schema; S1's Drizzle schema replaces it",
-  "convex/slack/receipts.ts": "S1 ported it to service/src/slack/receipts.ts",
   "convex/slack/signature.ts": "S1 ported it to service/src/slack/signature.ts",
   "convex/test.setup.ts": "convex-test's module glob, for the Convex harness only",
 };

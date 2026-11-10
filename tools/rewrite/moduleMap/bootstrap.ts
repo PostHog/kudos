@@ -1,6 +1,7 @@
 // The bootstrap: lands the modules `landed.ts` lists in the service. A module that names nothing of Convex lands
 // through the copy tool, one with validators through the codemod, one that names Convex's machinery (a builder, a
 // context, `internal`) through the skeleton generator, and the whole list only once the closure check finds it closed.
+// A module S1 ported in part (`partlyPorted`) keeps S1's code, with the skeleton's stubs for the rest after it.
 // Run it from the repository's root to write them:
 //   node --experimental-strip-types tools/rewrite/moduleMap/bootstrap.ts
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -10,9 +11,9 @@ import ts from "typescript5";
 import { closureCheck, servicePackages } from "./closure.ts";
 import { convertModule, validatorEdits } from "./codemod.ts";
 import { convexPackage, copyModule, type Landed } from "./copy.ts";
-import { convexRoot } from "./imports.ts";
-import { landed } from "./landed.ts";
-import { overContext, reachedByName, skeletonModule, type Skeleton } from "./skeleton.ts";
+import { convexRoot, servicePathOf } from "./imports.ts";
+import { landed, partlyPorted } from "./landed.ts";
+import { overContext, portedPart, reachedByName, skeletonModule, type Skeleton } from "./skeleton.ts";
 
 export interface LandedModule {
   convexPath: string;
@@ -26,10 +27,10 @@ export interface LandedModule {
 const machinery = /(^|\/)_generated\/(api|server)(\.[jt]s)?$|^convex\/server$/;
 
 /** Every listed module as its tool lands it, and what keeps the list from landing: refusals and unresolved imports. */
-export function landAll(repo: string, paths: readonly string[] = landed): { modules: LandedModule[]; problems: string[] } {
+export function landAll(repo: string, paths: readonly string[] = landed, partly: readonly string[] = partlyPorted): { modules: LandedModule[]; problems: string[] } {
   const exists = (path: string) => existsSync(join(repo, path));
   // Every module of convex/, since a skeleton keeps what any of them reaches by name, checked as Convex checks them.
-  const program = ts.createProgram([...new Set([...convexModules(repo), ...paths].map((path) => join(repo, path)))], convexOptions(repo));
+  const program = ts.createProgram([...new Set([...convexModules(repo), ...paths, ...partly].map((path) => join(repo, path)))], convexOptions(repo));
   let reachedOnce: ReturnType<typeof reachedByName> | undefined;
   const reached = () => (reachedOnce ??= reachedByName(program.getSourceFiles().filter((file) => file.fileName.startsWith(join(repo, convexRoot, "/")) && !file.fileName.includes("/_generated/"))));
   const modules: LandedModule[] = [];
@@ -41,6 +42,13 @@ export function landAll(repo: string, paths: readonly string[] = landed): { modu
     const result: Skeleton | Landed = tool === "skeleton" ? skeletonModule(program, sourceFile, convexPath, reached(), exists) : tool === "convert" ? convertModule(program, sourceFile, convexPath, exists) : copyModule(convexPath, text, exists);
     if ("refusals" in result) problems.push(...result.refusals);
     else modules.push({ convexPath, servicePath: result.servicePath, tool, text: result.text, omitted: (result as Partial<Skeleton>).omitted ?? [] });
+  }
+  for (const convexPath of partly) {
+    const servicePath = servicePathOf(convexPath);
+    const ported = portedPart(readFileSync(join(repo, servicePath), "utf8"));
+    const result = skeletonModule(program, program.getSourceFile(join(repo, convexPath))!, convexPath, reached(), exists, ported);
+    if ("refusals" in result) problems.push(...result.refusals);
+    else modules.push({ convexPath, servicePath, tool: "skeleton", text: result.text, omitted: result.omitted });
   }
   const batch = new Map(modules.map(({ servicePath, text }) => [servicePath, text]));
   // A landed module's own file on disk is what the batch replaces, so only the batch speaks for it.

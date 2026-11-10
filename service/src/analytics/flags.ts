@@ -128,3 +128,22 @@ async function emailOf(ctx: QueryContext, member: MemberId): Promise<{ email?: s
 function canWrite(ctx: QueryContext | MutationContext): ctx is MutationContext {
   return "newRow" in ctx;
 }
+
+// The module map's stubs of the rest of convex/analytics/flags.ts, written by tools/rewrite/moduleMap/skeleton.ts: what S1 left of it
+// throws notPorted until the stack that owns it ports it. Above this line is S1's own.
+import { z } from "zod";
+import { zv } from "../values.ts";
+import { notPorted } from "../notPorted.ts";
+import { mutationJob } from "../jobs/define.ts";
+
+export async function exposedApart<V extends FlagValue>(ctx: MutationContext, read: Flag<V>, member: MemberId, value: NoInfer<V>): Promise<void> {
+  throw notPorted("analytics.flags.exposedApart");
+}
+
+const exposureValidator = { member: zv.id("members"), flag: z.string(), value: z.union([z.string(), z.boolean()]) };
+
+export const recordExposureArgs = z.strictObject(exposureValidator);
+export async function recordExposure(ctx: MutationContext, args: z.infer<typeof recordExposureArgs>): Promise<void> {
+  throw notPorted("analytics.flags.recordExposure");
+}
+export const recordExposureJob = mutationJob("analytics.flags.recordExposure", recordExposureArgs, recordExposure);
