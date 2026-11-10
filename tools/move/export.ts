@@ -3,7 +3,11 @@
 // row into a job, so an export without them would move no pending work and say nothing. This adds each namespace's
 // `_scheduled_functions/documents.jsonl`, the app's and every component's, in the export's own encoding.
 //
-//   node tools/move/export.ts --env-file <deployment env> --path <export.zip>
+//   node tools/move/export.ts --env-file <deployment env> --path <export.zip> [--none-scheduled]
+//
+// It only reads: `convex export` and system-table queries, never a push or a resume. An export that finds no scheduled
+// function in any namespace stops with the counts, since this app always has some; `--none-scheduled` says that is
+// expected. service/src/load/README.md holds the move's steps.
 //
 // The env file names the deployment as `npx convex export` takes it (`CONVEX_SELF_HOSTED_URL` and
 // `CONVEX_SELF_HOSTED_ADMIN_KEY`, or a deploy key's own variables), and the URL and admin key are read from it.
@@ -19,7 +23,7 @@ import { appendToZip, zipEntryNames } from "./zipAppend.ts";
 const pageRows = 1_000;
 
 /** Exports the deployment to `path` with its scheduled functions, and gives back how many it added a namespace. */
-export async function exportForMove({ envFile, path, signal }: { envFile: string; path: string; signal?: AbortSignal }): Promise<Record<string, number>> {
+export async function exportForMove({ envFile, path, signal, noneScheduled = false }: { envFile: string; path: string; signal?: AbortSignal; noneScheduled?: boolean }): Promise<Record<string, number>> {
   await convex(["export", "--include-file-storage", "--path", path, "--env-file", envFile], signal);
   const { CONVEX_SELF_HOSTED_URL: url, CONVEX_SELF_HOSTED_ADMIN_KEY: adminKey } = parseEnv(await readFile(envFile, "utf8"));
   if (!url || !adminKey) throw new Error(`${envFile} names no CONVEX_SELF_HOSTED_URL and CONVEX_SELF_HOSTED_ADMIN_KEY`);
@@ -41,8 +45,15 @@ export async function exportForMove({ envFile, path, signal }: { envFile: string
   } finally {
     await client.close();
   }
+  checkScheduled(counts, noneScheduled);
   await writeFile(path, appendToZip(archive, entries));
   return counts;
+}
+
+/** Stops an export that found no scheduled function anywhere, unless the caller said none is expected. */
+export function checkScheduled(counts: Record<string, number>, noneScheduled: boolean): void {
+  if (noneScheduled || Object.values(counts).some((count) => count > 0)) return;
+  throw new Error(`no scheduled function in any namespace (${JSON.stringify(counts)}): pass --none-scheduled if the deployment truly has none`);
 }
 
 /** The app (`""`) and each component's path (`posthog`, `parent/child`), from where the export put their tables. */
@@ -105,8 +116,8 @@ function convex(args: string[], signal?: AbortSignal): Promise<void> {
 }
 
 if (import.meta.main) {
-  const { values } = parseArgs({ options: { "env-file": { type: "string" }, path: { type: "string" } } });
-  if (!values["env-file"] || !values.path) throw new Error("usage: node tools/move/export.ts --env-file <deployment env> --path <export.zip>");
-  const counts = await exportForMove({ envFile: values["env-file"], path: values.path });
+  const { values } = parseArgs({ options: { "env-file": { type: "string" }, path: { type: "string" }, "none-scheduled": { type: "boolean" } } });
+  if (!values["env-file"] || !values.path) throw new Error("usage: node tools/move/export.ts --env-file <deployment env> --path <export.zip> [--none-scheduled]");
+  const counts = await exportForMove({ envFile: values["env-file"], path: values.path, noneScheduled: values["none-scheduled"] ?? false });
   console.log(`exported to ${values.path}, scheduled functions by namespace: ${JSON.stringify(counts)}`);
 }

@@ -1,45 +1,13 @@
 // @vitest-environment node
-import { createRequire } from "node:module";
 import { describe, expect, test } from "vitest";
+import { entriesOf } from "../../service/testing/exportZip.ts";
 import { zip } from "../../service/testing/zip.ts";
-import { componentsOf } from "./export.ts";
+import { checkScheduled, componentsOf } from "./export.ts";
 import { appendToZip, zipEntryNames } from "./zipAppend.ts";
 
-// The reader the service's load opens a snapshot with (service/src/load/snapshot.ts), a dependency of the service's.
-type Entry = { fileName: string };
-type ZipFile = {
-  on(event: "entry", listener: (entry: Entry) => void): void;
-  on(event: "end", listener: () => void): void;
-  on(event: "error", listener: (error: Error) => void): void;
-  readEntry(): void;
-  openReadStream(entry: Entry, callback: (error: Error | null, stream: NodeJS.ReadableStream) => void): void;
-};
-const yauzl = createRequire(new URL("../../service/package.json", import.meta.url))("yauzl") as {
-  fromBuffer(buffer: Buffer, options: { lazyEntries: true }, callback: (error: Error | null, file: ZipFile) => void): void;
-};
-
 /** Every entry of `archive` and its content, read as the service's load reads a snapshot. */
-function unzipped(archive: Buffer): Promise<Record<string, string>> {
-  return new Promise((resolve, reject) => {
-    yauzl.fromBuffer(archive, { lazyEntries: true }, (error, file) => {
-      if (error) return reject(error);
-      const read: Record<string, string> = {};
-      file.on("entry", (entry) => {
-        file.openReadStream(entry, (failure, stream) => {
-          if (failure) return reject(failure);
-          const parts: Buffer[] = [];
-          stream.on("data", (part: Buffer) => parts.push(part));
-          stream.on("end", () => {
-            read[entry.fileName] = Buffer.concat(parts).toString();
-            file.readEntry();
-          });
-        });
-      });
-      file.on("end", () => resolve(read));
-      file.on("error", reject);
-      file.readEntry();
-    });
-  });
+async function unzipped(archive: Buffer): Promise<Record<string, string>> {
+  return Object.fromEntries((await entriesOf(archive)).map(([name, content]) => [name, content.toString()]));
 }
 
 describe("the move's export adds what `convex export` leaves out", () => {
@@ -77,5 +45,11 @@ describe("the move's export adds what `convex export` leaves out", () => {
         "_components/workflow/_components/workpool/_tables/documents.jsonl",
       ]),
     ).toStrictEqual(["", "posthog", "staticHosting", "workflow/workpool"]);
+  });
+
+  test("an export that found no scheduled function in any namespace stops, counts named, unless none is expected", () => {
+    expect(() => checkScheduled({ app: 0, posthog: 0 }, false)).toThrow('no scheduled function in any namespace ({"app":0,"posthog":0})');
+    expect(() => checkScheduled({ app: 0, posthog: 0 }, true)).not.toThrow();
+    expect(() => checkScheduled({ app: 0, posthog: 2 }, false)).not.toThrow();
   });
 });

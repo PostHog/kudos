@@ -52,6 +52,8 @@ interface Copy {
   load: LoadControl;
   request(path: string, init?: RequestInit & { token?: string | null }): Promise<Response>;
   logs: string[];
+  /** Each log line with its fields. */
+  logged: Array<{ message: string; fields: Record<string, unknown> | undefined }>;
 }
 
 const copies: Copy[] = [];
@@ -64,14 +66,19 @@ async function copy(
   const { rows = 500, bytes = 1 << 20, off = false, migrations = "done", registry = jobs } = options;
   const adminToken = "adminToken" in options ? options.adminToken : token;
   const logs: string[] = [];
-  const log: Log = { info: (message) => logs.push(message), error: (message) => logs.push(message) };
+  const logged: Copy["logged"] = [];
+  const write = (message: string, fields?: Record<string, unknown>) => {
+    logs.push(message);
+    logged.push({ message, fields });
+  };
+  const log: Log = { info: write, error: write };
   const load = createLoadControl({ pool: database.pool, token: adminToken, log, jobs: registry, limits: { rows, bytes }, pollMs: 50 });
   await load.refresh();
   load.resume();
   const app = createApp({ commit: "test", readiness: { migrations: () => migrations }, off, log, clock: createClock(), load });
   const request: Copy["request"] = (path, { token: given = token, ...init } = {}) =>
     Promise.resolve(app.request(path, { ...init, headers: { ...(given === null ? {} : { "x-hedgehug-admin-token": given }), ...init.headers } }));
-  const made = { load, request, logs };
+  const made = { load, request, logs, logged };
   copies.push(made);
   return made;
 }
@@ -560,6 +567,9 @@ describe("recovery", () => {
       }),
     );
     expect(await settled(service), "the load is done").toMatchObject({ phase: "done", error: null });
+    expect(service.logged.find(({ message }) => message === "load done")?.fields, "the log counts what recovery found, by namespace").toMatchObject({
+      scheduled: "_components/posthog 1, app 6",
+    });
 
     const jobs = await jobsNow();
     const kept = { _creationTime: 7, runAt: 1_000 };

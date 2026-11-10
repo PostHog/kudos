@@ -1,10 +1,12 @@
 // The oracle's data on the rewrite: the export today's app left after every journey passed against it (`pnpm e2e` with
-// `E2E_EXPORT_TO`), loaded through the service's own `/admin/load` as the move will load production's. The load ends
-// only once the round trip found the copy equal and recovery turned Convex's scheduled functions into jobs, so the
-// journeys that follow run on a copy the move would have made.
+// `E2E_EXPORT_TO`), loaded through the service's own `/admin/load` as the move will load production's, and round-tripped,
+// so the journeys that follow run on a copy the move would have made. Its scheduled functions are set aside here: the
+// oracle's pending work would run against a Slack the journeys never set up, and several name jobs still to be ported.
+// Their recovery is proven on the same export by service/src/load/oracleExport.test.ts.
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { rewriteExport, scheduledSource } from "../../service/testing/exportZip.ts";
 
 /** The export, kept in the repository so the proof still runs once the oracle can't make one (S20). */
 export const oracleExport = fileURLToPath(new URL("../rewrite/oracleExport.zip", import.meta.url));
@@ -20,7 +22,7 @@ type LoadStatus = {
 
 /** Loads the export at `path` into the service at `serviceUrl`, and waits until the load is done. */
 export async function loadExport(serviceUrl: string, token: string, path: string, { signal, timeoutMs = 300_000 }: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<void> {
-  const archive = await readFile(path);
+  const archive = await rewriteExport(await readFile(path), (name, content) => (scheduledSource(name) === undefined ? content : Buffer.alloc(0)));
   const headers = { "x-hedgehug-admin-token": token };
   const chunks = Math.max(1, Math.ceil(archive.length / chunkBytes));
   for (let chunk = 0; chunk < chunks; chunk++) {
