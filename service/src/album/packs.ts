@@ -190,7 +190,7 @@ async function grantRecordOf(ctx: QueryContext, message: MessageRef, recipient: 
     .where(and(...sameMessage(grantRecords, message), eq(grantRecords.recipient, recipient)))
     .orderBy(...recordsByMessageRecipient.orderBy())
     .limit(2);
-  if (rows.length > 1) throw new Error("The message has more than one grant record for the recipient");
+  if (rows.length > 1) throw new Error("unique() query returned more than one result from table grantRecords:");
   return rows[0] ?? null;
 }
 
@@ -217,7 +217,7 @@ async function toldAlready(ctx: QueryContext, message: MessageRef) {
     .where(and(...sameMessage(grantsTold, message)))
     .orderBy(...toldByMessage.orderBy())
     .limit(2);
-  if (rows.length > 1) throw new Error("The message's grants were told more than once");
+  if (rows.length > 1) throw new Error("unique() query returned more than one result from table grantsTold:");
   return rows.length === 1;
 }
 

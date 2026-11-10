@@ -107,7 +107,7 @@ describe("LP5: an item is earned once per member, source and key", () => {
     await t.seed.insert("items", thanks(alice, bob));
     await t.seed.insert("items", thanks(alice, bob));
 
-    await expect(t.query((ctx) => earnedItemOf(ctx, alice, "hoggie", `thoughtful:${bob}`))).rejects.toThrow("more than one hoggie item");
+    await expect(t.query((ctx) => earnedItemOf(ctx, alice, "hoggie", `thoughtful:${bob}`))).rejects.toThrow("unique() query returned more than one result from table items:");
   });
 });
 
@@ -432,5 +432,18 @@ describe("AL4 AL5: a grant in a week that already earned the pack", () => {
 
   test("the album subscribes the grant to kudosGiven", () => {
     expect(serviceRegistry.subscribers.get("kudosGiven")?.map(({ job }) => job.name)).toContain("album.packs.grantThoughtfulPacks");
+  });
+});
+
+describe("a grant's records and its telling are read as unique() read them", () => {
+  test("two records for one recipient, or two tellings of one message, fail the grant with Convex's refusal", async () => {
+    const t = backend();
+    const [alice, bob] = [await t.member("U_ALICE"), await t.member("U_BOB")];
+    for (let again = 0; again < 2; again++) await t.seed.insert("grantRecords", { giver: alice, message: message(8), recipient: bob, outcome: "nextWeek" });
+    await expect(t.mutation((ctx) => grantThoughtfulPacks(ctx, { event: kudosGiven(alice, [bob], message(8)) }))).rejects.toThrow("unique() query returned more than one result from table grantRecords:");
+
+    await t.seed.insert("grantRecords", { giver: alice, message: message(7), recipient: bob, outcome: "nextWeek" });
+    for (let again = 0; again < 2; again++) await t.seed.insert("grantsTold", { message: message(7), at, recipients: 1 });
+    await expect(t.mutation((ctx) => grantThoughtfulPacks(ctx, { event: kudosGiven(alice, [bob], message(7)) }))).rejects.toThrow("unique() query returned more than one result from table grantsTold:");
   });
 });
