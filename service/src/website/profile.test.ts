@@ -15,10 +15,12 @@ import { homeFacts } from "../engine/home.ts";
 import { observe } from "../engine/engine.ts";
 import { groupsShownTo } from "../groups/groups.ts";
 import { progressionHomeOf } from "../progression/progression.ts";
+import { memberChanged } from "../slack/hugsTesting.ts";
 import type { MemberId } from "../workspace/directory.ts";
 import { tick } from "./clock.ts";
 import type { VerifiedMember } from "./memberQuery.ts";
 import { getMyProfile, type MyProfile } from "./profile.ts";
+import { signedInThroughSso, websiteAs } from "./routesTesting.ts";
 
 const allowedWorkspace = "T1";
 const now = new Date("2026-10-13T10:00:00Z");
@@ -74,10 +76,117 @@ async function serving(...definitions: FlagDefinition[]) {
   await prepareWebsiteFlag();
 }
 
+/** Today's `aSession`: the person signs in through SSO with their Slack name and picture; there is no app session. */
+async function aSession({ user, ...claims }: { user: string; name?: string; image?: string }) {
+  await t.seed.insert("users", { ...claims, chatIdentity: { workspace: allowedWorkspace, user } });
+  return signedInThroughSso(t, { user });
+}
+
+/** Today's `myProfile(asSignedIn)`: getMyProfile through the whole app, as the signed-in person or a visitor. */
+function myProfileAs(as: ReturnType<typeof websiteAs> = websiteAs(t, null)) {
+  return as.read<MyProfile>("website.profile.getMyProfile", {});
+}
+
 async function prepareWebsiteFlag() {
   const workspace = process.env.SLACK_WORKSPACE_ID;
   if (workspace) await t.run((ctx) => workspaceKeyOf(ctx, workspace));
 }
+
+describe("website reads pass one guard", () => {
+  describe("WS2 WS3 WS4: the website flag closes every read", () => {
+    waitsOn(memberCheck, "a member with a live session reads closed while the flag is off", async () => {
+      await aMember(juno.user);
+      const asSignedIn = await aSession(juno);
+      await switchWebsite(false);
+
+      expect(await myProfileAs(asSignedIn)).toEqual({ kind: "closed" });
+    });
+
+    waitsOn(memberCheck, "a visitor with no session reads closed, not signed out, while the flag is off", async () => {
+      await switchWebsite(false);
+
+      expect(await myProfileAs()).toEqual({ kind: "closed" });
+    });
+
+    waitsOn(memberCheck, "a flag nobody created in PostHog answers off", async () => {
+      await aMember(juno.user);
+      const asSignedIn = await aSession(juno);
+      await definitionsStored(t.operations);
+      await prepareWebsiteFlag();
+
+      expect(await myProfileAs(asSignedIn)).toEqual({ kind: "closed" });
+    });
+
+    waitsOn(memberCheck, "the flag on for the workspace still reads closed until prepareWebsiteFlag made its workspace key", async () => {
+      await aMember(juno.user);
+      const asSignedIn = await aSession(juno);
+      await definitionsStored(t.operations, { key: "website", filters: { groups: [{ properties: [], rollout_percentage: 100 }] } });
+
+      expect(await myProfileAs(asSignedIn)).toEqual({ kind: "closed" });
+    });
+
+    waitsOn(memberCheck, "an unset SLACK_WORKSPACE_ID reads closed, whatever the flag says", async () => {
+      await aMember(juno.user);
+      const asSignedIn = await aSession(juno);
+      await switchWebsite(true);
+      vi.stubEnv("SLACK_WORKSPACE_ID", "");
+
+      expect(await myProfileAs(asSignedIn)).toEqual({ kind: "closed" });
+    });
+
+    waitsOn(profileStacks, "switching the flag off closes a session that was reading the member's profile", async () => {
+      await aMember(juno.user);
+      const asSignedIn = await aSession(juno);
+      await switchWebsite(true);
+      expect((await myProfileAs(asSignedIn)).kind).toBe("member");
+
+      await switchWebsite(false);
+
+      expect(await myProfileAs(asSignedIn)).toEqual({ kind: "closed" });
+    });
+  });
+
+  describe("WS9 WS11 WS14: every read checks the live session, the workspace and the directory, in that order", () => {
+    beforeEach(() => switchWebsite(true));
+
+    waitsOn(memberCheck, "a visitor with no session is signed out, never an empty profile", async () => {
+      expect(await myProfileAs()).toEqual({ kind: "signed-out" });
+    });
+
+    waitsOn(memberCheck, "a signed-in person the directory doesn't know yet is being verified", async () => {
+      const asSignedIn = await aSession(juno);
+      await t.seed.insert("memberVerifications", { workspace: allowedWorkspace, user: juno.user, attempts: 1, state: "pending" });
+
+      expect(await myProfileAs(asSignedIn)).toEqual({ kind: "verifying" });
+    });
+
+    waitsOn(memberCheck, "a signed-in person whose verification failed reads unverified, never a member", async () => {
+      const asSignedIn = await aSession(juno);
+      await t.seed.insert("memberVerifications", { workspace: allowedWorkspace, user: juno.user, attempts: 3, state: "failed" });
+
+      expect(await myProfileAs(asSignedIn)).toEqual({ kind: "unverified" });
+    });
+
+    waitsOn(["S3", ...profileStacks], "a member user_change deactivates reads not-a-member on their next read, whatever their session", async () => {
+      await aMember(juno.user);
+      const asSignedIn = await aSession(juno);
+      expect((await myProfileAs(asSignedIn)).kind).toBe("member");
+
+      await memberChanged(t, "user_change", { id: juno.user, team_id: allowedWorkspace, deleted: true });
+
+      expect(await myProfileAs(asSignedIn)).toEqual({ kind: "not-a-member" });
+    });
+
+    waitsOn(profileStacks, "a member reads their own name and Slack picture from the sign-in", async () => {
+      await aMember(juno.user);
+      await aMember("U_BOB");
+      await aSession({ user: "U_BOB", name: "Bob" });
+      const asSignedIn = await aSession(juno);
+
+      expect(await myProfileAs(asSignedIn)).toMatchObject({ kind: "member", name: "Juno Whitlock", face: { kind: "slack", image: juno.image } });
+    });
+  });
+});
 
 describe("a member's name and face come from the sign-in", () => {
   beforeEach(() => switchWebsite(true));
@@ -285,6 +394,14 @@ describe("getMyProfile says bookSpread only while book-spread is on", () => {
       expect(await exposuresTo(bookSpread)).toEqual([]);
     });
   }
+
+  waitsOn(memberCheck, "#587: without the flags key the website reads closed, with no bookSpread, even while PostHog turned book-spread on", async () => {
+    await aMemberServed(undefined, onForEveryone(bookSpread));
+    const asSignedIn = await signedInThroughSso(t, juno);
+    vi.stubEnv("POSTHOG_PERSONAL_API_KEY", "");
+
+    expect(await myProfileAs(asSignedIn)).toEqual({ kind: "closed" });
+  });
 });
 
 describe("AL39: getMyProfile says album only while album is on", () => {
@@ -312,6 +429,14 @@ describe("AL39: getMyProfile says album only while album is on", () => {
 
     expect(await myProfile(me)).toMatchObject({ kind: "member", album: true });
     expect(await exposuresTo(album)).toEqual([]);
+  });
+
+  waitsOn(memberCheck, "without the flags key the website reads closed, with no album, even while PostHog turned album on", async () => {
+    await aMemberServed(undefined, onForEveryone(album));
+    const asSignedIn = await signedInThroughSso(t, juno);
+    vi.stubEnv("POSTHOG_PERSONAL_API_KEY", "");
+
+    expect(await myProfileAs(asSignedIn)).toEqual({ kind: "closed" });
   });
 });
 

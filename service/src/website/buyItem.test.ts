@@ -2,14 +2,15 @@
 // convex/website/buyItem.test.ts, on the service's test backend: each purchase runs storeCommands.ts's `buyItem` for a
 // `me` made from the seeded directory row and a `person` the directory answers, as S15's member check answers them. The
 // purchases whose subject is the member check or the route's arguments (closed, signed out, not a member, a call naming
-// a member) go through S15's route transport in S17's route pull request. Today's mocked `publish` is the events committed
-// operations published, and today's scheduled functions are the jobs table's rows.
+// a member) call buyItem by its route name through the whole app, signed in through SSO or not at all, so the app's own
+// identity mapping and member check (S15) answer them. Today's mocked `publish` is the events committed operations
+// published, and today's scheduled functions are the jobs table's rows.
 import { asc, eq, getTableColumns, getTableName, is, sql } from "drizzle-orm";
 import { PgTable } from "drizzle-orm/pg-core";
 import { afterEach, beforeEach, describe, expect, vi } from "vitest";
 import { useTestBackend, type TestBackend } from "../../testing/backend.ts";
 import { flagsKey, postHogHost, projectToken } from "../../testing/fakePostHog.ts";
-import { definitionsStored, onForEveryone } from "../../testing/flags.ts";
+import { definitionsStored, offForEveryone, onForEveryone } from "../../testing/flags.ts";
 import { signingSecret } from "../../testing/signedSlack.ts";
 import { waitsOn, type Stack } from "../../testing/waiting.ts";
 import { earnLevelUpHoggies } from "../album/levelUpHoggies.ts";
@@ -24,6 +25,7 @@ import * as serviceTables from "../db/schema/service.ts";
 import { jobs } from "../db/schema/service.ts";
 import type { HomeMember } from "../feedback/homes.ts";
 import { recordReward } from "../progression/progression.ts";
+import { memberChanged } from "../slack/hugsTesting.ts";
 import { receiveHomeClick } from "../slack/receipts.ts";
 import { grantItem } from "../store/inventory.ts";
 import type { Feature } from "../unlocks/feature.ts";
@@ -32,6 +34,7 @@ import { makeReady, openUnlock } from "../unlocks/unlocks.ts";
 import { balanceOf } from "../wallet/wallet.ts";
 import { lookup, type MemberId } from "../workspace/directory.ts";
 import type { VerifiedMember } from "./memberQuery.ts";
+import { argumentsRefused, signedInThroughSso, websiteAs } from "./routesTesting.ts";
 import { buyItem as buyItemCommand } from "./storeCommands.ts";
 
 const allowedWorkspace = "T1";
@@ -94,6 +97,11 @@ async function aMemberAtLevelSix() {
   await reachesLevel(member, 6);
   const me: VerifiedMember = { member, workspace: allowedWorkspace, user: juno.user, name: juno.name };
   return { member, me };
+}
+
+/** Today's `aSignedInSession`: the person signs in, through SSO here, and the website's requests come as them. */
+function aSession(person: { user: string }) {
+  return signedInThroughSso(t, person, allowedWorkspace);
 }
 
 async function aMemberWithTheStoreOpen(coins: number) {
@@ -230,6 +238,50 @@ describe("website commands pass one guard", () => {
       expect(await everythingWritten()).toEqual(before);
     });
   }
+
+  describe("WS61 WS335 WS341: an item purchase's denial answers as a read does and writes nothing at all", () => {
+    waitsOn(buying, "with the website flag off, a purchase in an open store answers closed", async () => {
+      await storeShipped();
+      await aMemberWithTheStoreOpen(100);
+      const asSignedIn = await aSession(juno);
+      // Today's switchWebsite(t, postHog, false, ...storeFlags): the website off, the store's flags on.
+      await definitionsStored(t.operations, offForEveryone("website"), ...storeFlags.map(onForEveryone));
+      await t.run((ctx) => workspaceKeyOf(ctx, allowedWorkspace));
+      const before = await everythingWritten();
+
+      expect(await asSignedIn.command("website.commands.buyItem", { item: shipit, request: firstRequest })).toEqual({ kind: "closed" });
+      expect(await everythingWritten()).toEqual(before);
+    });
+
+    waitsOn(["S6", "S15"], "without a session, the purchase answers signed-out", async () => {
+      await storeShipped();
+      const before = await everythingWritten();
+
+      expect(await websiteAs(t, null).command("website.commands.buyItem", { item: shipit, request: firstRequest })).toEqual({ kind: "signed-out" });
+      expect(await everythingWritten()).toEqual(before);
+    });
+
+    waitsOn(["S3", ...buying], "a member who left the workspace with an open store answers not-a-member", async () => {
+      await storeShipped();
+      await aMemberWithTheStoreOpen(100);
+      const asSignedIn = await aSession(juno);
+      await memberChanged(t, "user_change", { id: juno.user, team_id: allowedWorkspace, deleted: true });
+      const before = await everythingWritten();
+
+      expect(await asSignedIn.command("website.commands.buyItem", { item: shipit, request: firstRequest })).toEqual({ kind: "not-a-member" });
+      expect(await everythingWritten()).toEqual(before);
+    });
+  });
+
+  waitsOn(anOpenStore, "WS61 WS335: the item and the request are the only arguments, so no call names a member", async () => {
+    await storeShipped();
+    const { member } = await aMemberWithTheStoreOpen(100);
+    const asSignedIn = await aSession(juno);
+    const before = await everythingWritten();
+
+    await expect(asSignedIn.command("website.commands.buyItem", { item: shipit, request: firstRequest, member })).rejects.toThrow(argumentsRefused);
+    expect(await everythingWritten()).toEqual(before);
+  });
 });
 
 describe("a website command never launches unlocks", () => {

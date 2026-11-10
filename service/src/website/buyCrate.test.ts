@@ -3,14 +3,15 @@
 // `buyCrate` for a `me` made from the seeded directory row and a `person` the directory answers, as S15's member check
 // answers them. getCollection (S16's website read) and openCrate (S15's website command) are handlers the service
 // doesn't have yet, so each read or open ends in the stub for it. The purchases whose subject is the member check or the
-// route's arguments (closed, signed out, not a member, a call naming a member) go through S15's route transport in S17's
-// route pull request. Today's scheduled functions are the jobs table's rows.
+// route's arguments (closed, signed out, not a member, a call naming a member) call buyCrate and openCrate by their route
+// names through the whole app, signed in through SSO or not at all, so the app's own identity mapping and member check
+// (S15) answer them. Today's scheduled functions are the jobs table's rows.
 import { asc, eq, getTableColumns, getTableName, is } from "drizzle-orm";
 import { PgTable } from "drizzle-orm/pg-core";
 import { afterEach, beforeEach, describe, expect, vi } from "vitest";
 import { useTestBackend, type TestBackend } from "../../testing/backend.ts";
 import { flagsKey, postHogHost, projectToken } from "../../testing/fakePostHog.ts";
-import { definitionsStored, onForEveryone } from "../../testing/flags.ts";
+import { definitionsStored, offForEveryone, onForEveryone } from "../../testing/flags.ts";
 import { signingSecret } from "../../testing/signedSlack.ts";
 import { waitsOn, type Stack } from "../../testing/waiting.ts";
 import { achievementsLiveIn } from "../achievements/flag.ts";
@@ -29,6 +30,7 @@ import { jobs } from "../db/schema/service.ts";
 import type { HomeMember } from "../feedback/homes.ts";
 import type { MutationContext, QueryContext } from "../operations.ts";
 import { recordReward } from "../progression/progression.ts";
+import { memberChanged } from "../slack/hugsTesting.ts";
 import { receiveHomeClick } from "../slack/receipts.ts";
 import type { Feature } from "../unlocks/feature.ts";
 import { unlocksLiveIn } from "../unlocks/launch.ts";
@@ -38,7 +40,7 @@ import { lookup, type MemberId } from "../workspace/directory.ts";
 import type { CollectionAnswer } from "./collection.ts";
 import type { CrateOpenAnswer } from "./commands.ts";
 import type { VerifiedMember } from "./memberQuery.ts";
-import { commandByRoute, readByRoute } from "./routesTesting.ts";
+import { argumentsRefused, commandByRoute, readByRoute, signedInThroughSso, websiteAs } from "./routesTesting.ts";
 import { buyCrate as buyCrateCommand } from "./storeCommands.ts";
 
 const allowedWorkspace = "T1";
@@ -102,6 +104,11 @@ async function signedIn(identity: Person) {
   await t.run((ctx) => analyticsIdOf(ctx, member));
   const me: VerifiedMember = { member, workspace: allowedWorkspace, user: identity.user, name: identity.name };
   return { member, me };
+}
+
+/** Today's `aSignedInSession`: the person signs in, through SSO here, and the website's requests come as them. */
+function aSession(person: Person) {
+  return signedInThroughSso(t, person, allowedWorkspace);
 }
 
 async function aShopperWith(coins: number, identity: Person = juno) {
@@ -351,6 +358,50 @@ describe("CL28 CL30: a bought crate waits until its member opens it, and drops o
     expect(await storeOf(me)).toEqual({ bought: ["bought:1"], crateStore: undefined });
     expect(await openCrate(me, "bought:1")).toEqual({ kind: "opened", drop: await dropDrawnFor(member, "bought:1") });
     expect(await storeOf(me)).toEqual({ bought: undefined, crateStore: undefined });
+  });
+});
+
+describe("website commands pass one guard", () => {
+  waitsOn(opening, "WS61: with the website flag off, buying a crate and opening a bought one answer closed and write nothing at all", async () => {
+    await aCrateStoreShopperWith(100);
+    const asSignedIn = await aSession(juno);
+    await asSignedIn.command("website.commands.buyCrate", { next: 1 });
+    // Today's switchWebsite(t, postHog, false, ...crateStoreFlags): the website off, the crate store's flags on.
+    await definitionsStored(t.operations, offForEveryone("website"), ...crateStoreFlags.map(onForEveryone));
+    await t.run((ctx) => workspaceKeyOf(ctx, allowedWorkspace));
+    const before = await everythingWritten();
+
+    expect(await asSignedIn.command("website.commands.buyCrate", { next: 2 })).toEqual({ kind: "closed" });
+    expect(await asSignedIn.command("website.commands.openCrate", { crate: "bought:1" })).toEqual({ kind: "closed" });
+    expect(await everythingWritten()).toEqual(before);
+  });
+
+  waitsOn(["S3", ...opening], "WS61: without a session both answer signed-out, and for a member who left both answer not-a-member, writing nothing at all", async () => {
+    await aCrateStoreShopperWith(100);
+    const asSignedIn = await aSession(juno);
+    await asSignedIn.command("website.commands.buyCrate", { next: 1 });
+    const before = await everythingWritten();
+    const signedOut = websiteAs(t, null);
+
+    expect(await signedOut.command("website.commands.buyCrate", { next: 2 })).toEqual({ kind: "signed-out" });
+    expect(await signedOut.command("website.commands.openCrate", { crate: "bought:1" })).toEqual({ kind: "signed-out" });
+    expect(await everythingWritten()).toEqual(before);
+    await memberChanged(t, "user_change", { id: juno.user, team_id: allowedWorkspace, deleted: true });
+    const left = await everythingWritten();
+    expect(await asSignedIn.command("website.commands.buyCrate", { next: 2 })).toEqual({ kind: "not-a-member" });
+    expect(await asSignedIn.command("website.commands.openCrate", { crate: "bought:1" })).toEqual({ kind: "not-a-member" });
+    expect(await everythingWritten()).toEqual(left);
+  });
+
+  // The crate's number is refused before anyone is looked up; the crate's open waits for openCrate's route (S15).
+  waitsOn([...aShopper, "S15"], "WS61: the crate's number and the crate are the only arguments, so no call names a member", async () => {
+    const { member } = await aCrateStoreShopperWith(100);
+    const asSignedIn = await aSession(juno);
+    const before = await everythingWritten();
+
+    await expect(asSignedIn.command("website.commands.buyCrate", { next: 1, member })).rejects.toThrow(argumentsRefused);
+    await expect(asSignedIn.command("website.commands.openCrate", { crate: "bought:1", member })).rejects.toThrow(argumentsRefused);
+    expect(await everythingWritten()).toEqual(before);
   });
 });
 

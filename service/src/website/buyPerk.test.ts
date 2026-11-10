@@ -1,7 +1,8 @@
 // Buying a perk on the website: today's convex/website/buyPerk.test.ts, on the service's test backend. Each purchase runs
 // storeCommands.ts's `buyPerk` for a `me` made from the seeded directory row and a `person` the directory answers, as
 // S15's member check answers them. The purchases whose subject is the member check or the route's arguments (closed,
-// signed out, not a member, a call naming a member) go through S15's route transport in S17's route pull request.
+// signed out, not a member, a call naming a member) call buyPerk by its route name through the whole app, signed in
+// through SSO or not at all, so the app's own identity mapping and member check (S15) answer them.
 // Today's mocked `publish` is the events committed operations published, today's scheduled functions are the jobs
 // table's rows, and today's second backend is the same one emptied.
 import { asc, getTableColumns, getTableName, is, sql } from "drizzle-orm";
@@ -9,7 +10,7 @@ import { PgTable } from "drizzle-orm/pg-core";
 import { afterEach, beforeEach, describe, expect, vi } from "vitest";
 import { useTestBackend, type TestBackend } from "../../testing/backend.ts";
 import { flagsKey, postHogHost, projectToken } from "../../testing/fakePostHog.ts";
-import { definitionsStored, onForEveryone, onForPercent } from "../../testing/flags.ts";
+import { definitionsStored, offForEveryone, onForEveryone, onForPercent } from "../../testing/flags.ts";
 import { signingSecret } from "../../testing/signedSlack.ts";
 import { waitsOn, type Stack } from "../../testing/waiting.ts";
 import { earnLevelUpHoggies } from "../album/levelUpHoggies.ts";
@@ -26,6 +27,7 @@ import type { HomeMember } from "../feedback/homes.ts";
 import { treePerksOf } from "../progression/perks.ts";
 import { recordReward } from "../progression/progression.ts";
 import type { PerkId } from "../progression/tree.ts";
+import { memberChanged } from "../slack/hugsTesting.ts";
 import { receiveHomeClick } from "../slack/receipts.ts";
 import type { Feature } from "../unlocks/feature.ts";
 import { unlocksLiveIn } from "../unlocks/launch.ts";
@@ -33,6 +35,7 @@ import { makeReady, openUnlock } from "../unlocks/unlocks.ts";
 import { balanceOf } from "../wallet/wallet.ts";
 import { lookup, type MemberId } from "../workspace/directory.ts";
 import type { VerifiedMember } from "./memberQuery.ts";
+import { argumentsRefused, signedInThroughSso, websiteAs } from "./routesTesting.ts";
 import { getSkillTree } from "./skillTree.ts";
 import { buyPerk as buyPerkCommand } from "./storeCommands.ts";
 
@@ -48,6 +51,8 @@ const secondRequest = "7b9e4f3a-2c1d-4e5f-8a9b-0c1d2e3f4a5b";
 
 // An open tree: unlocks shipped, a level reached and the Skill tree opened (S6), with the level's hoggies (S10).
 const openTree: [Stack, ...Stack[]] = ["S6", "S10"];
+// A purchase through the whole app, past S15's identity mapping and member check, with an open tree (S6, S10).
+const buyPerkGuard: [Stack, ...Stack[]] = ["S6", "S10", "S15"];
 // The purchase's gate: the unlock path (S16, over S6's unlocks) and the launch guard (S15).
 const theGate: [Stack, ...Stack[]] = ["S6", "S15", "S16"];
 const anOpenTreesGate: [Stack, ...Stack[]] = ["S6", "S10", "S15", "S16"];
@@ -104,6 +109,11 @@ async function signedInMember(): Promise<{ member: MemberId; me: VerifiedMember 
   await t.seed.insert("users", { name: juno.name, chatIdentity: { workspace: allowedWorkspace, user: juno.user } });
   await t.run((ctx) => analyticsIdOf(ctx, member));
   return { member, me: { member, workspace: allowedWorkspace, user: juno.user, name: juno.name } };
+}
+
+/** Today's `aSignedInSession`: the person signs in, through SSO here, and the website's requests come as them. */
+function aSession(person: { user: string }) {
+  return signedInThroughSso(t, person, allowedWorkspace);
 }
 
 async function withXp(member: MemberId, xp: number) {
@@ -244,6 +254,61 @@ describe("website commands pass one guard", () => {
       expect(await everythingWritten()).toEqual(before);
     });
   }
+
+  describe("WS61 WS88: a purchase's denial answers as a read does and writes nothing at all", () => {
+    waitsOn(buyPerkGuard, "with the website flag off, an open tree's purchase answers closed", async () => {
+      await treeShipped();
+      await aMemberWithTheTreeOpen();
+      const asSignedIn = await aSession(juno);
+      // Today's switchWebsite(t, postHog, false, ...treeFlags): the website off, the tree's flags on, the workspace's key made.
+      await definitionsStored(t.operations, offForEveryone("website"), ...treeFlags.map(onForEveryone));
+      await t.run((ctx) => workspaceKeyOf(ctx, allowedWorkspace));
+      const before = await everythingWritten();
+
+      expect(await asSignedIn.command("website.commands.buyPerk", { perk: "spark", request: firstRequest })).toEqual({ kind: "closed" });
+      expect(await everythingWritten()).toEqual(before);
+    });
+
+    waitsOn(["S15"], "with a flags key but no workspace key yet, the purchase answers closed and makes no key", async () => {
+      await definitionsStored(t.operations, { key: "website", filters: { groups: [{ properties: [], rollout_percentage: 100 }] } });
+      await t.seed.insert("members", { workspace: allowedWorkspace, user: juno.user, kind: "member", asOf: 0 });
+      const asSignedIn = await aSession(juno);
+      const before = await everythingWritten();
+
+      expect(await asSignedIn.command("website.commands.buyPerk", { perk: "spark", request: firstRequest })).toEqual({ kind: "closed" });
+      expect(await everythingWritten()).toEqual(before);
+      expect(before.tables.workspaceKeys).toEqual([]);
+    });
+
+    waitsOn(["S6", "S15"], "without a session, the purchase answers signed-out", async () => {
+      await treeShipped();
+      const before = await everythingWritten();
+
+      expect(await websiteAs(t, null).command("website.commands.buyPerk", { perk: "spark", request: firstRequest })).toEqual({ kind: "signed-out" });
+      expect(await everythingWritten()).toEqual(before);
+    });
+
+    waitsOn(["S3", ...buyPerkGuard], "a member who left the workspace with an open tree answers not-a-member", async () => {
+      await treeShipped();
+      await aMemberWithTheTreeOpen();
+      const asSignedIn = await aSession(juno);
+      await memberChanged(t, "user_change", { id: juno.user, team_id: allowedWorkspace, deleted: true });
+      const before = await everythingWritten();
+
+      expect(await asSignedIn.command("website.commands.buyPerk", { perk: "spark", request: firstRequest })).toEqual({ kind: "not-a-member" });
+      expect(await everythingWritten()).toEqual(before);
+    });
+  });
+
+  waitsOn(openTree, "WS61 WS88: the perk and the request are the only arguments, so no call names a member", async () => {
+    await treeShipped();
+    const { member } = await aMemberWithTheTreeOpen();
+    const asSignedIn = await aSession(juno);
+    const before = await everythingWritten();
+
+    await expect(asSignedIn.command("website.commands.buyPerk", { perk: "spark", request: firstRequest, member })).rejects.toThrow(argumentsRefused);
+    expect(await everythingWritten()).toEqual(before);
+  });
 });
 
 describe("a website command never launches unlocks", () => {

@@ -22,6 +22,7 @@ import { makeReady, openUnlock } from "../unlocks/unlocks.ts";
 import type { MemberId } from "../workspace/directory.ts";
 import type { VerifiedMember } from "./memberQuery.ts";
 import { getProfileCard } from "./profileCard.ts";
+import { argumentsRefused, signedInThroughSso, websiteAs } from "./routesTesting.ts";
 
 const allowedWorkspace = "T1";
 const now = new Date("2026-10-14T10:00:00Z");
@@ -59,6 +60,38 @@ afterEach(() => void vi.unstubAllEnvs());
 function cardOf(t: TestBackend, me: VerifiedMember) {
   return t.query((ctx) => getProfileCard(ctx, me));
 }
+
+describe("website reads pass one guard", () => {
+  waitsOn(memberCheck, "getProfileCard reads closed while the website flag is off, even with profile-card on", async () => {
+    const t = await workspace({ flags: [offForEveryone("website"), ...["xp-levels", "unlocks", "achievements", cardFlag].map(onForEveryone)] });
+    const asAnn = await signedInThroughSso(t, ann);
+
+    expect(await asAnn.read("website.profileCard.getProfileCard", {})).toEqual({ kind: "closed" });
+  }, 30_000);
+
+  waitsOn(memberCheck, "getProfileCard reads signed out without a session", async () => {
+    const t = await workspace();
+
+    expect(await websiteAs(t, null).read("website.profileCard.getProfileCard", {})).toEqual({ kind: "signed-out" });
+  }, 30_000);
+
+  waitsOn(memberCheck, "getProfileCard reads not-a-member for a former member with a live session", async () => {
+    const t = await workspace();
+    await aMember(t, "U_GONE", "not-a-member");
+    const asGone = await signedInThroughSso(t, { user: "U_GONE" });
+
+    expect(await asGone.read("website.profileCard.getProfileCard", {})).toEqual({ kind: "not-a-member" });
+  }, 30_000);
+
+  waitsOn(["S6"], "getProfileCard rejects an argument that names another member", async () => {
+    const t = await workspace();
+    await signedIn(t, ann);
+    const asAnn = await signedInThroughSso(t, ann);
+    const withAnotherMember = { user: bea.user };
+
+    await expect(asAnn.read("website.profileCard.getProfileCard", withAnotherMember)).rejects.toThrow(argumentsRefused);
+  }, 30_000);
+});
 
 describe("PC15: the website reads the member's own profile card", () => {
   waitsOn(cardStacks, "the card holds exactly the name, level and best four medals the member's own Slack card shows", async () => {
