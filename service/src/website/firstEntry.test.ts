@@ -10,6 +10,7 @@ import { flagsKey, postHogHost, projectToken } from "../../testing/fakePostHog.t
 import { definitionsStored, offForEveryone, onForEveryone } from "../../testing/flags.ts";
 import { httpStatus, rateLimitedFor } from "../../testing/fakeSlack.ts";
 import { waitsOn } from "../../testing/waiting.ts";
+import type { Id } from "../db/columns.ts";
 import type { MemberId } from "../workspace/directory.ts";
 import { rememberSignedInMember, SignInRefused, type SignedIn } from "./signIn.ts";
 
@@ -40,7 +41,9 @@ beforeEach(async () => {
 
 afterEach(() => void vi.unstubAllEnvs());
 
-const enters = (signedIn: SignedIn) => t.run((ctx) => rememberSignedInMember(ctx, signedIn));
+// An entry as the website's entry makes it: the `users` row it found, and the profile of the Slack pair it signed in.
+const enters = ({ workspace, user, ...display }: SignedIn, existingUserId: Id<"users"> | null = null) =>
+  t.run((ctx) => rememberSignedInMember(ctx, { existingUserId, profile: { id: `${workspace}/${user}`, chatWorkspace: workspace, chatUser: user, ...display } }));
 const aMember = (user: string, kind: "member" | "not-a-member" = "member") =>
   t.seed.insert("members", { workspace: allowedWorkspace, user, kind, asOf: 0 }) as Promise<MemberId>;
 // The refusal an entry ends in; any other error, a stub's included, fails the test as itself.
@@ -59,7 +62,7 @@ describe("a member who signed in before the move", () => {
     await aMember("U_JUNO");
     const before = await t.seed.insert("users", { name: "Juno Whitlock", chatIdentity: { workspace: allowedWorkspace, user: "U_JUNO" } });
 
-    expect(await enters({ ...juno, name: "Juno Ashby" })).toBe(before);
+    expect(await enters({ ...juno, name: "Juno Ashby" }, before)).toBe(before);
 
     expect(await t.seed.all("users")).toEqual([expect.objectContaining({ _id: before, name: "Juno Whitlock" })]);
     expect(await t.published()).toEqual([]);

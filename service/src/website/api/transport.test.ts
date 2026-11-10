@@ -14,7 +14,7 @@ import { createOperations } from "../../operations.ts";
 import { websiteClock } from "../../db/schema/website.ts";
 import type { Denial, Verified } from "../memberQuery.ts";
 import { memberCommand, memberRead, type Route } from "./route.ts";
-import { apiHeader, apiTransport, maxBodyBytes, type Identity, type MemberCheck, type SignedIn } from "./transport.ts";
+import { apiHeader, apiTransport, maxBodyBytes, type Enter, type Identity, type MemberCheck, type SignedIn } from "./transport.ts";
 
 const database = useTestDatabase();
 
@@ -64,7 +64,9 @@ const nested = memberRead("website.test.nested", { filter: z.strictObject({ week
 
 const allRoutes: Route[] = [greeting, ticks, tick, tickThenFail, nothing, closesItself, failing, nested];
 
-function apiWith({ read = "admit", command = "admit", routes = allRoutes }: { read?: Gate; command?: Gate; routes?: Route[] } = {}) {
+const entering: Enter = async (_ctx, identity) => ("kind" in identity ? identity : { kind: "entered" });
+
+function apiWith({ read = "admit", command = "admit", routes = allRoutes, enter = entering }: { read?: Gate; command?: Gate; routes?: Route[]; enter?: Enter | null } = {}) {
   const lines: Array<Record<string, unknown>> = [];
   const log = jsonLog((line) => lines.push(JSON.parse(line) as Record<string, unknown>));
   const clock = createClock();
@@ -80,7 +82,7 @@ function apiWith({ read = "admit", command = "admit", routes = allRoutes }: { re
     off: false,
     log,
     clock,
-    routes: [apiTransport({ operations, log, routes, identify, check: checkOf({ read, command }) })],
+    routes: [apiTransport({ operations, log, routes, identify, check: checkOf({ read, command }), ...(enter !== null && { enter }) })],
   });
   const ticked = async () => (await (await app.request("/api/query/website.test.ticks", sent({}))).json()) as number[];
   return { app, lines, ticked };
@@ -342,6 +344,14 @@ describe("only the table's routes answer", () => {
       expect(answer.status, path).toBe(404);
       expect(answer.headers.get("content-type"), path).toMatch(/^application\/json/);
     }
+  });
+
+  test("a transport built without an entry, as a route test may build one, has no entry route", async () => {
+    const without = apiWith({ enter: null });
+    const withEntry = apiWith();
+
+    expect((await without.app.request("/api/entry", sent({}))).status).toBe(404);
+    expect(await (await withEntry.app.request("/api/entry", sent({}))).json()).toEqual({ kind: "entered" });
   });
 
   test("a read is never a command, nor a command a read", async () => {
