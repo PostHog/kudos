@@ -13,6 +13,7 @@ import { seeder } from "../../testing/seed.ts";
 import { createClock } from "../clock.ts";
 import type { DecidedBelow, GivenMessageAwards, ReceivedAward } from "../engine/awards.ts";
 import type { MessageRef, WordSegment } from "../engine/messageEvent.ts";
+import type { DrawPoint, DrawWalk } from "../engine/spotlightDraws.ts";
 import type { Log } from "../log.ts";
 import { createOperations } from "../operations.ts";
 import type { MemberId } from "../workspace/directory.ts";
@@ -26,10 +27,11 @@ const standIn = vi.hoisted(() => ({
   takenBack: new Set<string>(),
   words: new Map<string, WordSegment[]>(),
   names: new Map<string, string>(),
-  draw: { kind: "empty" } as { kind: "empty" } | { kind: "skipped"; at: { position: number; created: number } },
+  draws: [] as Array<{ position: number; created: number; drawable: boolean }>,
 }));
 
 const messageKey = ({ conversation, message }: MessageRef) => `${conversation}/${message}`;
+const byPoint = (one: DrawPoint, other: DrawPoint) => one.position - other.position || one.created - other.created;
 
 /** The awards seam's order: newest decided first, below the cursor's position, as S6's indexes answer. */
 function below<T extends { created: number }>(rows: T[], { decided, inclusive }: DecidedBelow): T[] {
@@ -51,7 +53,22 @@ vi.mock("../engine/kudosText.ts", async (original) => ({
   takenBackInSlack: async (_ctx: unknown, ref: MessageRef) => standIn.takenBack.has(messageKey(ref)),
 }));
 vi.mock("../engine/engine.ts", async (original) => ({ ...(await original<object>()), threadRootOf: async () => undefined }));
-vi.mock("../engine/spotlight.ts", async (original) => ({ ...(await original<object>()), drawFrom: async () => standIn.draw }));
+// S6's draw, over the draws the test sets: once around the circle from just after `after` through `through`, by position
+// then creation; a draw it turns away answers as skipped there, a drawable one as that kudos.
+vi.mock("../engine/spotlight.ts", async (original) => ({
+  ...(await original<object>()),
+  drawFrom: async (_ctx: unknown, workspace: string, { after, through }: DrawWalk) => {
+    const along = [...standIn.draws].sort(byPoint);
+    const wraps = byPoint(after, through) >= 0;
+    const walked = wraps ? [...along.filter((draw) => byPoint(draw, after) > 0), ...along.filter((draw) => byPoint(draw, through) <= 0)] : along.filter((draw) => byPoint(draw, after) > 0 && byPoint(draw, through) <= 0);
+    const [next] = walked;
+    if (next === undefined) return { kind: "empty" };
+    const at = { position: next.position, created: next.created };
+    if (!next.drawable) return { kind: "skipped", at };
+    const ref = { workspace, conversation: "C_KUDOS", message: `draw-${next.created}` };
+    return { kind: "kudos", drawn: { ...at, ref }, kudos: { at: next.created, giver: "m-ben", recipients: ["m-ann"], segments: [{ kind: "text", text: "Thank you!" }], edited: false }, mentionLookups: 10 };
+  },
+}));
 vi.mock("../progression/effects.ts", async (original) => ({ ...(await original<object>()), gateRecordedWith: async () => ({ thoughtful: true }), xpRecordedFor: async () => 0, bonusRecordedWith: async () => [] }));
 vi.mock("../progression/gainsView.ts", async (original) => ({ ...(await original<object>()), xpGainsShownTo: async () => false, questGainsShownTo: async () => false, bonusGainsShownTo: async () => false }));
 vi.mock("../hugs/flag.ts", async (original) => ({ ...(await original<object>()), hugsShownTo: async () => false }));
@@ -77,7 +94,7 @@ const ben = "m-ben" as MemberId;
 const cat = "m-cat" as MemberId;
 
 beforeEach(() => {
-  Object.assign(standIn, { received: [], given: [], takenBack: new Set(), words: new Map(), names: new Map([[ann, "Ann"], [ben, "Ben"], [cat, "Cat"]]), draw: { kind: "empty" } });
+  Object.assign(standIn, { received: [], given: [], takenBack: new Set(), words: new Map(), names: new Map([[ann, "Ann"], [ben, "Ben"], [cat, "Cat"]]), draws: [] });
 });
 
 let messages = 0;
@@ -156,14 +173,14 @@ describe("a member's activity", () => {
   });
 
   test("the last few kudos of one direction read on past kudos taken back in Slack, 5 unless asked and at most 10", async () => {
-    for (let at = 1; at <= 12; at++) {
+    for (let at = 1; at <= 15; at++) {
       const message = kudos(ben, [ann], at);
-      if (at > 9) standIn.takenBack.add(messageKey(message));
+      if (at > 12) standIn.takenBack.add(messageKey(message));
     }
 
     const recent = (limit?: number) => operations.query("website.activity.recentKudosOf", (ctx) => recentKudosOf(ctx, ann, { direction: "received", limit }));
-    expect((await recent()).entries.map(shown)).toEqual([9, 8, 7, 6, 5].map((at) => `received from Ben at ${at}`));
-    expect((await recent(50)).entries).toHaveLength(9);
+    expect((await recent()).entries.map(shown)).toEqual([12, 11, 10, 9, 8].map((at) => `received from Ben at ${at}`));
+    expect((await recent(50)).entries.map(shown)).toEqual([12, 11, 10, 9, 8, 7, 6, 5, 4, 3].map((at) => `received from Ben at ${at}`));
   });
 
   test("mentions read as names and group handles, and a page resolves at most 2,000 mentions before the rest read as a teammate", async () => {
@@ -202,12 +219,39 @@ describe("behind the activity flag", () => {
 describe("the workspace's spotlight", () => {
   const spotlight = (from: { seed: number } | { after: string }) => operations.query("website.spotlight.spotlightOf", (ctx) => spotlightOf(ctx, "T1", from));
 
-  test("a skipped draw answers a cursor that reads on from the kudos it skipped, and a cursor it never gave is refused", async () => {
-    standIn.draw = { kind: "skipped", at: { position: 0.25, created: 1_000 } };
-    const skipped = await spotlight({ seed: 0.5 });
-    expect(skipped).toMatchObject({ kind: "skipped" });
-    standIn.draw = { kind: "empty" };
-    expect(await spotlight({ after: (skipped as { after: string }).after })).toEqual({ kind: "empty" });
+  /** The spotlight's answers from `seed`, each read from the cursor the one before it gave, until one ends the walk. */
+  async function walk(seed: number, most: number) {
+    const answers = [];
+    let next = await spotlight({ seed });
+    for (;;) {
+      answers.push(next.kind === "kudos" ? `kudos at ${next.at}` : next.kind);
+      if (next.kind === "empty" || answers.length === most) return answers;
+      next = await spotlight({ after: next.after });
+    }
+  }
+
+  test("each cursor reads on from the draw it answered: past every skipped draw, and around the circle after a kudos", async () => {
+    standIn.draws = [
+      { position: 0.1, created: 1, drawable: true },
+      { position: 0.3, created: 2, drawable: false },
+      { position: 0.3, created: 3, drawable: false },
+      { position: 0.6, created: 4, drawable: true },
+    ];
+
+    expect(await walk(0.2, 6)).toEqual(["skipped", "skipped", "kudos at 4", "kudos at 1", "skipped", "skipped"]);
+  });
+
+  test("a walk of skipped draws ends once it is back where it began", async () => {
+    standIn.draws = [
+      { position: 0.1, created: 1, drawable: false },
+      { position: 0.3, created: 2, drawable: false },
+      { position: 0.6, created: 3, drawable: false },
+    ];
+
+    expect(await walk(0.2, 10)).toEqual(["skipped", "skipped", "skipped", "empty"]);
+  });
+
+  test("a cursor the spotlight never gave is refused", async () => {
     await expect(spotlight({ after: "0.25_1000~not-a-point" })).rejects.toThrow("unreadable spotlight cursor");
     await expect(spotlight({ after: "2_1000" })).rejects.toThrow("unreadable spotlight cursor");
   });
