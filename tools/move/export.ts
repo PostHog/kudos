@@ -27,23 +27,58 @@ export async function exportForMove({ envFile, path, signal, noneScheduled = fal
   await convex(["export", "--include-file-storage", "--path", path, "--env-file", envFile], signal);
   const { CONVEX_SELF_HOSTED_URL: url, CONVEX_SELF_HOSTED_ADMIN_KEY: adminKey } = parseEnv(await readFile(envFile, "utf8"));
   if (!url || !adminKey) throw new Error(`${envFile} names no CONVEX_SELF_HOSTED_URL and CONVEX_SELF_HOSTED_ADMIN_KEY`);
+  return addScheduled({ path, connect: () => adminClient(url, adminKey), signal, noneScheduled });
+}
 
+/** What the export reads a deployment's system tables through: the parts of the CLI's own client it uses. */
+export type ConvexReader = {
+  subscribe(name: string, args: Record<string, ConvexValue>, options: { componentPath?: string }): { queryToken: string; unsubscribe: () => void };
+  localQueryResultByToken(token: string): ConvexValue | undefined;
+  close(): Promise<void>;
+};
+
+/** The CLI's own admin channel: `setAdminAuth` and a query's `componentPath` are internal to the client, and are what `npx convex data <table> --component <path>` reads a component's system tables with. */
+function adminClient(url: string, adminKey: string): ConvexReader {
+  const client = new BaseConvexClient(url, () => {}, { unsavedChangesWarning: false, skipConvexDeploymentUrlCheck: true });
+  (client as unknown as { setAdminAuth: (key: string) => void }).setAdminAuth(adminKey);
+  return client as unknown as ConvexReader;
+}
+
+/** How long one page of scheduled functions may take: a page is small, so a deployment silent this long has stopped answering. */
+const defaultPageTimeoutMs = 120_000;
+
+/**
+ * Adds each namespace's `_scheduled_functions` to the export at `path`, and gives back how many it added a namespace.
+ * Each namespace reads through a connection of its own: the client caches an answer under a token of the query's name
+ * and args but not its component path, so one connection would hand a component another namespace's cached page.
+ */
+export async function addScheduled({
+  path,
+  connect,
+  signal,
+  noneScheduled = false,
+  pageTimeoutMs = defaultPageTimeoutMs,
+}: {
+  path: string;
+  connect: () => ConvexReader;
+  signal?: AbortSignal;
+  noneScheduled?: boolean;
+  pageTimeoutMs?: number;
+}): Promise<Record<string, number>> {
   const archive = await readFile(path);
   const counts: Record<string, number> = {};
   const entries: Record<string, string> = {};
-  const client = new BaseConvexClient(url, () => {}, { unsavedChangesWarning: false, skipConvexDeploymentUrlCheck: true });
-  try {
-    // The CLI's own admin channel: `setAdminAuth` and a query's `componentPath` are internal to the client, and are what
-    // `npx convex data <table> --component <path>` reads a component's system tables with.
-    (client as unknown as { setAdminAuth: (key: string) => void }).setAdminAuth(adminKey);
-    for (const component of componentsOf(zipEntryNames(archive))) {
-      const rows = await scheduledFunctions(client, component);
+  for (const component of componentsOf(zipEntryNames(archive))) {
+    signal?.throwIfAborted();
+    const client = connect();
+    try {
+      const rows = await scheduledFunctions(client, component, { signal, timeoutMs: pageTimeoutMs });
       const prefix = component === "" ? "" : `_components/${component.split("/").join("/_components/")}/`;
       entries[`${prefix}_scheduled_functions/documents.jsonl`] = rows.map((row) => `${printExport(row)}\n`).join("");
       counts[component === "" ? "app" : component] = rows.length;
+    } finally {
+      await client.close();
     }
-  } finally {
-    await client.close();
   }
   checkScheduled(counts, noneScheduled);
   await writeFile(path, appendToZip(archive, entries));
@@ -66,44 +101,48 @@ export function componentsOf(names: Iterable<string>): string[] {
   return [...components];
 }
 
+type Deadline = { signal?: AbortSignal; timeoutMs: number };
+
 /** Every `_scheduled_functions` row of one namespace, oldest first. */
-async function scheduledFunctions(client: BaseConvexClient, componentPath: string): Promise<Value[]> {
+async function scheduledFunctions(client: ConvexReader, componentPath: string, deadline: Deadline): Promise<Value[]> {
   const rows: Value[] = [];
   let cursor: string | null = null;
   for (;;) {
-    const page = (await once(client, "_system/cli/tableData", { table: "_scheduled_functions", order: "asc", paginationOpts: { cursor, numItems: pageRows } }, componentPath)) as {
-      page: Value[];
-      isDone: boolean;
-      continueCursor: string;
-    };
+    const args = { table: "_scheduled_functions", order: "asc", paginationOpts: { cursor, numItems: pageRows } };
+    const page = (await once(client, "_system/cli/tableData", args, componentPath, deadline)) as { page: Value[]; isDone: boolean; continueCursor: string };
     rows.push(...page.page);
     if (page.isDone) return rows;
     cursor = page.continueCursor;
   }
 }
 
-/** One answer of a query, as the CLI reads one: subscribe, take the first result, unsubscribe. */
-function once(client: BaseConvexClient, name: string, args: Record<string, ConvexValue>, componentPath: string): Promise<ConvexValue> {
-  const subscribe = client.subscribe.bind(client) as (name: string, args: Record<string, ConvexValue>, options: { componentPath?: string }) => ReturnType<BaseConvexClient["subscribe"]>;
-  const { queryToken, unsubscribe } = subscribe(name, args, componentPath === "" ? {} : { componentPath });
-  const read = client as unknown as { localQueryResultByToken: (token: string) => ConvexValue | undefined };
+/** One answer of a query, as the CLI reads one: subscribe, take the first result, unsubscribe; or stop at the deadline. */
+function once(client: ConvexReader, name: string, args: Record<string, ConvexValue>, componentPath: string, { signal, timeoutMs }: Deadline): Promise<ConvexValue> {
   return new Promise((resolve, reject) => {
+    signal?.throwIfAborted();
+    const { queryToken, unsubscribe } = client.subscribe(name, args, componentPath === "" ? {} : { componentPath });
+    const settle = (settled: () => void) => {
+      clearInterval(timer);
+      clearTimeout(deadline);
+      signal?.removeEventListener("abort", aborted);
+      unsubscribe();
+      settled();
+    };
+    const aborted = () => settle(() => reject(signal!.reason as Error));
     const check = () => {
       try {
-        const result = read.localQueryResultByToken(queryToken);
-        if (result === undefined) return false;
-        clearInterval(timer);
-        unsubscribe();
-        resolve(result);
-        return true;
+        const result = client.localQueryResultByToken(queryToken);
+        if (result !== undefined) settle(() => resolve(result));
       } catch (error) {
-        clearInterval(timer);
-        unsubscribe();
-        reject(error as Error);
-        return true;
+        settle(() => reject(error as Error));
       }
     };
     const timer = setInterval(check, 50);
+    const deadline = setTimeout(
+      () => settle(() => reject(new Error(`the deployment didn't answer for ${componentPath === "" ? "the app" : componentPath}'s scheduled functions within ${timeoutMs} ms`))),
+      timeoutMs,
+    );
+    signal?.addEventListener("abort", aborted, { once: true });
   });
 }
 

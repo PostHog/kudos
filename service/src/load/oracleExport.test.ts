@@ -8,11 +8,13 @@ import { useTestDatabase } from "../../testing/database.ts";
 import { rewriteExport, scheduledSource } from "../../testing/exportZip.ts";
 import { chunksOf } from "../../testing/zip.ts";
 import { createClock } from "../clock.ts";
+import { decodeStored, type Value } from "../db/codec.ts";
 import { createApp } from "../http/app.ts";
 import type { Log, LogFields } from "../log.ts";
 import { serviceRegistry } from "../registry.ts";
 import { createLoadControl, type LoadControl } from "./control.ts";
 import { jobName } from "./recovery.ts";
+import { restartArgs } from "./restarts.ts";
 import { retiredJobs } from "./retired.ts";
 
 const database = useTestDatabase();
@@ -22,7 +24,7 @@ const fixture = new URL("../../../e2e/rewrite/oracleExport.zip", import.meta.url
 /**
  * The functions the oracle ran that the service registers no job for yet, each until the stack that ports it (or
  * retires it, in ./retired.ts) lands; every row of them in the fixture is finished. Recovery stops on any name that maps
- * to neither, so the move waits until this list is empty. A name that leaves the registry's reach isn't caught here.
+ * to neither, so the move waits until this list is empty; a name ported or retired must leave it.
  */
 const awaitingPort = new Set([
   "achievements.achievements.countKudosGiven",
@@ -61,7 +63,7 @@ const awaitingPort = new Set([
 ]);
 
 type Status = { phase: string; error: string | null; roundTrip: { equal: boolean; tables: Array<{ table: string; equal: boolean }> } | null };
-type Scheduled = { _id: string; name: string; state: { kind: string } };
+type Scheduled = { _id: string; name: string; state: { kind: string }; args: [Record<string, Value>]; scheduledTime: number };
 
 const loads: LoadControl[] = [];
 afterEach(() => loads.splice(0).forEach((load) => load.stop()));
@@ -125,6 +127,10 @@ describe("the move on the oracle's own export", () => {
     expect(scheduled.some(({ state }) => state.kind === "pending"), "work still to run").toBe(true);
   });
 
+  test("a function awaiting its port has no job and no retirement yet, so a stack that ports one takes it off the list", () => {
+    expect([...awaitingPort].filter((name) => serviceRegistry.jobs.get(name) || retiredJobs.has(name))).toEqual([]);
+  });
+
   test("recovery stops on the functions no stack has ported yet, and on nothing else, before it changes anything", async () => {
     const archive = await readFile(fixture);
     const unmapped = new Set((await scheduledOf(archive)).filter(({ job }) => !serviceRegistry.jobs.get(job) && !retiredJobs.has(job)).map(({ job }) => job));
@@ -150,7 +156,18 @@ describe("the move on the oracle's own export", () => {
       jobs: scheduled.length,
       scheduled: counts.join(", "),
     });
-    const pending = await database.pool.query<{ name: string }>(`select name from jobs where state = 'pending' order by name`);
-    expect(pending.rows.length, "the oracle's pending work is pending on the service").toBe(scheduled.filter(({ state, job }) => state.kind === "pending" && !retiredJobs.has(job)).length);
+    // What the oracle had scheduled, as the service keeps it: each under its own `_id` and name, its args (any Convex
+    // cursor restarted, ./restarts.ts) and time; work still to run pending, unless its function is retired.
+    const expected = scheduled
+      .map(({ _id, job, state, args, scheduledTime }) => ({
+        _id,
+        name: job,
+        state: state.kind === "pending" ? (retiredJobs.has(job) ? "canceled" : "pending") : state.kind,
+        args: restartArgs(job, args[0]),
+        runAt: scheduledTime,
+      }))
+      .sort((a, b) => (a._id < b._id ? -1 : 1));
+    const stored = await database.pool.query<{ _id: string; name: string; state: string; args: string; runAt: number }>(`select _id, name, state, args::text as args, "runAt" from jobs order by _id collate "C"`);
+    expect(stored.rows.map((row) => ({ ...row, args: decodeStored(row.args) })), "every scheduled function its job").toStrictEqual(expected);
   });
 });
