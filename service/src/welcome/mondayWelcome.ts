@@ -2,9 +2,9 @@
 // notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
 import { messageRefValidator, type ChatUserId } from "../engine/messageEvent.ts";
 import type { WaitingCount } from "../album/items/ledger.ts";
-import { type DmLinks } from "../feedback/dmLinks.ts";
-import { type OnboardingQuest, type OnboardingStep } from "../quests/onboarding.ts";
-import { type TwoQuestsRow } from "../quests/twoQuests.ts";
+import type { DmLinks } from "../feedback/dmLinks.ts";
+import type { OnboardingQuest, OnboardingStep } from "../quests/onboarding.ts";
+import type { TwoQuestsRow } from "../quests/twoQuests.ts";
 import { z } from "zod";
 import { zv } from "../values.ts";
 import type { QueryContext } from "../operations.ts";
