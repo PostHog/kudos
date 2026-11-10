@@ -12,6 +12,7 @@ import { decodeStored, encodeStored, type Value } from "./codec.ts";
 import { indexOrder } from "./indexOrder.ts";
 import { paginate, type Page, type PagedQuery } from "./page.ts";
 import { flagExposures, primaryGroupHistory, type Doc } from "./schema/index.ts";
+import { files } from "./schema/service.ts";
 
 const database = useTestDatabase();
 const db = drizzle({ client: database.pool });
@@ -101,4 +102,10 @@ test("an index over a jsonb field isn't paged: Postgres orders jsonb unlike Conv
 
   await expect(paginate(db, exposures, { cursor: null, numItems: 1 })).rejects.toThrow("flagExposures(member, flag, value) can't be paged: value is stored as jsonb");
   expect(() => byMemberFlagValue.after({ member: "m", flag: "f", value: "abc", _creationTime: 1, _id: "x" })).toThrow("can't be paged");
+});
+
+test("an index over a field of a kind paging doesn't know, such as bytes, isn't paged either", async () => {
+  const byBytes = indexOrder(files, ["bytes"]);
+
+  await expect(paginate(db, { table: files, order: byBytes }, { cursor: null, numItems: 1 })).rejects.toThrow("files(bytes) can't be paged: bytes is stored as bytea");
 });

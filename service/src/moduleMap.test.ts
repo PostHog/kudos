@@ -4,17 +4,15 @@
 import { describe, expect, test } from "vitest";
 import type { Id } from "./db/columns.ts";
 import { recomputeSpotlightOfJob } from "./engine/spotlight.ts";
+import { republishAdminsIn } from "./feedback/homes.ts";
 import { tellBatchSummariesJob } from "./feedback/tierNotices.ts";
 import type { Job } from "./jobs/define.ts";
-import { recordChannelCheck } from "./leaderboard/mondayPost.ts";
 import { NotPortedError } from "./notPorted.ts";
 import type { ActionContext, MutationContext } from "./operations.ts";
 
-// The Monday post's Slack action records a channel check, a leaderboard mutation.
+// An action runs another stack's mutation: the feedback's republish of the admins' homes.
 async function checkChannel(ctx: ActionContext) {
-  return ctx.run.mutation("leaderboard.mondayPost.recordChannelCheck", (tx) =>
-    recordChannelCheck(tx, { workspace: "T1", channel: "C1", pick: 0, found: { kind: "public", name: "general" } }),
-  );
+  return ctx.run.mutation("feedback.homes.republishAdminsIn", (tx) => republishAdminsIn(tx, { workspace: "T1" }));
 }
 
 // The leaderboard's visibility change and the achievements replay schedule the engine's and the feedback's jobs.
@@ -31,7 +29,7 @@ describe("the module map across stacks", () => {
     const refusal = await checkChannel(ctx).catch((error: unknown) => error);
 
     expect(refusal).toBeInstanceOf(NotPortedError);
-    expect((refusal as Error).message).toContain("leaderboard.mondayPost.recordChannelCheck");
+    expect((refusal as Error).message).toContain("feedback.homes.republishAdminsIn");
   });
 
   test("another stack's jobs enqueue by their Convex names, their args checked by their schemas", async () => {
