@@ -110,7 +110,7 @@ describe("with the album on, each read answers its own page", () => {
     expect(await answerOf("website.album.getAlbumProfile", {})).toMatchObject({ kind: "profile" });
   });
 
-  waitsOn(["S6"], "the book is not found while the unlock path leaves it out", async () => {
+  test("the book is not found while the unlock path leaves it out", async () => {
     const { answerOf } = await websiteFor();
 
     expect(await answerOf("website.book.getBook", {})).toEqual({ kind: "not-found" });

@@ -56,7 +56,7 @@ waitsOn(["S11"], "off the path, the leaderboard is open while the everyone board
   expect(await stateIn(me, null)).toEqual({ kind: "off" });
 });
 
-waitsOn(["S6"], "a member the unlock path isn't shown to has no path", async () => {
+test("a member the unlock path isn't shown to has no path", async () => {
   const me = await aMember();
 
   expect(await operations.query("test.unlockPathOf", (ctx) => unlockPathOf(ctx, me))).toBeNull();
