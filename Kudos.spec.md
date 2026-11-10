@@ -76,5 +76,13 @@ Peer recognition for Slack on one Convex deployment per workspace; the product r
 - route POST /admin/load/reset: the operator holding HEDGEHUG_ADMIN_TOKEN empties every table a load wrote, before the load is done
   handler: createLoadControl in service/src/load/control.ts
   trust: browser
+- route POST /api/query/*: the website reads one of the route table's reads, named by its former Convex path, for the member the request signs in as
+  handler: apiTransport in service/src/website/api/transport.ts
+  trust: browser
+  control: none — a request without the x-hedgehug-api header, as anything but JSON, or marked cross-site by the browser gets 403, and arguments the route's zod schema refuses get 400, before anyone is looked up; only a member today's check verifies reaches the read, and anyone else gets the check's denial (service/src/website/api/transport.test.ts)
+- route POST /api/mutation/*: the website sends one of the route table's commands, named by its former Convex path, for the member the request signs in as
+  handler: apiTransport in service/src/website/api/transport.ts
+  trust: browser
+  control: none — the same guard as the reads: no cross-site form or link can send the header or the JSON, so no other site runs a command; only a member the website admits reaches the command, in one transaction that writes nothing on a denial (service/src/website/api/transport.test.ts)
 
 ## invariants
