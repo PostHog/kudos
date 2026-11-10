@@ -7,6 +7,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { exportJWK, exportPKCS8, generateKeyPair } from "jose";
+import { exportForMove } from "../tools/move/export.ts";
 
 const backendVersion = "precompiled-2026-10-06-a3538c6";
 const run = promisify(execFile);
@@ -20,7 +21,7 @@ export type LocalBackend = {
   envFile: string;
   adminKey: string;
   run: (name: string, options?: { component?: string }) => Promise<string>;
-  /** Writes a snapshot export of the deployment, its files included, to `path`, as `npx convex export` does. */
+  /** Writes the move's export of the deployment to `path`: `npx convex export` with its files and scheduled functions. */
   exportTo: (path: string) => Promise<void>;
   restart: (changes: Record<string, string>) => Promise<void>;
   stop: () => Promise<void>;
@@ -75,7 +76,7 @@ export async function startLocalBackend({ instanceName, variables, environment, 
     const runFunction = (name: string, { component }: { component?: string } = {}) =>
       convex(["run", ...(component === undefined ? [] : ["--component", component]), name, "--env-file", envFile], signal);
     const exportTo = async (path: string) => {
-      await convex(["export", "--include-file-storage", "--path", path, "--env-file", envFile], signal);
+      await exportForMove({ envFile, path, signal });
     };
     return { cloud, site, envFile, adminKey: key, run: runFunction, exportTo, restart, stop };
   } catch (failure) {
