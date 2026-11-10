@@ -1,13 +1,23 @@
-// The module map's skeleton of convex/activity/kudos.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
-// notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
-import type { AwardId } from "../engine/awards.ts";
-import type { MessageRef, WordSegment } from "../engine/messageEvent.ts";
-import { type MemberId } from "../workspace/directory.ts";
-import type { Channel, Message, Person, Segment } from "./entries.ts";
+// What a kudos entry says, as today's convex/activity/kudos.ts: its people, its words with mentions and custom emoji
+// resolved within a page's lookups, whether it said why, its channel's visibility and its Slack permalink.
 import type { QueryContext } from "../operations.ts";
-import { notPorted } from "../notPorted.ts";
+import type { AwardId } from "../engine/awards.ts";
+import { threadRootOf } from "../engine/engine.ts";
+import { takenBackInSlack, wordsOf } from "../engine/kudosText.ts";
+import type { MessageRef, WordSegment } from "../engine/messageEvent.ts";
+import { gateRecordedWith } from "../progression/effects.ts";
+import { permalinkOf } from "../slack/permalink.ts";
+import { nameless, teammateOf } from "../website/faces.ts";
+import { customEmojiImageOf } from "../workspace/customEmoji.ts";
+import { nameAndPictureOf, currentMemberOfUser, type MemberId } from "../workspace/directory.ts";
+import { workspaceUrlOf } from "../workspace/url.ts";
+import { userGroupHandleOf } from "../workspace/userGroups.ts";
+import type { Channel, Message, Person, Segment } from "./entries.ts";
 
 export type KudosFacts = { channel: Channel; saidWhy: boolean | null; permalink: string | null; message: Message };
+
+const unknownChannel: Channel = { visibility: "unknown" };
+const unknownGroupHandle = "group";
 const broadcastRanges = ["here", "channel", "everyone"] as const;
 
 export const mentionLookupsPerPage = 2_000;
@@ -23,23 +33,49 @@ export type Mentions = {
 export type PeopleMentioned = "named" | "linked";
 
 export function mentionsOfOnePage(ctx: QueryContext, lookupsAtMost = mentionLookupsPerPage, people: PeopleMentioned = "named"): Mentions {
-  throw notPorted("activity.kudos.mentionsOfOnePage");
+  const looked = new Map<string, Promise<unknown>>();
+  const once = <Found>(key: string, lookUp: () => Promise<Found | undefined>): Promise<Found | undefined> => {
+    const known = looked.get(key);
+    if (known !== undefined) return known as Promise<Found | undefined>;
+    if (looked.size >= lookupsAtMost) return Promise.resolve(undefined);
+    const answer = lookUp();
+    looked.set(key, answer);
+    return answer;
+  };
+  return {
+    person: async (workspace, user) => personMentionedAs(await once(`person ${workspace} ${user}`, () => currentMemberOfUser(ctx, workspace, user)), people),
+    groupHandle: async (workspace, group) => (await once(`group ${workspace} ${group}`, () => userGroupHandleOf(ctx, workspace, group))) ?? unknownGroupHandle,
+    emojiImage: (workspace, name) => once(`emoji ${workspace} ${name}`, () => customEmojiImageOf(ctx, workspace, name)),
+  };
+}
+
+function personMentionedAs(known: { member: MemberId; name: string | undefined } | undefined, people: PeopleMentioned): PersonMentioned {
+  const name = known?.name ?? nameless;
+  return known === undefined || people === "named" ? { kind: "person", name } : { kind: "person", name, person: known.member };
 }
 
 export async function kudosFactsOf(ctx: QueryContext, mentions: Mentions, ref: MessageRef, first: AwardId): Promise<KudosFacts> {
-  throw notPorted("activity.kudos.kudosFactsOf");
+  const [{ channel, message }, gate, permalink] = await Promise.all([wordsAndChannelOf(ctx, mentions, ref), gateRecordedWith(ctx, first), permalinkOfMessage(ctx, ref)]);
+  return { channel, saidWhy: gate?.thoughtful ?? null, permalink, message };
 }
 
 export async function personOf(ctx: QueryContext, member: MemberId): Promise<Person> {
-  throw notPorted("activity.kudos.personOf");
+  const { name, picture } = await nameAndPictureOf(ctx, member);
+  return teammateOf(name, picture);
 }
 
 export async function kudosWordsOf(ctx: QueryContext, mentions: Mentions, ref: MessageRef): Promise<Message> {
-  throw notPorted("activity.kudos.kudosWordsOf");
+  return (await wordsAndChannelOf(ctx, mentions, ref)).message;
 }
 
 export async function kudosWordsStillInSlack(ctx: QueryContext, mentions: Mentions, message: MessageRef): Promise<Message | null> {
-  throw notPorted("activity.kudos.kudosWordsStillInSlack");
+  return (await takenBackInSlack(ctx, message)) ? null : kudosWordsOf(ctx, mentions, message);
+}
+
+async function wordsAndChannelOf(ctx: QueryContext, mentions: Mentions, ref: MessageRef): Promise<{ channel: Channel; message: Message }> {
+  const text = await wordsOf(ctx, ref);
+  if (text.kind === "unavailable") return { channel: unknownChannel, message: { kind: "unavailable", reason: text.reason } };
+  return { channel: { visibility: text.visibility }, message: { kind: "text", segments: await readableSegmentsOf(mentions, ref.workspace, text.segments), edited: text.edited } };
 }
 
 export function readableSegmentsOf(mentions: Mentions, workspace: string, segments: WordSegment[]): Promise<Segment[]> {
@@ -72,5 +108,6 @@ function broadcastSegmentOf(range: string): Segment {
 }
 
 export async function permalinkOfMessage(ctx: QueryContext, ref: MessageRef): Promise<string | null> {
-  throw notPorted("activity.kudos.permalinkOfMessage");
+  const workspaceUrl = await workspaceUrlOf(ctx, ref.workspace);
+  return workspaceUrl === null ? null : permalinkOf(workspaceUrl, ref, await threadRootOf(ctx, ref));
 }
