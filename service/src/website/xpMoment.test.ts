@@ -53,8 +53,8 @@ const everyFlagOfTheMoment = [...albumOpen, "hidden-items", "xp-moments"];
 //   activity (S12), hugs (S13) and analytics (S14);
 const giving: Stack[] = ["S4", "S5", "S6", "S7", "S8", "S9", "S10", "S11", "S12", "S13", "S14"];
 // - getXpMoment: the album flag and the thoughtful givers (S9), the first-thanks top-up and the progression (S6), the
-//   waiting items (S8), and the quest and progress beats (S17's progressed and beat flags);
-const reading: Stack[] = ["S6", "S8", "S9", "S17"];
+//   waiting items (S8), and the quest and milestone moves behind the beats (S7's quests, S9's milestones);
+const reading: Stack[] = ["S6", "S7", "S8", "S9"];
 // - an arrival or an end: the album flag, stickers and team stickers (S9), the hidden-items flag and the turns (S8),
 //   the hoggie tallies (S10), the newest award received (S4), the first-thanks moment (S6), and the usage fact (S14);
 const ending: Stack[] = ["S4", "S6", "S8", "S9", "S10", "S14"];
