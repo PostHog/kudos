@@ -72,7 +72,8 @@ async function tiersToTellUnder(ctx: MutationContext, { member, message, at, ear
   if (untold.length === 0) return nothing;
   const tiers = [...told, ...untold];
   if (notice === null) await ctx.tx.insert(tierNotices).values(fromDocument(tierNotices, { ...ctx.newRow(), member, ...message, tiers }) as typeof tierNotices.$inferInsert);
-  else await ctx.tx.update(tierNotices).set(fromDocument(tierNotices, { tiers })).where(eq(tierNotices._id, notice._id));
+  // A row is stored whole: `fromDocument` writes every column, so the notice keeps its other fields as Convex's patch did.
+  else await ctx.tx.update(tierNotices).set(fromDocument(tierNotices, { ...notice, tiers })).where(eq(tierNotices._id, notice._id));
   return { untold, tiers };
 }
 

@@ -8,12 +8,13 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { useTestBackend } from "../../testing/backend.ts";
 import { definitionsStored, onForEveryone, postHogDeciding } from "../../testing/flags.ts";
 import { waitsOn } from "../../testing/waiting.ts";
-import type { TierRef } from "../achievements/ladders.ts";
+import { tierNameOf, type TierRef } from "../achievements/ladders.ts";
 import type { BatchId } from "../achievements/replay.ts";
 import { analyticsIdOf } from "../analytics/person.ts";
 import type { UnlockOpenedEvent } from "../bus/events.ts";
 import { decodeStored } from "../db/codec.ts";
 import { jobs } from "../db/schema/service.ts";
+import { setMessageSetting } from "../messageSettings/messageSettings.ts";
 import { serviceRegistry } from "../registry.ts";
 import { publishHomeJob } from "../slack/appHome.ts";
 import { openUnlock } from "../unlocks/unlocks.ts";
@@ -48,16 +49,20 @@ async function member(t: Backend, user: string) {
   return id;
 }
 
-async function withTheBook(t: Backend, ...users: string[]) {
+// A workspace with achievements on and an announcement channel. The book is the member's own: ready, and open from
+// `openedAt` when given, never opened by a launch, as today's tests seed it.
+async function aWorkspace(t: Backend) {
   await definitionsStored(t.operations, ...["xp-levels", "unlocks", "achievements"].map(onForEveryone));
-  const opened: MemberId[] = [];
-  for (const user of users) {
-    const id = await member(t, user);
-    await t.run((ctx) => openUnlock(ctx, id, "book", "slack"));
-    opened.push(id);
-  }
-  return opened;
+  await t.seed.insert("workspaces", { workspace: "T1", kudosEmoji: "taco", baseAllowance: 10, announcementChannel: "C_NEWS" });
 }
+
+async function withTheBook(t: Backend, user: string, { readyAt = t.clock.now(), openedAt }: { readyAt?: number; openedAt?: number } = {}) {
+  const id = await member(t, user);
+  await t.seed.insert("unlocks", { member: id, feature: "book", readyAt, ...(openedAt !== undefined && { openedAt }) });
+  return id;
+}
+
+const postedTo = (t: Backend) => t.slack.callsTo("chat.postMessage").map(({ channel }) => channel);
 
 function earned(t: Backend, member: MemberId, tier: TierRef, batch?: BatchId) {
   return t.seed.insert("earnedTiers", { member, ...tier, earnedAt: t.clock.now(), award: "award1", catalogueVersion: "v1", rewards: [], ...(batch !== undefined && { batch }) });
@@ -80,15 +85,21 @@ describe("the tiers a kudos earned", () => {
 
   waitsOn(["S5", "S6", "S17"], "are told beside the kudos once, and a tier earned later on the same kudos is told alone", async () => {
     const t = backend();
-    const [alice] = await withTheBook(t, "U_ALICE");
+    await aWorkspace(t);
+    const alice = await withTheBook(t, "U_ALICE", { openedAt: t.clock.now() });
+    await t.run((ctx) => setMessageSetting(ctx, alice, "achievements", "channel"));
 
-    await t.run((ctx) => tellTiersEarned(ctx, { member: alice!, message: kudos, at: ctx.now, earned: [bronze] }));
-    await t.run((ctx) => tellTiersEarned(ctx, { member: alice!, message: kudos, at: ctx.now, earned: [bronze, silver] }));
-    await t.run((ctx) => tellTiersEarned(ctx, { member: alice!, message: kudos, at: ctx.now, earned: [bronze, silver] }));
+    await t.run((ctx) => tellTiersEarned(ctx, { member: alice, message: kudos, at: ctx.now, earned: [bronze] }));
+    await t.run((ctx) => tellTiersEarned(ctx, { member: alice, message: kudos, at: ctx.now, earned: [bronze, silver] }));
+    await t.run((ctx) => tellTiersEarned(ctx, { member: alice, message: kudos, at: ctx.now, earned: [bronze, silver] }));
     await t.settle();
 
     expect((await t.seed.all("tierNotices")).map(({ tiers }) => tiers)).toEqual([[bronze, silver]]);
-    expect(t.slack.callsTo("chat.postEphemeral")).toHaveLength(2);
+    const [first, second, ...more] = t.slack.ephemeralsTo("U_ALICE").map(({ text }) => String(text));
+    expect(more).toEqual([]);
+    expect(first).toContain(tierNameOf(bronze));
+    expect(second).toContain(tierNameOf(silver));
+    expect(second).not.toContain(tierNameOf(bronze));
   });
 });
 
@@ -104,16 +115,18 @@ describe("a member who opens the book", () => {
     expect((await t.settle()).ran).toEqual([]);
   });
 
-  waitsOn(["S5", "S6"], "is told the tiers earned before it opened, in one summary", async () => {
+  waitsOn(["S5", "S6"], "is told the tiers earned before it opened, in one DM summary and nothing in public", async () => {
     const t = backend();
-    const [alice] = await withTheBook(t, "U_ALICE");
-    await earned(t, alice!, bronze);
+    await aWorkspace(t);
+    const alice = await withTheBook(t, "U_ALICE");
+    await earned(t, alice, bronze);
+    await t.time.advance(hourMs);
 
-    const event: UnlockOpenedEvent = { type: "unlockOpened", workspace: "T1", member: alice!, feature: "book", at: t.clock.now() };
-    await t.run((ctx) => ctx.publish(event));
+    expect(await t.run((ctx) => openUnlock(ctx, alice, "book", "slack"))).toBe("done");
     await t.settle();
 
     expect((await t.seed.all("tierSummaries")).map(({ tiers }) => tiers)).toEqual([[bronze]]);
+    expect(postedTo(t)).toEqual(["U_ALICE"]);
   });
 });
 
@@ -131,19 +144,22 @@ describe("a replayed batch", () => {
     expect(t.slack.calls).toEqual([]);
   });
 
-  waitsOn(["S5", "S6", "S17"], "tells each member the tiers it earned them once, even when the walk restarts from the first page", async () => {
+  waitsOn(["S5", "S6", "S17"], "tells each member the tiers it earned them once, DM and announcement, even when the walk restarts from the first page", async () => {
     const t = backend();
-    const [alice] = await withTheBook(t, "U_ALICE");
+    await aWorkspace(t);
+    const alice = await withTheBook(t, "U_ALICE", { readyAt: t.clock.now(), openedAt: t.clock.now() });
     await t.time.advance(hourMs);
-    const batch = (await t.seed.insert("bookBatches", { workspace: "T1", at: t.clock.now() - 1, completedAt: t.clock.now() })) as BatchId;
-    await earned(t, alice!, bronze, batch);
+    const batch = (await t.seed.insert("bookBatches", { workspace: "T1", at: t.clock.now() })) as BatchId;
+    await earned(t, alice, bronze, batch);
+    await t.time.advance(hourMs);
+    await t.seed.patch("bookBatches", batch, { completedAt: t.clock.now() });
 
     await t.run((ctx) => tellBatchSummaries(ctx, { batch, cursor: null }));
     await t.run((ctx) => tellBatchSummaries(ctx, { batch, cursor: null }));
     await t.settle();
 
     expect((await t.seed.all("tierSummaries")).map(({ tiers, batch: told }) => ({ tiers, batch: told }))).toEqual([{ tiers: [bronze], batch }]);
-    expect(t.slack.callsTo("chat.postMessage")).toHaveLength(1);
+    expect(postedTo(t).toSorted()).toEqual(["C_NEWS", "U_ALICE"]);
   });
 
   waitsOn(
