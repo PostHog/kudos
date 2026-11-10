@@ -7,9 +7,8 @@
 //   convex/slack/events.ts takes it in, so `slackEvent` reaches that module's stub, `slack.events.slackEvents` (S4).
 // - A website command or read with no service route nor module-map stub answers through `formerConvexCall`, named by
 //   its Convex path.
-import { asc, getTableName, is, eq } from "drizzle-orm";
+import { asc, eq, sql } from "drizzle-orm";
 import { Hono } from "hono";
-import { PgTable } from "drizzle-orm/pg-core";
 import { expect, vi } from "vitest";
 import type { TestBackend } from "../../testing/backend.ts";
 import { flagsKey, postHogHost, projectToken, routedFetch, type FlagDefinition } from "../../testing/fakePostHog.ts";
@@ -22,7 +21,6 @@ import { workspaceKeyOf } from "../analytics/outbox.ts";
 import { syncCompanyProfiles } from "../companyProfiles/sync.ts";
 import type { Id } from "../db/columns.ts";
 import { toDocument } from "../db/documents.ts";
-import * as schema from "../db/schema/index.ts";
 import { jobs, type TableName } from "../db/schema/index.ts";
 import { notPorted } from "../notPorted.ts";
 import type { MutationContext } from "../operations.ts";
@@ -341,15 +339,18 @@ export function setTime(t: TestBackend, at: number): void {
   t.time.advance(Math.max(0, at - t.clock.now()));
 }
 
-const tableNames = (Object.values(schema) as unknown[])
-  .filter((table): table is PgTable => is(table, PgTable))
-  .filter((table) => table !== jobs)
-  .map((table) => getTableName(table) as TableName);
+// The tables the migrations made, read from the database as the test database empties them (testing/database.ts), so
+// this helper never imports the whole schema: R18 pins the modules that reach every table by it, and a test helper isn't
+// one of them.
+async function tablesOf(t: TestBackend): Promise<string[]> {
+  const { rows } = await t.query(({ tx }) => tx.execute<{ name: string }>(sql`select tablename as name from pg_tables where schemaname = current_schema() and tablename <> '__migrations' order by tablename`));
+  return rows.map(({ name }) => name);
+}
 
 /** Every domain table's rows, as today's loop over `schema.tables`; the jobs, today's `_scheduled_functions`, apart. */
 export async function everyTable(t: TestBackend): Promise<Record<string, Record<string, unknown>[]>> {
   const rows: Record<string, Record<string, unknown>[]> = {};
-  for (const name of tableNames) rows[name] = (await t.seed.all(name)) as Record<string, unknown>[];
+  for (const name of await tablesOf(t)) if (name !== "jobs") rows[name] = (await t.seed.all(name as TableName)) as Record<string, unknown>[];
   return rows;
 }
 
@@ -365,14 +366,9 @@ export async function everythingWritten(t: TestBackend) {
  * with its own fakes and its clock back at the start. The backend before it is done with.
  */
 export async function aFreshBackend(t: TestBackend, backend: () => TestBackend): Promise<TestBackend> {
-  await t.run(async ({ tx }) => {
-    for (const table of [...tableNames, getTableName(jobs)]) await tx.delete(schemaTable(table));
-  });
+  const tables = await tablesOf(t);
+  await t.run(({ tx }) => tx.execute(sql.raw(`truncate ${tables.map((name) => `"${name}"`).join(", ")}`)));
   return backend();
-}
-
-function schemaTable(name: string): PgTable {
-  return (Object.values(schema) as unknown[]).find((table): table is PgTable => is(table, PgTable) && getTableName(table) === name)!;
 }
 
 // --- testing/fakePostHogCom.ts: the team pages the company copy sync reads ---
