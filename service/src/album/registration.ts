@@ -1,6 +1,7 @@
 // The album domain's jobs, bus subscribers, cron jobs, Slack handlers and website routes. Only its stack fills it.
 import type { HoggieDroppedEvent } from "../bus/events.ts";
 import type { Registration } from "../registration.ts";
+import { deliverAlbumReplyJob } from "../slack/albumReplies.ts";
 import { giveEmojiASecondNameJob, reserveSharedEmojiNamesJob, reserveTeamNamesAfterTheSyncJob } from "./emojiNames.ts";
 import { crateKindOf } from "./hoggies/crateKey.ts";
 import { recordAlbumHistoryJob, startAlbumHistoryJob } from "./history.ts";
@@ -14,7 +15,7 @@ import {
 import { tallyHugGivenJob, tallyHugJob, tallyKudosGivenJob } from "./tallies.ts";
 
 export const registration: Registration = {
-  jobs: [startAlbumHistoryJob, recordAlbumHistoryJob, tallyHugJob, recordMilestonesInWorkspaceJob, recordMilestonesOfStickerHoldersJob, giveEmojiASecondNameJob, reserveSharedEmojiNamesJob],
+  jobs: [startAlbumHistoryJob, recordAlbumHistoryJob, tallyHugJob, recordMilestonesInWorkspaceJob, recordMilestonesOfStickerHoldersJob, giveEmojiASecondNameJob, reserveSharedEmojiNamesJob, deliverAlbumReplyJob],
   subscribers: [
     { event: "kudosGiven", job: tallyKudosGivenJob },
     { event: "hugGiven", job: tallyHugGivenJob },

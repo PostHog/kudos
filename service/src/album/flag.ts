@@ -1,86 +1,87 @@
-// The module map's skeleton of convex/album/flag.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
-// notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
-import type { Flag } from "../analytics/flags.ts";
+// The album's flags, as today's convex/album/flag.ts decides them: each one per member, read without writing a decision
+// where the album only shows something, and decided (and, for hype-by-reactions, exposed) where a mutation acts on it.
+import { exposed, memberDecision, memberDecisionWithoutWriting, type Flag } from "../analytics/flags.ts";
 import type { MemberId } from "../workspace/directory.ts";
 import type { MutationContext, QueryContext } from "../operations.ts";
-import { notPorted } from "../notPorted.ts";
 
 export const albumFlag = { key: "album", safeDefault: false, values: [false, true] } as const satisfies Flag<boolean>;
 
 export function albumShownTo(ctx: QueryContext, member: MemberId): Promise<boolean> {
-  throw notPorted("album.flag.albumShownTo");
+  return memberDecisionWithoutWriting(ctx, albumFlag, member);
 }
 
 export const randomEmojisFlag = { key: "random-emojis", safeDefault: false, values: [false, true] } as const satisfies Flag<boolean>;
 
 export function randomEmojisShownTo(ctx: QueryContext, member: MemberId): Promise<boolean> {
-  throw notPorted("album.flag.randomEmojisShownTo");
+  return memberDecisionWithoutWriting(ctx, randomEmojisFlag, member);
 }
 
 export const emojiWizardFlag = { key: "emoji-wizard", safeDefault: false, values: [false, true] } as const satisfies Flag<boolean>;
 
 export function emojiWizardShownTo(ctx: QueryContext, member: MemberId): Promise<boolean> {
-  throw notPorted("album.flag.emojiWizardShownTo");
+  return memberDecisionWithoutWriting(ctx, emojiWizardFlag, member);
 }
 
 export const emojiMappingInPlaceFlag = { key: "emoji-mapping-in-place", safeDefault: false, values: [false, true] } as const satisfies Flag<boolean>;
 
 export function emojiMappingInPlaceShownTo(ctx: QueryContext, member: MemberId): Promise<boolean> {
-  throw notPorted("album.flag.emojiMappingInPlaceShownTo");
+  return memberDecisionWithoutWriting(ctx, emojiMappingInPlaceFlag, member);
 }
 
 export const shareableUrlsFlag = { key: "shareable-urls", safeDefault: false, values: [false, true] } as const satisfies Flag<boolean>;
 
 export function shareableUrlsShownTo(ctx: QueryContext, member: MemberId): Promise<boolean> {
-  throw notPorted("album.flag.shareableUrlsShownTo");
+  return memberDecisionWithoutWriting(ctx, shareableUrlsFlag, member);
 }
 
 export const ownHypePickFlag = { key: "own-hype-pick", safeDefault: false, values: [false, true] } as const satisfies Flag<boolean>;
 
 export function ownHypePickShownTo(ctx: QueryContext, member: MemberId): Promise<boolean> {
-  throw notPorted("album.flag.ownHypePickShownTo");
+  return memberDecisionWithoutWriting(ctx, ownHypePickFlag, member);
 }
 
 export const adminHypeEmojisFlag = { key: "admin-hype-emojis", safeDefault: false, values: [false, true] } as const satisfies Flag<boolean>;
 
 export function adminHypeEmojisShownTo(ctx: QueryContext, member: MemberId): Promise<boolean> {
-  throw notPorted("album.flag.adminHypeEmojisShownTo");
+  return memberDecisionWithoutWriting(ctx, adminHypeEmojisFlag, member);
 }
 
 export const kudosEmojiPicksFlag = { key: "kudos-emoji-picks", safeDefault: false, values: [false, true] } as const satisfies Flag<boolean>;
 
 export function kudosEmojiPicksShownTo(ctx: QueryContext, member: MemberId): Promise<boolean> {
-  throw notPorted("album.flag.kudosEmojiPicksShownTo");
+  return memberDecisionWithoutWriting(ctx, kudosEmojiPicksFlag, member);
 }
 
 export function kudosEmojiPicksCountFor(ctx: MutationContext, member: MemberId): Promise<boolean> {
-  throw notPorted("album.flag.kudosEmojiPicksCountFor");
+  return memberDecision(ctx, kudosEmojiPicksFlag, member);
 }
 
 export type AlbumShown = { album?: true };
 
 export async function albumOnProfileOf(ctx: QueryContext, member: MemberId): Promise<AlbumShown> {
-  throw notPorted("album.flag.albumOnProfileOf");
+  return (await albumShownTo(ctx, member)) ? { album: true } : {};
 }
 
 export const personPageDFlag = { key: "person-page-d", safeDefault: false, values: [false, true] } as const satisfies Flag<boolean>;
 
 export function personPageDShownTo(ctx: QueryContext, member: MemberId): Promise<boolean> {
-  throw notPorted("album.flag.personPageDShownTo");
+  return memberDecisionWithoutWriting(ctx, personPageDFlag, member);
 }
 
 export const bookNextFlag = { key: "book-next", safeDefault: false, values: [false, true] } as const satisfies Flag<boolean>;
 
 export function bookNextShownTo(ctx: QueryContext, member: MemberId): Promise<boolean> {
-  throw notPorted("album.flag.bookNextShownTo");
+  return memberDecisionWithoutWriting(ctx, bookNextFlag, member);
 }
 
 export const hypeByReactionsFlag = { key: "hype-by-reactions", safeDefault: false, values: [false, true] } as const satisfies Flag<boolean>;
 
 export function hypeByReactionsShownTo(ctx: QueryContext, member: MemberId): Promise<boolean> {
-  throw notPorted("album.flag.hypeByReactionsShownTo");
+  return memberDecisionWithoutWriting(ctx, hypeByReactionsFlag, member);
 }
 
 export async function hypeByReactionsCollectFor(ctx: MutationContext, member: MemberId): Promise<boolean> {
-  throw notPorted("album.flag.hypeByReactionsCollectFor");
+  const collects = await memberDecision(ctx, hypeByReactionsFlag, member);
+  await exposed(ctx, hypeByReactionsFlag, member, collects);
+  return collects;
 }
