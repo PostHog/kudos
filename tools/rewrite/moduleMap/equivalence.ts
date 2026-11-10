@@ -53,8 +53,9 @@ export function convexAccepts(validator: GenericValidator, value: unknown): bool
     case "object":
       return (
         isPlainObject(value) &&
-        Object.keys(value).every((key) => key in node.fields!) &&
-        Object.entries(node.fields!).every(([key, field]) => convexAccepts(field, value[key]))
+        // The object's own fields: an inherited `toString` is neither declared nor given.
+        Object.keys(value).every((key) => Object.hasOwn(node.fields!, key)) &&
+        Object.entries(node.fields!).every(([key, field]) => convexAccepts(field, Object.hasOwn(value, key) ? value[key] : undefined))
       );
     case "record":
       return isPlainObject(value) && Object.entries(value).every(([key, field]) => recordKey(key) && convexAccepts(node.key!, key) && convexAccepts(required(node.value as Node), field));
@@ -129,7 +130,10 @@ export function cases(validator: GenericValidator): unknown[] {
     case "object": {
       const fields = Object.entries(node.fields!);
       const base = Object.fromEntries(fields.map(([key, field]) => [key, samples(required(field))[0]]));
-      found.push({ ...base, unknownField: 0 });
+      // A field the shape doesn't declare, even when it declares one named `unknownField`.
+      let unknown = "unknownField";
+      while (Object.hasOwn(node.fields!, unknown)) unknown += "_";
+      found.push({ ...base, [unknown]: 0 });
       for (const [key, field] of fields) found.push(withField(base, key, undefined), ...broken(required(field)).map((value) => withField(base, key, value)));
       break;
     }

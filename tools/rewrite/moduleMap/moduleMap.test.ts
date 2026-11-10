@@ -13,7 +13,7 @@ import { zv } from "../../../service/src/values.ts";
 import { closureCheck, servicePackages } from "./closure.ts";
 import { convertModule } from "./codemod.ts";
 import { copyModule, importOnlyDiff } from "./copy.ts";
-import { disagreements } from "./equivalence.ts";
+import { convexAccepts, disagreements } from "./equivalence.ts";
 import { reachedByName, skeletonModule } from "./skeleton.ts";
 
 const repo = fileURLToPath(new URL("../../..", import.meta.url));
@@ -172,7 +172,8 @@ export type Note = z.infer<typeof noteValidator>;
       'export const loudnessValidator = z.union([...toneValidator.options, z.literal("quiet"), z.literal(2), z.literal(3n), z.literal(false)]);',
       "export const tones: readonly string[] = toneValidator.options.map(({ value }) => value);",
       "export const fieldNames = ({ shape: fields }: typeof messageRefValidator) => Object.keys(fields);",
-      "export const nothingValidator = z.never();",
+      "export const nothingValidator = z.union([]);",
+      "export const widerValidator = z.union([...nothingValidator.options, z.string()]);",
       'const refArgs = { ...messageRefValidator.shape, member: zv.id("members") };',
       "export type RefArgs = z.infer<z.ZodObject<typeof refArgs>>;",
       'export const loudRefValidator = refValidator.extend({ tone: toneValidator }).omit({ "ts": true, "revision": true });',
@@ -203,6 +204,7 @@ export type Note = z.infer<typeof noteValidator>;
         "convex/ctx/unconvertible.ts:19: reads isOptional of a Convex validator, which zod has no counterpart for",
         "convex/ctx/unconvertible.ts:20: reads a member of an optional Convex validator, which zod wraps in z.optional",
         "convex/ctx/unconvertible.ts:21: passes type arguments to v.object, which zod's builders take differently",
+        "convex/ctx/unconvertible.ts:22: uses v other than as a call or a type",
       ],
     });
     expect(convert("convex/ctx/handler.ts")).toEqual({ refusals: ["convex/ctx/handler.ts: imports ../_generated/server, which the service has no counterpart for"] });
@@ -225,7 +227,7 @@ export type Note = z.infer<typeof noteValidator>;
           expect(disagreements(validator as never, zodModules[name][exported]), exported).toEqual([]);
         }
       }
-      expect(compared).toEqual(["messageRefValidator", "toneValidator", "cheerEventValidator", "loudnessValidator", "nothingValidator", "refValidator", "loudRefValidator", "channelOnlyValidator"]);
+      expect(compared).toEqual(["messageRefValidator", "toneValidator", "cheerEventValidator", "loudnessValidator", "nothingValidator", "widerValidator", "refValidator", "loudRefValidator", "channelOnlyValidator"]);
     });
   });
 });
@@ -236,6 +238,11 @@ describe("the equivalence check", () => {
       expect.arrayContaining(['{"a":"NaN"}: Convex accepts, zod rejects', '{"a":0,"unknownField":0}: Convex rejects, zod accepts']),
     );
     expect(disagreements(v.id("members"), zv.id("members"))).toEqual([]);
+    // The unknown field is one the shape doesn't declare, and fields are the object's own, not inherited ones.
+    expect(disagreements(v.object({ unknownField: v.string() }), z.object({ unknownField: z.string() }))).toEqual(['{"unknownField":"","unknownField_":0}: Convex rejects, zod accepts']);
+    expect(convexAccepts(v.object({}), { toString: 123 })).toBe(false);
+    // zod reads an absent field through the prototype, so a field named `toString` is where it parts from Convex.
+    expect(disagreements(v.object({ toString: v.optional(v.string()) }), z.strictObject({ toString: z.string().optional() }))).toContain("{}: Convex accepts, zod rejects");
     expect(disagreements(v.int64(), z.bigint())).toEqual(['"9223372036854775808n": Convex rejects, zod accepts']);
     expect(disagreements(v.string(), z.string().optional())).toEqual(["undefined: Convex rejects, zod accepts"]);
     expect(disagreements(v.array(v.string()), z.array(z.string().optional()))).toEqual(["[undefined]: Convex rejects, zod accepts"]);

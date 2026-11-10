@@ -19,3 +19,4 @@ export const throughIntersection = <T extends typeof anything & { tag: string }>
 export const maybeValidator = (validator?: typeof anything) => validator?.isOptional;
 export const optionalFields = v.optional(v.object({ a: v.string() })).fields;
 export const typed = v.object<PropertyValidators>({ a: v.string() });
+export { v };
