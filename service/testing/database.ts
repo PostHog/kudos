@@ -1,4 +1,5 @@
-// One schema per Vitest worker on the run's Postgres: created and migrated once, its tables emptied before every test.
+// One schema per Vitest worker on the run's Postgres: created and migrated once, its tables and creation clock emptied
+// before every test.
 import pg from "pg";
 import { afterAll, beforeEach, inject } from "vitest";
 import { runMigrations } from "../src/db/migrate.ts";
@@ -51,4 +52,6 @@ async function emptyTables(pool: pg.Pool, schema: string): Promise<void> {
   );
   if (rows.length === 0) return;
   await pool.query(`truncate ${rows.map(({ name }) => `"${schema}"."${name}"`).join(", ")}`);
+  // The creation clock too, back to unset: each test's clock starts where it likes, as on a database no one wrote yet.
+  await pool.query(`select setval('"${schema}"."creationClock"', 0, false)`);
 }

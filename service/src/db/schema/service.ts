@@ -1,5 +1,5 @@
 // The service's own tables, beside the ones generated from convex/schema.ts.
-import { doublePrecision, index, jsonb, pgTable, primaryKey, text } from "drizzle-orm/pg-core";
+import { doublePrecision, index, jsonb, pgSequence, pgTable, primaryKey, text } from "drizzle-orm/pg-core";
 import type { FlagDefinitions } from "../../analytics/evaluator/types.ts";
 import { bytes, creationTime, f64, id, str, value } from "../columns.ts";
 
@@ -81,3 +81,10 @@ export const flagRefreshes = pgTable("flagRefreshes", {
   key: text().primaryKey(),
   refreshedAt: doublePrecision().notNull(),
 });
+
+/**
+ * The creation order every runner shares: the highest `_creationTime` a mutation has stamped, as the order-keeping
+ * int64 key of its float64 (operations.ts). A sequence, so moving it forward neither waits for nor conflicts with any
+ * transaction; `"advanceCreationClock"` (migration 0005) moves it, and only forward. Unset until the first stamp.
+ */
+export const creationClock = pgSequence("creationClock", { minValue: "-9223372036854775808", startWith: "0" });

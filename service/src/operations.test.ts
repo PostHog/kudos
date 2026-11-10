@@ -6,6 +6,7 @@ import pg from "pg";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, inject, test, vi } from "vitest";
 import { useTestDatabase, withSearchPath } from "../testing/database.ts";
 import { createClock } from "./clock.ts";
+import { runMigrations } from "./db/migrate.ts";
 import { createPool } from "./db/pool.ts";
 import { errorFields, type Log, type LogFields } from "./log.ts";
 import { createOperations, fence, type Database, type Operations } from "./operations.ts";
@@ -32,6 +33,7 @@ beforeAll(async () => {
   );
   await admin.end();
   pool = createPool(withSearchPath(inject("databaseUrl"), schema), { max: 6 });
+  await runMigrations(pool); // the runner keeps the creation order in the migrated schema
 });
 afterAll(async () => {
   await pool.end();
@@ -41,11 +43,12 @@ afterAll(async () => {
   await admin.end();
 });
 beforeEach(async () => {
-  await pool.query("truncate counters");
+  await pool.query(`truncate counters; select setval('"creationClock"', 0, false)`);
 });
 
-function setUp(options: { maxAttempts?: number; pool?: Pick<pg.Pool, "connect"> } = {}) {
-  let real = 1_700_000_000_000;
+/** One runner: the operations of one process, on a clock of its own. `real` is its clock's reading at the start. */
+function setUp({ real: start = 1_700_000_000_000, ...options }: { maxAttempts?: number; pool?: Pick<pg.Pool, "connect">; real?: number } = {}) {
+  let real = start;
   const clock = createClock({ real: () => real });
   const lines: Array<{ level: string; message: string } & LogFields> = [];
   const log: Log = {
@@ -155,6 +158,110 @@ describe("mutations", () => {
     for (let i = 1; i < times.length; i++) expect(times[i], `row ${i} after row ${i - 1}`).toBeGreaterThan(times[i - 1]!);
     expect(times.every((time) => time - stamps.now < 1), "every stamp stays within the operation's millisecond").toBe(true);
     for (const row of [...stamps.rows, later]) expect(row._id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  });
+});
+
+// Two runners on one database: the two copies of a deploy's overlap, or one whose clock is behind. Convex gave every
+// table one creation order every reader saw; "the latest" by `_creationTime` must stay the row written last.
+describe("_creationTime across runners", () => {
+  const minute = 60_000;
+  /** The row `at` stamps last: the latest by `_creationTime`, as `.order("desc").first()` read it. */
+  const latest = async () => (await pool.query<{ id: string }>("select id from counters order by at desc, id desc limit 1")).rows[0]?.id;
+  const insert = (operations: Operations, id: string) =>
+    operations.mutation(`insert ${id}`, async ({ tx, newRow }) => {
+      const { _creationTime } = newRow();
+      await tx.insert(counters).values({ id, n: 0, at: _creationTime });
+      return _creationTime;
+    });
+
+  test("a row written after another committed sorts after it, though its runner's clock is behind", async () => {
+    const ahead = setUp({ real: 1_700_000_000_000 + minute });
+    const behind = setUp({ real: 1_700_000_000_000 });
+
+    const first = await insert(ahead.operations, "first");
+    const second = await insert(behind.operations, "second");
+
+    expect(second, "stamped after the row it could see").toBeGreaterThan(first);
+    expect(await latest(), "the latest is the row written last").toBe("second");
+    expect(second - first, "pushed only as far as the earlier row, not to a clock of its own").toBeLessThan(1);
+  });
+
+  test.each([
+    ["on both sides of zero", 1, -1],
+    ["before 1970", -1_000, -61_000],
+    ["at zero and below", 0, -0.5],
+  ])("the order holds for clocks %s", async (_, aheadAt, behindAt) => {
+    const first = await insert(setUp({ real: aheadAt }).operations, "first");
+    const second = await insert(setUp({ real: behindAt }).operations, "second");
+
+    expect(first, "the first row keeps its runner's now").toBe(aheadAt);
+    expect(second).toBeGreaterThan(first);
+    expect(second - first, "just after it").toBeLessThan(1);
+    expect(await latest()).toBe("second");
+  });
+
+  test("advances that race keep the highest stamp, and give their lock back", async () => {
+    const keys = Array.from({ length: 40 }, (_, i) => BigInt((i * 7919) % 40) * 1_000_000_007n - 20_000_000_000n);
+
+    await Promise.all(keys.map((key) => pool.query(`select "advanceCreationClock"($1::bigint)`, [key.toString()])));
+
+    const { rows } = await pool.query<{ last_value: string }>(`select last_value from "creationClock"`);
+    expect(BigInt(rows[0]!.last_value)).toBe(keys.reduce((a, b) => (a > b ? a : b)));
+    const { rows: held } = await pool.query(
+      `select pid from pg_locks where locktype = 'advisory' and classid = 'pg_class'::regclass and objid = '"creationClock"'::regclass and objsubid = 2`,
+    );
+    expect(held, "no session keeps the clock's lock").toEqual([]);
+  });
+
+  test("an attempt that re-runs after losing to another runner stamps after the row it lost to", async () => {
+    const ahead = setUp({ real: 1_700_000_000_000 + minute });
+    const behind = setUp({ real: 1_700_000_000_000 });
+    await pool.query("insert into counters (id, n) values ('wallet', 0)");
+    const stamps = new Map<string, number[]>();
+    // Both first attempts read before either writes; the runner behind writes only once the one ahead has committed,
+    // so SERIALIZABLE refuses it, and its second attempt sees the other's row.
+    let reads = 0;
+    let bothRead: () => void;
+    const barrier = new Promise<void>((resolve) => (bothRead = resolve));
+    let aheadCommitted: () => void;
+    const committed = new Promise<void>((resolve) => (aheadCommitted = resolve));
+    const spend = (operations: Operations, name: string) =>
+      operations.mutation(name, async ({ tx, newRow }) => {
+        const [row] = await tx.select().from(counters).where(eq(counters.id, "wallet"));
+        if (++reads === 2) bothRead();
+        if (reads <= 2) await barrier;
+        if (name === "behind" && reads <= 2) await committed;
+        const { _creationTime } = newRow();
+        stamps.set(name, [...(stamps.get(name) ?? []), _creationTime]);
+        await tx.update(counters).set({ n: row!.n + 1, at: _creationTime }).where(eq(counters.id, "wallet"));
+      });
+
+    await Promise.all([spend(ahead.operations, "ahead").then(() => aheadCommitted()), spend(behind.operations, "behind")]);
+
+    const [once] = stamps.get("ahead")!;
+    const [, retried] = stamps.get("behind")!;
+    expect([stamps.get("ahead")!.length, stamps.get("behind")!.length], "the one behind ran twice").toEqual([1, 2]);
+    expect(retried, "its second attempt stamps after the row it lost to").toBeGreaterThan(once!);
+    const { rows } = await pool.query("select n, at from counters where id = 'wallet'");
+    expect(rows, "both spends counted, the last write's stamp kept").toEqual([{ n: 2, at: retried }]);
+  });
+
+  test("runners writing rows of their own never wait on, nor conflict through, the creation order", async () => {
+    const runners = [setUp({ real: 1_700_000_000_000 + minute }), setUp({ real: 1_700_000_000_000 })];
+    const attempts = new Map<string, number>();
+    const ids = Array.from({ length: 12 }, (_, i) => `row-${i}`);
+
+    await Promise.all(
+      ids.map((id, i) =>
+        runners[i % 2]!.operations.mutation(`insert ${id}`, async ({ tx, newRow }) => {
+          attempts.set(id, (attempts.get(id) ?? 0) + 1);
+          await tx.insert(counters).values({ id, n: 0, at: newRow()._creationTime });
+        }),
+      ),
+    );
+
+    expect([...attempts.values()], "every insert ran once").toEqual(ids.map(() => 1));
+    expect(Number((await pool.query("select count(*) from counters")).rows[0].count)).toBe(ids.length);
   });
 });
 

@@ -38,7 +38,10 @@ export interface QueryContext {
 }
 
 export interface MutationContext extends QueryContext {
-  /** Stamps a new row from the operation's instant; each call strictly after the last in this process. */
+  /**
+   * Stamps a new row from the operation's instant; each call strictly after the last in this process, and after every
+   * row any runner committed before this attempt began, so the row written last sorts last by `_creationTime`.
+   */
   newRow(): NewRow;
   /** Schedules and cancels jobs in this transaction: they commit or roll back with it. */
   jobs: Scheduler;
@@ -68,6 +71,38 @@ export interface OperationsOptions {
   retryDelayMs?: (attempt: number) => number;
   /** The bus's subscribers, which `publish` schedules. */
   subscribers?: Subscribers;
+}
+
+/** One attempt's stamps: the creation clock when it began, and the highest stamp it took, if any. */
+interface Stamps {
+  floor: number;
+  highest?: number;
+}
+
+// The creation clock (db/schema/service.ts) holds a float64 as an int64 that orders the same way: a non-negative one's
+// bits as they are, a negative one's with all but the sign bit flipped. Exact, so no stamp rounds below the one it keys.
+const readCreationClock = `select case when is_called then last_value end as clock from "creationClock"`;
+
+function creationClockFloor(result: pg.QueryResult): number {
+  const key = (result.rows[0] as { clock: string | null } | undefined)?.clock;
+  if (key === null || key === undefined) return Number.NEGATIVE_INFINITY;
+  const bits = BigInt(key);
+  const view = new DataView(new ArrayBuffer(8));
+  view.setBigInt64(0, bits < 0n ? bits ^ 0x7fff_ffff_ffff_ffffn : bits);
+  return view.getFloat64(0);
+}
+
+/** The statement that moves the creation clock to `stamp`; its key is an integer, so it is safe to write inline. */
+function advanceCreationClock(stamp: number): string {
+  const view = new DataView(new ArrayBuffer(8));
+  view.setFloat64(0, stamp);
+  const bits = view.getBigInt64(0);
+  return `select "advanceCreationClock"('${bits < 0n ? bits ^ 0x7fff_ffff_ffff_ffffn : bits}'::bigint)`;
+}
+
+// pg answers a text of several statements with one result each.
+function lastOf(answer: pg.QueryResult | pg.QueryResult[]): pg.QueryResult {
+  return Array.isArray(answer) ? answer.at(-1)! : answer;
 }
 
 // Postgres's serialization failure and deadlock: the transaction did nothing, and running it again may succeed.
@@ -167,9 +202,12 @@ syncBuiltinESMExports();
 
 export function createOperations({ pool, clock, log, maxAttempts = 10, retryDelayMs = jitteredBackoff, subscribers = new Map() }: OperationsOptions): Operations {
   let lastCreationTime = Number.NEGATIVE_INFINITY;
-  const newRow = (now: number): NewRow => {
-    // Rows inserted in one operation keep their order; the step is the smallest that still changes a float64 near now.
-    lastCreationTime = Math.max(now, nextAfter(lastCreationTime));
+  // A stamp comes after every row this process stamped and every row any runner committed before the attempt began
+  // (its `floor`), so a row written later sorts later whichever runner wrote it and however its clock runs. Otherwise
+  // it is the operation's now, as Convex's was; the step is the smallest that still changes a float64 near now.
+  const newRow = (now: number, stamps: Stamps): NewRow => {
+    lastCreationTime = Math.max(now, nextAfter(stamps.floor), nextAfter(lastCreationTime));
+    stamps.highest = lastCreationTime;
     return { _id: randomUUID(), _creationTime: lastCreationTime };
   };
 
@@ -180,8 +218,11 @@ export function createOperations({ pool, clock, log, maxAttempts = 10, retryDela
 
   // One transaction on a connection of its own, which always goes back to the pool: dropped when the connection may
   // be broken, kept when the transaction ended cleanly either way.
-  async function inTransaction<T>(name: string, begin: string, handler: (tx: Transaction) => Promise<T>): Promise<T> {
+  // A mutation reads the creation clock in the statement that takes its snapshot, so every runner's commit it sees is
+  // under its floor; before it commits, it moves the clock to its highest stamp. Both ride its BEGIN and COMMIT.
+  async function inTransaction<T>(name: string, begin: string, handler: (tx: Transaction, stamps: Stamps) => Promise<T>, { stamping = false } = {}): Promise<T> {
     refuseNesting(name);
+    const stamps: Stamps = { floor: Number.NEGATIVE_INFINITY };
     const client = await pool.connect();
     let broken: unknown;
     // A checked-out client has no listener of the pool's; without one, a dropped connection would crash the process.
@@ -254,13 +295,14 @@ export function createOperations({ pool, clock, log, maxAttempts = 10, retryDela
       throw failure.error;
     }
     try {
-      await client.query(begin).catch((error: unknown) => {
+      const began = await client.query(stamping ? `${begin}; ${readCreationClock}` : begin).catch((error: unknown) => {
         broken ??= error;
         throw error;
       });
+      if (stamping) stamps.floor = creationClockFloor(lastOf(began));
       let result: T;
       try {
-        result = await running.run(scope, () => handler(drizzle({ client: tracked as unknown as pg.PoolClient })));
+        result = await running.run(scope, () => handler(drizzle({ client: tracked as unknown as pg.PoolClient }), stamps));
         const refused = scope.network ?? scope.networkBehind;
         if (refused) throw refused;
       } catch (error) {
@@ -269,11 +311,15 @@ export function createOperations({ pool, clock, log, maxAttempts = 10, retryDela
         throw scope.network ?? scope.networkBehind ?? error;
       }
       scope.open = false;
-      const commit = await client.query("COMMIT").catch((error: unknown) => {
-        // The connection may be gone even when Postgres answered: a session ended at COMMIT answers 57P01 first.
+      // Only a transaction still able to commit moves the clock; an aborted one answers COMMIT with ROLLBACK below.
+      const advance = stamps.highest !== undefined && aborted === undefined ? `${advanceCreationClock(stamps.highest)}; ` : "";
+      const committed = await client.query(`${advance}COMMIT`).catch((error: unknown) => {
+        // The connection may be gone even when Postgres answered: a session ended at COMMIT answers 57P01 first. A
+        // failed advance drops it too, and with it any lock the advance held.
         broken ??= error;
         throw error;
       });
+      const commit = lastOf(committed);
       // On an aborted transaction Postgres answers COMMIT with ROLLBACK: the handler went on after a failed statement.
       if (commit.command !== "COMMIT") throw wentOnAfter(aborted);
       return result;
@@ -289,11 +335,16 @@ export function createOperations({ pool, clock, log, maxAttempts = 10, retryDela
       const now = clock.now();
       for (let attempt = 1; ; attempt++) {
         try {
-          return await inTransaction(name, "BEGIN ISOLATION LEVEL SERIALIZABLE", (tx) => {
-            const stamp = () => newRow(now);
-            const jobs = createScheduler(tx, now, stamp);
-            return handler({ tx, now, newRow: stamp, jobs, publish: (event) => publish(jobs, subscribers, event) });
-          });
+          return await inTransaction(
+            name,
+            "BEGIN ISOLATION LEVEL SERIALIZABLE",
+            (tx, stamps) => {
+              const stamp = () => newRow(now, stamps);
+              const jobs = createScheduler(tx, now, stamp);
+              return handler({ tx, now, newRow: stamp, jobs, publish: (event) => publish(jobs, subscribers, event) });
+            },
+            { stamping: true },
+          );
         } catch (error) {
           const fields = errorFields(error);
           if (!fields.code || !retryable.has(fields.code)) return failed(name, "mutation", error);
