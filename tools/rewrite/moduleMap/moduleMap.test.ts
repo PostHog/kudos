@@ -247,7 +247,7 @@ describe("the equivalence check", () => {
 });
 
 describe("the skeleton generator", () => {
-  const modules = ["convex/skeleton/awards.ts", "convex/skeleton/caller.ts", "convex/skeleton/tangled.ts", "convex/skeleton/edges.ts", "convex/skeleton/refused.ts", "convex/skeleton/inline.ts"];
+  const modules = ["convex/skeleton/awards.ts", "convex/skeleton/caller.ts", "convex/skeleton/tangled.ts", "convex/skeleton/edges.ts", "convex/skeleton/refused.ts", "convex/skeleton/inline.ts", "convex/skeleton/shadowed.ts"];
   const program = ts.createProgram(modules.map(onDisk), compilerOptions);
   const sourceFiles = modules.map((module) => program.getSourceFile(onDisk(module))!);
   const reached = reachedByName(sourceFiles);
@@ -260,6 +260,8 @@ describe("the skeleton generator", () => {
       "skeleton.awards.notifyAll": ["job"],
       "skeleton.awards.sweepAwards": ["job"],
       "skeleton.edges.byValidator": ["job"],
+      "skeleton.edges.byShorthand": ["job"],
+      "skeleton.edges.viaAlias": ["job"],
       "skeleton.awards.memberOf": ["run"],
       "skeleton.awards.recordAward": ["run"],
     });
@@ -365,6 +367,10 @@ export async function stamped(ctx: QueryContext, member: Id<"members">): Promise
   throw notPorted("skeleton.edges.stamped");
 }
 
+export async function projected(ctx: QueryContext, member: Id<"members">): Promise<{ _creationTime: number; _id: Id<"members"> }> {
+  throw notPorted("skeleton.edges.projected");
+}
+
 export type Drafts = Page<Omit<Doc<"members">, "_id" | "_creationTime">>;
 
 const names = new Map<string, number>();
@@ -373,13 +379,32 @@ names.set("first", 1);
 const half = (n: number) => n / 2;
 export { half, names };
 
+export const cache = new Map<string, number>();
+const seeded = cache.set("first", 1);
+
+const query = (fn: () => number) => fn();
+export const answer = query(() => 42);
+
 export const byValidatorArgs = z.strictObject({ note: z.string() });
 export async function byValidator(ctx: MutationContext, args: z.infer<typeof byValidatorArgs>): Promise<null> {
   throw notPorted("skeleton.edges.byValidator");
 }
 export const byValidatorJob = mutationJob("skeleton.edges.byValidator", byValidatorArgs, byValidator);
+
+const args = z.strictObject({ note: z.string() });
+
+export const byShorthandArgs = args;
+export async function byShorthand(ctx: MutationContext, args: z.infer<typeof byShorthandArgs>): Promise<null> {
+  throw notPorted("skeleton.edges.byShorthand");
+}
+export const byShorthandJob = mutationJob("skeleton.edges.byShorthand", byShorthandArgs, byShorthand);
+
+export const viaAliasArgs = z.strictObject({});
+export async function viaAlias(ctx: QueryContext, args: z.infer<typeof viaAliasArgs>): Promise<null> {
+  throw notPorted("skeleton.edges.viaAlias");
+}
 `);
-    expect(edges.omitted).toEqual([]);
+    expect(edges.omitted).toEqual(["internalQuery: Convex's machinery, exported by a list", "readerSeed: state over a context or Convex's machinery that only stubbed bodies read"]);
   });
 
   test("refuses what it can't stub without changing what other modules see, and any way of reaching Convex in what it writes", () => {
@@ -398,6 +423,7 @@ export const byValidatorJob = mutationJob("skeleton.edges.byValidator", byValida
         "convex/skeleton/inline.ts: its skeleton line 7: import(), which no skeleton may",
       ],
     });
+    expect(skeleton(6)).toEqual({ refusals: ["convex/skeleton/shadowed.ts:4: declares QueryContext, a name the skeleton writes for the service's own"] });
   });
 
   describe("its output in the service", () => {
@@ -431,6 +457,11 @@ export const byValidatorJob = mutationJob("skeleton.edges.byValidator", byValida
       await expect(edgesModule.firstName({})).rejects.toThrow(new NotPortedError("skeleton.edges.firstName"));
       expect(edgesModule.byValidatorJob.args.safeParse({ note: "x" }).success).toBe(true);
       expect(edgesModule.byValidatorJob.args.safeParse({ note: "x", extra: 1 }).success).toBe(false);
+      expect(edgesModule.byShorthandJob.args.safeParse({ note: "x" }).success).toBe(true); // `{ args }` keeps its fields
+      expect(edgesModule.cache.size).toBe(1); // an unread initializer still ran
+      expect(edgesModule.answer).toBe(42); // a local function named like a builder is no builder
+      await expect(edgesModule.viaAlias({}, {})).rejects.toThrow(new NotPortedError("skeleton.edges.viaAlias")); // a builder through a local alias is one
+      expect(edgesModule.viaAliasJob).toBeUndefined();
     });
   });
 });

@@ -127,6 +127,23 @@ export function skeletonModule(program: ts.Program, sourceFile: ts.SourceFile, c
     const symbol = ts.isShorthandPropertyAssignment(node.parent) ? checker.getShorthandAssignmentValueSymbol(node.parent) : checker.getSymbolAtLocation(node);
     return symbol ? machinerySymbols.get(symbol) : undefined;
   };
+  /**
+   * The builder a registration calls, by the name Convex exports it under: through a local alias (`const q =
+   * internalQuery`) too, and the app's own wrappers (`memberQuery`) by the name another module exports them under.
+   */
+  const builderOf = (node: ts.Identifier): string | undefined => {
+    let symbol = checker.getSymbolAtLocation(node);
+    for (let hops = 0; symbol && hops < 8; hops++) {
+      const convex = machinerySymbols.get(symbol);
+      if (convex) return convex;
+      const declaration = symbol.declarations?.[0];
+      if (declaration && ts.isImportSpecifier(declaration)) return (declaration.propertyName ?? declaration.name).text;
+      if (!declaration || !ts.isVariableDeclaration(declaration) || !declaration.initializer || !ts.isIdentifier(declaration.initializer)) return undefined;
+      if (!(ts.getCombinedNodeFlags(declaration) & ts.NodeFlags.Const)) return undefined;
+      symbol = checker.getSymbolAtLocation(declaration.initializer);
+    }
+    return undefined;
+  };
   /** A Convex type a signature names that the service has no counterpart for. */
   const foreignIn = (nodes: readonly ts.Node[]) => {
     let found: string | undefined;
@@ -176,7 +193,7 @@ export function skeletonModule(program: ts.Program, sourceFile: ts.SourceFile, c
     const { statement } = declaration;
     if (!declaration.isType && editRefusals.some(({ start }) => start >= statement.getStart(sourceFile) && start < statement.getEnd())) declaration.convex = true;
     // A registration is over a context, whether its builder is Convex's or a wrapper of this app's (`memberQuery`).
-    if (registrationOf(statement, machineryOf)) declaration.convex = true;
+    if (registrationOf(statement, builderOf)) declaration.convex = true;
   }
   // A value that refers to a value over a context needs one too.
   for (let changed = true; changed; ) {
@@ -195,9 +212,14 @@ export function skeletonModule(program: ts.Program, sourceFile: ts.SourceFile, c
     const inside = edits.filter((edit) => edit.start >= start && edit.end <= end).map((edit) => ({ ...edit, start: edit.start - start, end: edit.end - start }));
     return applyEdits(text.slice(start, end), inside);
   };
+  /** A value of this module or one it imports, as opposed to a global such as `Object` or `Set`. */
+  const moduleValue = (node: ts.Identifier) => {
+    const declaration = checker.getSymbolAtLocation(node)?.declarations?.[0];
+    return topLevel(node) || (declaration !== undefined && (ts.isImportSpecifier(declaration) || ts.isImportClause(declaration) || ts.isNamespaceImport(declaration)));
+  };
   const dataModelImport = (statement: ts.ImportDeclaration) => /(^|\/)_generated\/dataModel(\.[jt]s)?$/.test((statement.moduleSpecifier as ts.StringLiteral).text);
   const taken = new Set([...byName.keys(), ...imports.filter((statement) => !dataModelImport(statement)).flatMap((statement) => importedNames(statement).map(({ local }) => local))]);
-  const printed = typePrinter(checker, servicePath, new Set(taken));
+  const printed = typePrinter(checker, servicePath, new Set(taken), documentOf(program, checker));
   const fresh = (name: string) => {
     let candidate = name;
     for (let n = 2; taken.has(candidate); n++) candidate = `${name}${n}`;
@@ -236,7 +258,18 @@ export function skeletonModule(program: ts.Program, sourceFile: ts.SourceFile, c
     }
     if (ts.isExportDeclaration(statement) && statement.exportClause && ts.isNamedExports(statement.exportClause)) {
       // `export { f }`: what it names lands with it, unless it is over a context, which only its own export can stub.
-      const locals = statement.exportClause.elements.map((element) => (element.propertyName ?? element.name).text);
+      const elements = statement.exportClause.elements;
+      const isMachinery = (element: ts.ExportSpecifier) => {
+        const target = checker.getExportSpecifierLocalTargetSymbol(element);
+        return target !== undefined && machinerySymbols.has(target);
+      };
+      const exportedMachinery = elements.filter(isMachinery).map((element) => element.name.text);
+      if (exportedMachinery.length === elements.length) {
+        omitted.push(`${exportedMachinery.join(", ")}: Convex's machinery, exported by a list`);
+        continue;
+      }
+      if (exportedMachinery.length > 0) refusals.push(`${line(statement)}: exports Convex's ${exportedMachinery.join(", ")} in a list beside the module's own`);
+      const locals = elements.map((element) => (element.propertyName ?? element.name).text);
       const overContext = locals.filter((local) => byName.get(local)?.convex);
       if (overContext.length > 0) refusals.push(`${line(statement)}: exports ${overContext.join(", ")} by a list; export the declaration itself`);
       need(locals.filter((local) => !overContext.includes(local)));
@@ -250,6 +283,13 @@ export function skeletonModule(program: ts.Program, sourceFile: ts.SourceFile, c
         need(declaration.uses);
         needed.add(declaration);
       }
+      continue;
+    }
+    if (!declaration.exported && ts.isVariableStatement(statement) && hasEffects(statement, moduleValue)) {
+      // `const seeded = cache.set(…)` runs when its module loads, whether or not anything reads it. State over a
+      // context (`new WeakMap<QueryCtx, …>()`) only stubbed bodies read, so it is left out and listed.
+      if (declaration.convex || declaration.machinery) omitted.push(`${declaration.names.join(", ")}: state over a context or Convex's machinery that only stubbed bodies read`);
+      else need(declaration.names);
       continue;
     }
     if (!declaration.exported && !ts.isExportAssignment(statement)) continue;
@@ -278,7 +318,7 @@ export function skeletonModule(program: ts.Program, sourceFile: ts.SourceFile, c
       }
       continue;
     }
-    const registration = registrationOf(statement, machineryOf);
+    const registration = registrationOf(statement, builderOf);
     const name = declaration.names[0]!;
     const path = dottedPath(convexPath, name);
     if (!registration) {
@@ -322,6 +362,13 @@ export function skeletonModule(program: ts.Program, sourceFile: ts.SourceFile, c
   // A name the skeleton writes for the service must mean the service's: a local of the same name would take it over.
   const written = new Set([...typeEdits.filter(({ start }) => landedAt(start)).map(({ text: written }) => /^[A-Za-z]+/.exec(written)?.[0] ?? ""), ...generated]);
   for (const name of written) if (taken.has(name)) refusals.push(`${convexPath}: declares or imports ${name}, a name the skeleton writes for the service's own`);
+  // A parameter, type parameter or local in what lands would take it over as well.
+  walk(sourceFile, (node) => {
+    const name = (node as ts.NamedDeclaration).name;
+    if (!ts.isIdentifier(node) && name && ts.isIdentifier(name) && isDeclarationNode(node) && written.has(name.text) && !taken.has(name.text) && landedAt(name.getStart(sourceFile))) {
+      refusals.push(`${line(name)}: declares ${name.text}, a name the skeleton writes for the service's own`);
+    }
+  });
   if (refusals.length > 0) return { refusals };
 
   const header = `// The module map's skeleton of ${convexPath}, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw\n// notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.\n`;
@@ -431,15 +478,20 @@ interface Registration {
  * `export const name = internalMutation({ args, handler })`, or a builder given the handler alone; a builder imported
  * from Convex is known by the name Convex exports it under, the app's own (`memberQuery`) by its name.
  */
-function registrationOf(statement: ts.Statement, machineryOf: (node: ts.Identifier) => string | undefined): Registration | undefined {
+function registrationOf(statement: ts.Statement, builderOf: (node: ts.Identifier) => string | undefined): Registration | undefined {
   if (!ts.isVariableStatement(statement)) return undefined;
   const initializer = statement.declarationList.declarations[0]?.initializer;
   if (!initializer || !ts.isCallExpression(initializer) || !ts.isIdentifier(initializer.expression)) return undefined;
-  const kind = builders[machineryOf(initializer.expression) ?? initializer.expression.text];
+  const builder = builderOf(initializer.expression);
+  const kind = builder ? builders[builder] : undefined;
   const definition = initializer.arguments[0];
   if (!kind || !definition) return undefined;
   if (!ts.isObjectLiteralExpression(definition)) return { kind, handler: definition };
-  const property = (name: string) => definition.properties.find((p): p is ts.PropertyAssignment => ts.isPropertyAssignment(p) && p.name.getText() === name)?.initializer;
+  // `{ args }` names its value as `args: args` would.
+  const property = (name: string): ts.Expression | undefined => {
+    const found = definition.properties.find((p) => (ts.isPropertyAssignment(p) || ts.isShorthandPropertyAssignment(p)) && p.name.getText() === name);
+    return found && (ts.isPropertyAssignment(found) ? found.initializer : (found as ts.ShorthandPropertyAssignment).name);
+  };
   const handler = property("handler") ?? definition.properties.find((p) => ts.isMethodDeclaration(p) && p.name.getText() === "handler");
   if (!handler) return undefined;
   return { kind, args: property("args"), handler: handler as ts.Expression };
@@ -490,7 +542,7 @@ function serverTypeEdits(sourceFile: ts.SourceFile, machineryOf: (node: ts.Ident
 }
 
 /** Prints an inferred type in the service's names: `Doc` and `Id` from the Drizzle model, the module's own types imported. */
-function typePrinter(checker: ts.TypeChecker, servicePath: string, localNames: ReadonlySet<string>) {
+function typePrinter(checker: ts.TypeChecker, servicePath: string, localNames: ReadonlySet<string>, documentOf: (table: string) => ts.Type | undefined) {
   const imports = new Map<string, Set<string>>();
   const locals = new Set<string>();
   const want = (module: string, name: string) => {
@@ -561,13 +613,15 @@ function typePrinter(checker: ts.TypeChecker, servicePath: string, localNames: R
     }
     if (flags & ts.TypeFlags.Object) {
       const id = type.getProperty("_id");
-      // A document of a table: its system fields are Convex's and its other fields the schema's, none the app's own.
-      const declaredIn = (property: ts.Symbol) => property.declarations?.map((declaration) => declaration.getSourceFile().fileName) ?? [];
-      const document = type.getProperties().every((property) => declaredIn(property).every((file) => file.includes("/node_modules/convex/") || file.endsWith(`/${convexRoot}/schema.ts`)));
-      if (id && type.getProperty("_creationTime") && document) {
-        const idType = checker.getTypeOfSymbol(id);
-        const table = idType.aliasTypeArguments?.[0];
-        if (table?.isStringLiteral()) return `${want("db/schema/index.ts", "Doc")}<${JSON.stringify(table.value)}>`;
+      // A whole document of a table: the same fields as the data model's, each as the data model types it.
+      const table = id && checker.getTypeOfSymbol(id).aliasTypeArguments?.[0];
+      const document = table?.isStringLiteral() ? documentOf(table.value) : undefined;
+      const sameFields = (a: ts.Type, b: ts.Type) => {
+        const names = (t: ts.Type) => t.getProperties().map((property) => property.name).sort().join("\n");
+        return names(a) === names(b);
+      };
+      if (table?.isStringLiteral() && document && sameFields(type, document) && checker.isTypeAssignableTo(type, document) && checker.isTypeAssignableTo(document, type)) {
+        return `${want("db/schema/index.ts", "Doc")}<${JSON.stringify(table.value)}>`;
       }
       const properties = checker.getPropertiesOfType(type).map((property) => {
         const optional = (property.flags & ts.SymbolFlags.Optional) !== 0;
@@ -621,6 +675,57 @@ function importedNames(statement: ts.ImportDeclaration): Array<{ local: string; 
   if (named && ts.isNamespaceImport(named)) found.push({ local: named.name.text, imported: "*", text: `* as ${named.name.text}` });
   if (named && ts.isNamedImports(named)) for (const element of named.elements) found.push({ local: element.name.text, imported: (element.propertyName ?? element.name).text, text: element.getText() });
   return found;
+}
+
+/** The data model's document type of each table, read from `_generated/dataModel`'s `DataModel`. */
+function documentOf(program: ts.Program, checker: ts.TypeChecker): (table: string) => ts.Type | undefined {
+  const file = program.getSourceFiles().find((sourceFile) => new RegExp(`/${convexRoot}/_generated/dataModel(\\.d)?\\.ts$`).test(sourceFile.fileName));
+  const moduleSymbol = file && checker.getSymbolAtLocation(file);
+  const dataModel = moduleSymbol && checker.getExportsOfModule(moduleSymbol).find((symbol) => symbol.name === "DataModel");
+  const model = dataModel && checker.getDeclaredTypeOfSymbol(dataModel);
+  return (table) => {
+    const entry = model?.getProperty(table);
+    const document = entry && checker.getTypeOfSymbol(entry).getProperty("document");
+    return document && checker.getTypeOfSymbol(document);
+  };
+}
+
+/**
+ * Whether a statement changes something when its module loads, outside any function: an assignment, or a call or
+ * `new` of the module's own values or its imports (`cache.set(…)`, `register(…)`). Built-ins (`new Set(…)`,
+ * `Object.keys(…)`) change nothing another module sees.
+ */
+function hasEffects(statement: ts.Statement, moduleValue: (node: ts.Identifier) => boolean): boolean {
+  let found = false;
+  const rootOf = (expression: ts.Expression): ts.Expression => {
+    while (ts.isPropertyAccessExpression(expression) || ts.isElementAccessExpression(expression) || ts.isCallExpression(expression) || ts.isParenthesizedExpression(expression)) expression = expression.expression;
+    return expression;
+  };
+  const visit = (node: ts.Node): void => {
+    if (found || ts.isFunctionLike(node) || ts.isClassLike(node)) return;
+    const callee = ts.isCallExpression(node) || ts.isNewExpression(node) ? rootOf(node.expression) : ts.isTaggedTemplateExpression(node) ? rootOf(node.tag) : undefined;
+    if (callee && ts.isIdentifier(callee) && moduleValue(callee)) found = true;
+    else if (ts.isAwaitExpression(node) || ts.isDeleteExpression(node)) found = true;
+    else if (ts.isBinaryExpression(node) && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment) found = true;
+    else if ((ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) && (node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken)) found = true;
+    else ts.forEachChild(node, visit);
+  };
+  visit(statement);
+  return found;
+}
+
+function isDeclarationNode(node: ts.Node): boolean {
+  return (
+    ts.isTypeParameterDeclaration(node) ||
+    ts.isParameter(node) ||
+    ts.isVariableDeclaration(node) ||
+    ts.isBindingElement(node) ||
+    ts.isFunctionDeclaration(node) ||
+    ts.isClassDeclaration(node) ||
+    ts.isInterfaceDeclaration(node) ||
+    ts.isTypeAliasDeclaration(node) ||
+    ts.isEnumDeclaration(node)
+  );
 }
 
 function importedIdentifiers(statement: ts.ImportDeclaration): Array<{ node: ts.Identifier; imported: string }> {
