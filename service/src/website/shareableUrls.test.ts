@@ -1,6 +1,5 @@
 // getAlbum says shareable URLs are on only for a member shareable-urls is on for. Today's
-// convex/website/shareableUrls.test.ts, on the service's test backend. getAlbum is S16's website handler and has no
-// service counterpart yet, so each read of it ends in S16's stub for it.
+// convex/website/shareableUrls.test.ts, on the service's test backend. getAlbum is S16's website handler.
 import { afterEach, beforeEach, describe, expect, vi } from "vitest";
 import { useTestBackend, type TestBackend } from "../../testing/backend.ts";
 import { flagsKey, postHogHost, projectToken, type FlagDefinition } from "../../testing/fakePostHog.ts";
@@ -8,10 +7,8 @@ import { flagsFromPostHog, onForEmails, onForEveryone } from "../../testing/flag
 import { waitsOn } from "../../testing/waiting.ts";
 import { workspaceKeyOf } from "../analytics/outbox.ts";
 import { analyticsIdOf } from "../analytics/person.ts";
-import { notPorted } from "../notPorted.ts";
-import type { QueryContext } from "../operations.ts";
 import type { MemberId } from "../workspace/directory.ts";
-import type { AlbumRead } from "./album.ts";
+import { getAlbum } from "./album.ts";
 import type { VerifiedMember } from "./memberQuery.ts";
 
 const now = new Date("2026-10-21T10:00:00Z");
@@ -58,11 +55,6 @@ describe("getAlbum says shareable URLs are on only for a member shareable-urls i
     expect(await albumOf(bea)).toHaveProperty("shareableUrls", true);
   }, 60_000);
 });
-
-// S16's website handler, which the service doesn't have yet.
-async function getAlbum(_ctx: QueryContext, _me: VerifiedMember): Promise<AlbumRead> {
-  throw notPorted("website.album.getAlbum");
-}
 
 // Today's `prepareWebsiteFlag` made the workspace's key after the flags loaded; its body is `workspaceKeyOf`.
 async function serving(...definitions: FlagDefinition[]) {

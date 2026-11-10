@@ -5,6 +5,7 @@ import { z } from "zod";
 import { slackRateLimits } from "../db/schema/slack.ts";
 import type { MutationContext, QueryContext, Transaction } from "../operations.ts";
 import { zv } from "../values.ts";
+import { unique } from "../db/unique.ts";
 
 const methodArgs = { workspace: z.string(), method: z.string() };
 
@@ -29,6 +30,5 @@ async function holdOf(tx: Transaction, { workspace, method }: { workspace: strin
     .from(slackRateLimits)
     .where(and(eq(slackRateLimits.workspace, workspace), eq(slackRateLimits.method, method)))
     .limit(2);
-  if (rows.length > 1) throw new Error(`More than one rate limit is held for ${method}`);
-  return rows[0] ?? null;
+  return unique("slackRateLimits", rows);
 }
