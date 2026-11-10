@@ -12,6 +12,7 @@ import { desired, type Indicator } from "../feedback/indicator.ts";
 import { privateReply } from "../feedback/replies.ts";
 import type { Line, Segment } from "../feedback/segments.ts";
 import { actionJob, type Job } from "../jobs/define.ts";
+import { NotPortedError } from "../notPorted.ts";
 import type { ActionContext } from "../operations.ts";
 import { zv } from "../values.ts";
 import { settingsFooterText } from "./appHomeLinks.ts";
@@ -142,6 +143,8 @@ async function retryOnAnyError(clock: Clock, attempt: number, deliver: () => Pro
   try {
     return await deliver();
   } catch (error) {
+    // A body not ported yet is no failed attempt: it fails the job, so the test or journey that reached it names it.
+    if (error instanceof NotPortedError) throw error;
     console.warn(`delivery attempt ${attempt} failed: ${String(error)}`);
     return failedAttempt(attempt, clock.now());
   }
