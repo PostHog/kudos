@@ -28,6 +28,10 @@ export async function indexed(ctx: Reader, member: Id<"members">) {
   return row;
 }
 
+export function build(ctx: Reader, row: { _id: Id<"members">; new (): { value: string } }) {
+  return row;
+}
+
 export type Drafts = PaginationResult<WithoutSystemFields<Doc<"members">>>;
 
 const names = new Map<string, number>();
@@ -42,6 +46,11 @@ const seeded = cache.set("first", 1);
 const called = (() => cache.set("called", 1))();
 class Seeder {
   static seeded = cache.set("static", 1);
+}
+const cast = ((() => cache.set("cast", 1)) as () => unknown)();
+const viaCall = (() => cache.set("call", 1)).call(null);
+class Computed {
+  static [cache.set("computed", 1).size]() {}
 }
 const readerSeed = cache.set("readers", [async (ctx: Reader) => ctx].length);
 

@@ -392,6 +392,11 @@ const called = (() => cache.set("called", 1))();
 class Seeder {
   static seeded = cache.set("static", 1);
 }
+const cast = ((() => cache.set("cast", 1)) as () => unknown)();
+const viaCall = (() => cache.set("call", 1)).call(null);
+class Computed {
+  static [cache.set("computed", 1).size]() {}
+}
 
 const query = (fn: () => number) => fn();
 export const answer = query(() => 42);
@@ -415,7 +420,11 @@ export async function viaAlias(ctx: QueryContext, args: z.infer<typeof viaAliasA
   throw notPorted("skeleton.edges.viaAlias");
 }
 `);
-    expect(edges.omitted).toEqual(["internalQuery: Convex's machinery, exported by a list", "readerSeed: state over a context or Convex's machinery that only stubbed bodies read"]);
+    expect(edges.omitted).toEqual([
+      'build: returns a constructor, { new (): { value: string; }; _id: Id<"members">; }',
+      "internalQuery: Convex's machinery, exported by a list",
+      "readerSeed: state over a context or Convex's machinery that only stubbed bodies read",
+    ]);
   });
 
   test("refuses what it can't stub without changing what other modules see, and any way of reaching Convex in what it writes", () => {
@@ -474,7 +483,8 @@ export async function viaAlias(ctx: QueryContext, args: z.infer<typeof viaAliasA
       expect(edgesModule.byValidatorJob.args.safeParse({ note: "x" }).success).toBe(true);
       expect(edgesModule.byValidatorJob.args.safeParse({ note: "x", extra: 1 }).success).toBe(false);
       expect(edgesModule.byShorthandJob.args.safeParse({ note: "x" }).success).toBe(true); // `{ args }` keeps its fields
-      expect([...edgesModule.cache.keys()]).toEqual(["first", "called", "static"]); // unread initializers, a function called at once and a static field still ran
+      // Unread initializers still ran: a function called at once (also through a cast or `.call`), a static field and a computed member name.
+      expect([...edgesModule.cache.keys()]).toEqual(["first", "called", "static", "cast", "call", "computed"]);
       expect(edgesModule.answer).toBe(42); // a local function named like a builder is no builder
       await expect(edgesModule.viaAlias({}, {})).rejects.toThrow(new NotPortedError("skeleton.edges.viaAlias")); // a builder through a local alias is one
       expect(edgesModule.viaAliasJob).toBeUndefined();

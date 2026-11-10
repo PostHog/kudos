@@ -640,6 +640,7 @@ function typePrinter(checker: ts.TypeChecker, servicePath: string, localNames: R
       });
       const index = checker.getIndexInfosOfType(type).map((info) => `[key: ${print(info.keyType)}]: ${print(info.type)}`);
       if (checker.getSignaturesOfType(type, ts.SignatureKind.Call).length > 0) throw new Error(`returns a function, ${checker.typeToString(type)}`);
+      if (checker.getSignaturesOfType(type, ts.SignatureKind.Construct).length > 0) throw new Error(`returns a constructor, ${checker.typeToString(type)}`);
       return `{ ${[...properties, ...index].join("; ")} }`;
     }
     throw new Error(`returns ${checker.typeToString(type)}, which the printer can't name`);
@@ -711,16 +712,31 @@ function hasEffects(statement: ts.Statement, moduleValue: (node: ts.Identifier) 
   };
   const visit = (node: ts.Node): void => {
     if (found) return;
-    // A function runs only when called: its body counts where it is called at once, `(() => …)()`.
+    // A function runs only when called: its body counts where it is called at once, `(() => …)()`, also through a
+    // cast or `satisfies`, or `.call`, `.apply` and `.bind`.
     if (ts.isFunctionLike(node)) {
       let call: ts.Node = node;
-      while (ts.isParenthesizedExpression(call.parent)) call = call.parent;
-      if ((ts.isCallExpression(call.parent) || ts.isNewExpression(call.parent)) && call.parent.expression === call) ts.forEachChild(node, visit);
+      for (;;) {
+        const parent: ts.Node = call.parent;
+        const wraps = ts.isParenthesizedExpression(parent) || ts.isAsExpression(parent) || ts.isSatisfiesExpression(parent) || ts.isNonNullExpression(parent) || ts.isTypeAssertionExpression(parent);
+        const invokes = ts.isPropertyAccessExpression(parent) && parent.expression === call && ["call", "apply", "bind"].includes(parent.name.text);
+        if (!wraps && !invokes) break;
+        call = parent;
+      }
+      if ((ts.isCallExpression(call.parent) || ts.isNewExpression(call.parent) || ts.isTaggedTemplateExpression(call.parent)) && (ts.isTaggedTemplateExpression(call.parent) ? call.parent.tag : call.parent.expression) === call) {
+        ts.forEachChild(node, visit);
+      } else if (!ts.isArrowFunction(node) && !ts.isFunctionExpression(node) && !ts.isFunctionDeclaration(node)) {
+        // A method, accessor or constructor runs later, but a computed name and decorators run with its class.
+        if ((node as ts.NamedDeclaration).name && ts.isComputedPropertyName((node as ts.NamedDeclaration).name!)) visit((node as ts.NamedDeclaration).name!);
+      }
       return;
     }
-    // A class runs its static initializers and blocks where it is declared.
+    // A class runs its decorators, computed member names, static initializers and blocks where it is declared.
     if (ts.isClassLike(node)) {
+      ts.getDecorators(node)?.forEach(visit);
       for (const member of node.members) {
+        if (member.name && ts.isComputedPropertyName(member.name)) visit(member.name);
+        if (ts.canHaveDecorators(member)) ts.getDecorators(member)?.forEach(visit);
         const isStatic = ts.isClassStaticBlockDeclaration(member) || (ts.canHaveModifiers(member) && ts.getModifiers(member)?.some((modifier) => modifier.kind === ts.SyntaxKind.StaticKeyword));
         if (!isStatic) continue;
         if (ts.isClassStaticBlockDeclaration(member)) ts.forEachChild(member.body, visit);
