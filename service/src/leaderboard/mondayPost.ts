@@ -27,6 +27,7 @@ import { wholeWeekBefore } from "./periods.ts";
 import { isTimeZone } from "./timeZones.ts";
 import { topKudosPostOf, type TopKudosPost } from "./topKudos.ts";
 import { giversIn } from "./totals.ts";
+import { unique } from "../db/unique.ts";
 
 export const mondayPostFlag = { key: "monday-post", safeDefault: false, values: [false, true] } as const satisfies Flag<boolean>;
 
@@ -280,9 +281,8 @@ async function couldNotPostIn(tx: Transaction, workspace: string, channel: strin
 
 // One claim per workspace and week, as Convex's `unique()` asked: a second one is an error, not a choice.
 async function claimOf(tx: Transaction, workspace: string, week: DayKey): Promise<Claim | null> {
-  const rows = await tx.select().from(mondayPostClaims).where(and(eq(mondayPostClaims.workspace, workspace), eq(mondayPostClaims.week, week))).limit(2);
-  if (rows.length > 1) throw new Error(`More than one Monday post claim is held for ${week}`);
-  return rows[0] ? toDocument<Claim>(mondayPostClaims, rows[0]) : null;
+  const row = unique("mondayPostClaims", await tx.select().from(mondayPostClaims).where(and(eq(mondayPostClaims.workspace, workspace), eq(mondayPostClaims.week, week))).limit(2));
+  return row ? toDocument<Claim>(mondayPostClaims, row) : null;
 }
 
 async function claimRow(tx: Transaction, claim: Id<"mondayPostClaims">): Promise<Claim | null> {
@@ -298,9 +298,8 @@ async function insertClaim(ctx: MutationContext, claim: Omit<Claim, "_id" | "_cr
 
 // One settings row per workspace, as Convex's `unique()` asked.
 async function settingsRow(tx: Transaction, workspace: string): Promise<Settings | null> {
-  const rows = await tx.select().from(mondayPostSettings).where(eq(mondayPostSettings.workspace, workspace)).limit(2);
-  if (rows.length > 1) throw new Error(`More than one Monday post setting is held for ${workspace}`);
-  return rows[0] ? toDocument<Settings>(mondayPostSettings, rows[0]) : null;
+  const row = unique("mondayPostSettings", await tx.select().from(mondayPostSettings).where(eq(mondayPostSettings.workspace, workspace)).limit(2));
+  return row ? toDocument<Settings>(mondayPostSettings, row) : null;
 }
 
 async function insertSettings(ctx: MutationContext, settings: Omit<Settings, "_id" | "_creationTime">): Promise<Settings> {
