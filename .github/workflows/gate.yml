@@ -68,18 +68,21 @@ jobs:
       # The journeys tagged @time move the local app's clock with libfaketime.
       - run: sudo apt-get install -y faketime
 
-      # Once every journey passes, the data they left is exported as Convex exports it: the rewrite's load is proven on
+      # Once every journey passes, the data they left is exported as the move exports it: the rewrite's load is proven on
       # that export, kept as e2e/rewrite/oracleExport.zip, which a green run's artifact refreshes.
       - run: pnpm e2e
         env:
           E2E_EXPORT_TO: ${{ runner.temp }}/oracleExport.zip
+
+      # Trimmed before it is uploaded, so the artifact never holds the company directory, which names real people.
+      - run: node e2e/local/trimExport.ts "$RUNNER_TEMP/oracleExport.zip" "$RUNNER_TEMP/oracleExport.zip"
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: oracle-export
           path: ${{ runner.temp }}/oracleExport.zip
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 1
 
   # The rewrite on a throwaway Postgres 18, behind a stand-in for the hosting edge, through the journeys on its supported
   # list (e2e/rewrite/supported.txt). The e2e tool's web engine starts a browser whatever the journeys use.

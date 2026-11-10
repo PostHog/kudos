@@ -293,6 +293,7 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | e2e/fakes/server.test.ts | S20 | | |
 | e2e/local/edge.test.ts | S20 | | |
 | e2e/local/rewrite.test.ts | S20 | | |
+| e2e/local/trimExport.test.ts | S20 | | |
 | e2e/target.test.ts | S20 | | |
 | slack-app/manifest.test.ts | S20 | | |
 | testing/privateFolder.test.ts | S20 | | |

@@ -125,13 +125,13 @@ describe("the move on the oracle's own export", () => {
   });
 
   test("a function awaiting its port has no job and no retirement yet, so a stack that ports one takes it off the list", () => {
-    expect([...awaitingPort].filter((name) => serviceRegistry.jobs.get(name) || retiredJobs.has(name))).toEqual([]);
+    expect([...awaitingPort].filter((name) => serviceRegistry.jobs.get(name) || retiredJobs.has(name)), "ported or retired: take it off the awaiting-port list").toEqual([]);
   });
 
   test("recovery stops on the functions no stack has ported yet, and on nothing else, before it changes anything", async () => {
     const archive = await readFile(fixture);
     const unmapped = new Set((await scheduledOf(archive)).filter(({ job }) => !serviceRegistry.jobs.get(job) && !retiredJobs.has(job)).map(({ job }) => job));
-    expect([...unmapped].filter((name) => !awaitingPort.has(name)), "a function no job, retirement or pending port accounts for").toEqual([]);
+    expect([...unmapped].filter((name) => !awaitingPort.has(name)), "neither registered, retired nor awaiting its port: register its job, retire it, or list it").toEqual([]);
 
     const { status } = await loaded(archive);
     if (unmapped.size === 0) expect(status, "every function maps, so the move goes through").toMatchObject({ phase: "done", error: null });

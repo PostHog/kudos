@@ -38,7 +38,7 @@ export type ConvexReader = {
 };
 
 /** The CLI's own admin channel: `setAdminAuth` and a query's `componentPath` are internal to the client, and are what `npx convex data <table> --component <path>` reads a component's system tables with. */
-function adminClient(url: string, adminKey: string): ConvexReader {
+export function adminClient(url: string, adminKey: string): ConvexReader {
   const client = new BaseConvexClient(url, () => {}, { unsavedChangesWarning: false, skipConvexDeploymentUrlCheck: true });
   (client as unknown as { setAdminAuth: (key: string) => void }).setAdminAuth(adminKey);
   return client as unknown as ConvexReader;
@@ -46,6 +46,8 @@ function adminClient(url: string, adminKey: string): ConvexReader {
 
 /** How long one page of scheduled functions may take: a page is small, so a deployment silent this long has stopped answering. */
 const defaultPageTimeoutMs = 120_000;
+/** How long a connection may take to close: the client waits for a stalled socket to open before it closes it. */
+const closeMs = 1_000;
 
 /**
  * Adds each namespace's `_scheduled_functions` to the export at `path`, and gives back how many it added a namespace.
@@ -77,12 +79,23 @@ export async function addScheduled({
       entries[`${prefix}_scheduled_functions/documents.jsonl`] = rows.map((row) => `${printExport(row)}\n`).join("");
       counts[component === "" ? "app" : component] = rows.length;
     } finally {
-      await client.close();
+      await closed(client);
     }
   }
   checkScheduled(counts, noneScheduled);
   await writeFile(path, appendToZip(archive, entries));
   return counts;
+}
+
+/** Closes `client`, waiting at most `closeMs`: a socket that never opened is left to the process's end, not waited on. */
+async function closed(client: ConvexReader): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  const waited = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, closeMs);
+    timer.unref();
+  });
+  await Promise.race([client.close().catch(() => {}), waited]);
+  clearTimeout(timer);
 }
 
 /** Stops an export that found no scheduled function anywhere, unless the caller said none is expected. */
@@ -157,6 +170,13 @@ function convex(args: string[], signal?: AbortSignal): Promise<void> {
 if (import.meta.main) {
   const { values } = parseArgs({ options: { "env-file": { type: "string" }, path: { type: "string" }, "none-scheduled": { type: "boolean" } } });
   if (!values["env-file"] || !values.path) throw new Error("usage: node tools/move/export.ts --env-file <deployment env> --path <export.zip> [--none-scheduled]");
-  const counts = await exportForMove({ envFile: values["env-file"], path: values.path, noneScheduled: values["none-scheduled"] ?? false });
-  console.log(`exported to ${values.path}, scheduled functions by namespace: ${JSON.stringify(counts)}`);
+  try {
+    const counts = await exportForMove({ envFile: values["env-file"], path: values.path, noneScheduled: values["none-scheduled"] ?? false });
+    console.log(`exported to ${values.path}, scheduled functions by namespace: ${JSON.stringify(counts)}`);
+  } catch (error) {
+    console.error(error);
+    process.exitCode = 1;
+  }
+  // A connection that never opened would keep the process waiting on its socket.
+  process.exit();
 }

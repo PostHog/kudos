@@ -1,11 +1,12 @@
 // @vitest-environment node
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { createServer, type AddressInfo, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { entriesOf } from "../../service/testing/exportZip.ts";
 import { zip } from "../../service/testing/zip.ts";
-import { addScheduled, checkScheduled, componentsOf, type ConvexReader } from "./export.ts";
+import { addScheduled, adminClient, checkScheduled, componentsOf, type ConvexReader } from "./export.ts";
 import { appendToZip, zipEntryNames } from "./zipAppend.ts";
 
 /** Every entry of `archive` and its content, read as the service's load reads a snapshot. */
@@ -150,6 +151,24 @@ describe("the move's export adds what `convex export` leaves out", () => {
 
     expect(deployment.open(), "every connection closed and every query let go").toStrictEqual({ clients: 0, subscriptions: 0 });
     expect(zipEntryNames(await readFile(path)), "nothing added").toStrictEqual(Object.keys(threeNamespaces));
+  });
+
+  test("a deployment that takes the connection but never opens it ends the read at the deadline, with the CLI's own client", async () => {
+    const sockets = new Set<Socket>();
+    const stalled = createServer((socket) => sockets.add(socket));
+    await new Promise<void>((resolve) => stalled.listen(0, "127.0.0.1", resolve));
+    const path = await exported(threeNamespaces);
+    try {
+      const started = Date.now();
+      const url = `http://127.0.0.1:${(stalled.address() as AddressInfo).port}`;
+
+      await expect(addScheduled({ path, connect: () => adminClient(url, "an-admin-key"), pageTimeoutMs: 200 })).rejects.toThrow("the deployment didn't answer for the app's scheduled functions within 200 ms");
+
+      expect(Date.now() - started, "the deadline holds while the connection won't close").toBeLessThan(1_500);
+    } finally {
+      for (const socket of sockets) socket.destroy();
+      stalled.close();
+    }
   });
 
   test("an aborted export stops reading at once and closes its connection", async () => {
