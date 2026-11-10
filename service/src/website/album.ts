@@ -45,7 +45,6 @@ import { type VerifiedMember } from "./memberQuery.ts";
 import { onboardingOf, type Onboarding } from "./onboarding.ts";
 import type { QueryContext } from "../operations.ts";
 import { z } from "zod";
-import { zv } from "../values.ts";
 
 export type AlbumAnswer = {
   kind: "album";
@@ -276,7 +275,7 @@ function thankedPeopleOf(ctx: QueryContext, workspace: string): ThankedPeople {
 }
 
 /** A level's reveal: today's `getLevelUp`. */
-export const getLevelUpArgs = z.strictObject({ level: zv.number() });
+export const getLevelUpArgs = z.strictObject({ level: z.number() });
 export async function getLevelUp(ctx: QueryContext, me: VerifiedMember, { level }: z.infer<typeof getLevelUpArgs>): Promise<LevelUpRead> {
   if (!(await levelUpRevealShownTo(ctx, me.member))) return { kind: "off" };
   return (await levelUpRevealOf(ctx, me, level)) ?? { kind: "none" };
