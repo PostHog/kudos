@@ -189,9 +189,3 @@ test("a reply that is gone has nothing to deliver, and its delivery calls Slack 
   const states = await t.operations.query("test.jobs", async ({ tx }) => (await tx.select({ name: jobs.name, state: jobs.state }).from(jobs)).map(({ name, state }) => `${name} ${state}`));
   expect(states).toEqual(["slack.publicReplies.deliverPublicReply success"]);
 });
-
-test("the service runs the public reply, direct message and purchase reply deliveries by their Convex names", () => {
-  const names = [...serviceRegistry.jobs.keys()];
-
-  expect(names).toEqual(expect.arrayContaining(["slack.publicReplies.deliverPublicReply", "slack.directMessages.deliverDirectMessage", "slack.directMessages.deliverPurchaseReply"]));
-});

@@ -55,14 +55,30 @@ describe("the held reply of a kudos message", () => {
 });
 
 describe("the one reply's row", () => {
-  test("is the row of that private reply, whole", async () => {
+  test("is the row of that private reply, with the items and the quests it moved", async () => {
     const t = setUp();
     const reply = await t.privateReply(kudos);
     const other = await t.privateReply({ ...kudos, message: "1700000000.000300" });
+    const bob = await t.seed.insert("members", { workspace: "T1", user: "U_BOB", kind: "member" });
     await t.seed.insert("oneReplies", { reply: other, left: "4 kudos left today" });
-    const row = await t.seed.insert("oneReplies", { reply, left: "3 kudos left today", awaitsQuests: true });
+    const items = { outcomes: [{ recipient: bob, outcome: "nextWeek" as const }], more: 2 };
+    const questsMoved = [{ goal: "Thank 3 people", progress: { done: 1, of: 3, unit: "people" as const } }];
+    const row = await t.seed.insert("oneReplies", { reply, left: "3 kudos left today", awaitsQuests: true, items, questsMoved });
 
-    expect(await t.oneReplyRowOf(reply)).toEqual(await t.seed.get("oneReplies", row));
+    const found = await t.oneReplyRowOf(reply);
+
+    expect(found).toMatchObject({ _id: row, reply, left: "3 kudos left today", awaitsQuests: true, items, questsMoved });
+    expect(found).not.toHaveProperty("awaitsItems");
+  });
+
+  test("leaves out what a row doesn't hold, rather than holding null", async () => {
+    const t = setUp();
+    const reply = await t.privateReply(kudos);
+    await t.seed.insert("oneReplies", { reply, left: "3 kudos left today" });
+
+    const found = await t.oneReplyRowOf(reply);
+
+    expect(Object.keys(found ?? {}).sort()).toEqual(["_creationTime", "_id", "left", "reply"]);
   });
 
   test("is none for a private reply without one", async () => {
