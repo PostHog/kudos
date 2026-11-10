@@ -43,3 +43,15 @@ export async function replaceIn(ctx: MutationContext, table: Table, existing: { 
   const row = fromDocument(table, { ...fields, _id: existing._id, _creationTime: existing._creationTime });
   await ctx.tx.update(table).set(row as never).where(eq(table._id, existing._id));
 }
+
+/** Deletes the document, as `delete` did. */
+export async function deleteIn(ctx: MutationContext, table: Table, existing: { _id: string }): Promise<void> {
+  await ctx.tx.delete(table).where(eq(table._id, existing._id));
+}
+
+/** Sets the fields the patch names, removes those it sets to `undefined`, and keeps the rest, as `patch` did. */
+export async function patchIn<Doc extends { _id: string; _creationTime: number }>(ctx: MutationContext, table: Table, existing: Doc, patch: Partial<Doc>): Promise<void> {
+  const patched: Record<string, unknown> = { ...existing, ...patch };
+  for (const field of Object.keys(patched)) if (patched[field] === undefined) delete patched[field];
+  await replaceIn(ctx, table, existing, patched);
+}

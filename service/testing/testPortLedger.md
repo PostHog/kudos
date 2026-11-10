@@ -25,10 +25,10 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/achievements/tiersInsertOnly.test.ts | S6 | | |
 | convex/album/albumHoggies.test.ts | S10 | | |
 | convex/album/earnedEmojis.test.ts | S9 | | |
-| convex/album/emojiMappings.test.ts | S9 | | |
-| convex/album/emojiNames.test.ts | S9 | | |
+| convex/album/emojiMappings.test.ts | S9 | service/src/album/emojiMappings.test.ts | |
+| convex/album/emojiNames.test.ts | S9 | service/src/album/emojiNames.test.ts | |
 | convex/album/emojiRoll.test.ts | S2 | service/src/album/emojiRoll.test.ts | |
-| convex/album/emojiWizard.test.ts | S9 | | |
+| convex/album/emojiWizard.test.ts | S9 | service/src/album/emojiWizard.test.ts | |
 | convex/album/endState.test.ts | S9 | | |
 | convex/album/history.test.ts | S9 | | |
 | convex/album/hoggies/avatar.test.ts | S10 | | |
@@ -50,7 +50,7 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/album/items/stickerItems.test.ts | S8 | | |
 | convex/album/items/trayItems.test.ts | S8 | | |
 | convex/album/items/welcomeItem.test.ts | S8 | | |
-| convex/album/kudosEmojis.test.ts | S9 | | |
+| convex/album/kudosEmojis.test.ts | S9 | service/src/album/kudosEmojis.test.ts | |
 | convex/album/levelUpHoggies.test.ts | S10 | | |
 | convex/album/milestones.test.ts | S9 | | |
 | convex/album/opening.test.ts | S8 | | |
