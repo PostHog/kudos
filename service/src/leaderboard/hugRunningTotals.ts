@@ -2,8 +2,8 @@
 // notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
 import type { DayKey } from "../engine/allowance.ts";
 import type { MemberId } from "../workspace/directory.ts";
-import { type ComparedPeriod, type PeriodKey } from "./periods.ts";
-import { type RunningTotal } from "./runningTotal.ts";
+import type { ComparedPeriod, PeriodKey } from "./periods.ts";
+import type { RunningTotal } from "./runningTotal.ts";
 import type { MutationContext, QueryContext } from "../operations.ts";
 import { notPorted } from "../notPorted.ts";
 

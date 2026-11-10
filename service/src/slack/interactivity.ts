@@ -2,7 +2,7 @@
 // notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
 import type { DmLink } from "../analytics/isolatedUsage.ts";
 import { dmKindValidator, dmLinkDestinationValidator } from "../analytics/projections.ts";
-import { type Command } from "../commands/commands.ts";
+import type { Command } from "../commands/commands.ts";
 
 const dmKinds: readonly DmLink["dm"][] = dmKindValidator.options.map(({ value }) => value);
 
