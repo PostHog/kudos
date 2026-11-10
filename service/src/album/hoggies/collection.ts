@@ -1,11 +1,13 @@
-// The module map's skeleton of convex/album/hoggies/collection.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
-// notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
-import type { MemberId } from "../../workspace/directory.ts";
-import { type CatalogueHoggie, type Rarity } from "./catalogue.ts";
-import { type CrestArt, type CrestsShown, type Drop, type HoggieArt } from "./drops.ts";
-import type { Doc } from "../../db/schema/index.ts";
+// A member's hoggie collection, as today's convex/album/hoggies/collection.ts: the catalogue with the member's tallies,
+// the share of each rarity found, and the crests whose whole roster they hold.
+import { eq } from "drizzle-orm";
+import { toDocument } from "../../db/documents.ts";
+import { indexOrder } from "../../db/indexOrder.ts";
+import { hoggieTallies, type Doc } from "../../db/schema/index.ts";
 import type { QueryContext } from "../../operations.ts";
-import { notPorted } from "../../notPorted.ts";
+import type { MemberId } from "../../workspace/directory.ts";
+import { catalogue, rarities, type CatalogueCrest, type CatalogueHoggie, type Rarity } from "./catalogue.ts";
+import { lastFoundBy, type CrestArt, type CrestsShown, type Drop, type HoggieArt } from "./drops.ts";
 
 export type HeldHoggie = CatalogueHoggie & { art: HoggieArt; count: number; firstAt: number | null };
 
@@ -20,23 +22,64 @@ export type HoggiesHome = { owned: number; total: number; lastFound: Drop | null
 type Tallies = Map<string, Doc<"hoggieTallies">>;
 
 export async function collectionOf(ctx: QueryContext, member: MemberId, shown: CrestsShown): Promise<Collection> {
-  throw notPorted("album.hoggies.collection.collectionOf");
+  const tallies = await talliesOf(ctx, member);
+  const hoggies = catalogue.hoggies.map((entry) => heldOf(entry, tallies.get(entry.hoggie)));
+  const held = hoggies.filter(({ count }) => count > 0);
+  const shares = rarities.map(({ rarity, weight }) => ({ rarity, chance: weight, owned: countOf(held, rarity), total: countOf(hoggies, rarity) }));
+  const collection = { rarities: shares, hoggies, owned: held.length, total: hoggies.length };
+  return shown.crests ? { ...collection, crests: crestsHeldIn(tallies) } : collection;
 }
 
 export type CollectedCrest = { crest: string; collectedAt: number };
 
 export async function hoggiesOf(ctx: QueryContext, member: MemberId, shown: CrestsShown, alsoHeld: string[] = []): Promise<HoggiesHome> {
-  throw notPorted("album.hoggies.collection.hoggiesOf");
+  const tallies = await talliesOf(ctx, member);
+  const owned = ownedIn(tallies);
+  const crests = shown.crests ? new Set([...crestsCollectedIn(tallies).map(({ crest }) => crest), ...alsoHeld]).size : null;
+  return { owned, total: catalogue.hoggies.length, lastFound: await lastFoundBy(ctx, member), crests };
 }
 
 export async function hoggiesOwnedBy(ctx: QueryContext, member: MemberId): Promise<number> {
-  throw notPorted("album.hoggies.collection.hoggiesOwnedBy");
+  return ownedIn(await talliesOf(ctx, member));
+}
+
+function ownedIn(tallies: Tallies): number {
+  return catalogue.hoggies.filter(({ hoggie }) => tallies.has(hoggie)).length;
 }
 
 export async function crestsCollectedBy(ctx: QueryContext, member: MemberId): Promise<CollectedCrest[]> {
-  throw notPorted("album.hoggies.collection.crestsCollectedBy");
+  return crestsCollectedIn(await talliesOf(ctx, member));
 }
 
-export async function talliesOf(ctx: QueryContext, member: MemberId): Promise<Tallies> {
-  throw notPorted("album.hoggies.collection.talliesOf");
+function crestsCollectedIn(tallies: Tallies): CollectedCrest[] {
+  return crestsHeldIn(tallies).flatMap(({ crest, collectedAt }) => (collectedAt === null ? [] : [{ crest, collectedAt }]));
+}
+
+function crestsHeldIn(tallies: Tallies): HeldCrest[] {
+  return catalogue.crests.map((entry) => crestHeldIn(entry, tallies));
+}
+
+function crestHeldIn({ crest, name, roster }: CatalogueCrest, tallies: Tallies): HeldCrest {
+  const held = roster.flatMap((hoggie) => tallies.get(hoggie) ?? []);
+  const completing = held.length === roster.length ? held.reduce((latest, tally) => (tally.firstN > latest.firstN ? tally : latest)) : null;
+  return { crest, name, art: { kind: "crest", slug: crest }, roster: [...roster], held: held.length, collectedAt: completing?.firstAt ?? null };
+}
+
+// The member's tallies by hoggie, at most one per catalogue entry, in `by_member_hoggie` order as Convex took them.
+export async function talliesOf({ tx }: QueryContext, member: MemberId): Promise<Tallies> {
+  const rows = await tx
+    .select()
+    .from(hoggieTallies)
+    .where(eq(hoggieTallies.member, member))
+    .orderBy(...indexOrder(hoggieTallies, ["member", "hoggie"]).orderBy())
+    .limit(catalogue.hoggies.length);
+  return new Map(rows.map((row) => toDocument<Doc<"hoggieTallies">>(hoggieTallies, row)).map((tally) => [tally.hoggie, tally]));
+}
+
+function heldOf({ hoggie, name, rarity }: CatalogueHoggie, tally: Doc<"hoggieTallies"> | undefined): HeldHoggie {
+  return { hoggie, name, rarity, art: { kind: "hoggie", slug: hoggie }, count: tally?.count ?? 0, firstAt: tally?.firstAt ?? null };
+}
+
+function countOf(hoggies: HeldHoggie[], rarity: Rarity) {
+  return hoggies.filter((entry) => entry.rarity === rarity).length;
 }

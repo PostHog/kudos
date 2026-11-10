@@ -1,10 +1,9 @@
-// The module map's skeleton of convex/album/albumHoggies.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
-// notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
+// The album's hoggies page, as today's convex/album/albumHoggies.ts: the collection without crests, each hoggie found or
+// not with its spares, and the rarest finds first.
 import { rarities, type Rarity } from "./hoggies/catalogue.ts";
-import { type HeldHoggie } from "./hoggies/collection.ts";
+import { collectionOf, type HeldHoggie } from "./hoggies/collection.ts";
 import type { MemberId } from "../workspace/directory.ts";
 import type { QueryContext } from "../operations.ts";
-import { notPorted } from "../notPorted.ts";
 
 export const rarestFindsShown = 5;
 
@@ -17,7 +16,19 @@ export type AlbumHoggies = { hoggies: AlbumHoggie[]; rarities: AlbumRarity[]; fo
 const rarestFirst = rarities.map(({ rarity }) => rarity).toReversed();
 
 export async function albumHoggiesOf(ctx: QueryContext, member: MemberId): Promise<AlbumHoggies> {
-  throw notPorted("album.albumHoggies.albumHoggiesOf");
+  const collection = await collectionOf(ctx, member, { crests: false });
+  const hoggies = collection.hoggies.map(albumHoggieOf);
+  return {
+    hoggies,
+    rarities: collection.rarities.map(({ rarity, chance, owned, total }) => ({ rarity, chance, found: owned, total })),
+    found: collection.owned,
+    total: collection.total,
+    rarest: rarestFindsIn(hoggies, rarestFindsShown),
+  };
+}
+
+function albumHoggieOf(hoggie: HeldHoggie): AlbumHoggie {
+  return { ...hoggie, found: hoggie.count > 0, spares: Math.max(0, hoggie.count - 1) };
 }
 
 export function rarestFindsIn<Found extends Pick<AlbumHoggie, "found" | "firstAt" | "rarity">>(hoggies: Found[], most: number): Array<Found & { firstAt: number }> {
