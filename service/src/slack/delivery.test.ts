@@ -6,6 +6,7 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { z } from "zod";
 import { useTestDatabase } from "../../testing/database.ts";
+import { seeder } from "../../testing/seed.ts";
 import { FakeSlack, httpStatus, landsButTimesOut, networkFailure, rateLimitedFor, slackError, timesOut, type ScriptedAnswer } from "../../testing/fakeSlack.ts";
 import { createAppTime } from "../appTime.ts";
 import { createClock } from "../clock.ts";
@@ -346,4 +347,26 @@ describe("the indicator", () => {
 test("the service runs both delivery jobs by their Convex names", () => {
   expect(serviceRegistry.jobs.get("slack.delivery.deliverIndicator")).toBe(deliverIndicatorJob);
   expect(serviceRegistry.jobs.get("slack.delivery.deliverPrivateReply")).toBe(deliverPrivateReplyJob);
+});
+
+describe("a row Convex's .unique() read finds twice is refused in Convex's words, which the analytics boundary names", () => {
+  test("two holds of one method", async () => {
+    const { operations } = setUp();
+    const twice = { workspace: "T1", method: "chat.postMessage", until: start + hour };
+    await seeder(operations).insert("slackRateLimits", twice);
+    await seeder(operations).insert("slackRateLimits", twice);
+
+    await expect(operations.query("test.heldUntil", (ctx) => heldUntil(ctx, { workspace: "T1", method: "chat.postMessage" }))).rejects.toThrow(
+      new Error("unique() query returned more than one result from table slackRateLimits:"),
+    );
+  });
+
+  test("two indicators of one message", async () => {
+    const { operations } = setUp();
+    const message = { workspace: "T1", conversation: "C1", message: "1700000000.000100" };
+    await seeder(operations).insert("indicators", { ...message, emoji: "taco", version: 1 });
+    await seeder(operations).insert("indicators", { ...message, emoji: null, version: 2 });
+
+    await expect(operations.query("test.desired", (ctx) => desired(ctx, message))).rejects.toThrow(new Error("unique() query returned more than one result from table indicators:"));
+  });
 });
