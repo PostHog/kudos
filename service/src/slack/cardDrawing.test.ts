@@ -1,11 +1,15 @@
+import { spawn } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { performance } from "node:perf_hooks";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, onTestFinished, test, vi } from "vitest";
 import { useTestBackend } from "../../testing/backend.ts";
 import { files } from "../db/schema/service.ts";
 import { cardPictures } from "../db/schema/slack.ts";
-import { cardPictureOf, cardWordsOf, drawn } from "./cardDrawing.ts";
+import { artOf, cardPictureOf, cardWordsOf, drawn } from "./cardDrawing.ts";
 import { pictureAt } from "./cardPictures.ts";
-import { renderedCard } from "./cardRenderer.ts";
+import { cardRenderer, renderedCard } from "./cardRenderer.ts";
 import { cardKeyOf, type DrawnCard } from "./playerCard.ts";
 
 const site = "https://hedgehug.example";
@@ -125,6 +129,94 @@ describe("cards render one at a time in a worker thread", { timeout: 60_000 }, (
   });
 });
 
+describe("a renderer thread that fails is replaced, and the next card draws", { timeout: 30_000 }, () => {
+  const fixture = new URL("../../testing/cardRendererFixture.worker.ts", import.meta.url);
+  const named = (name: string) => ({ ...quietMember, name });
+  const answerOf = (png: Uint8Array) => new TextDecoder().decode(png);
+
+  test("a card queued behind one whose thread crashed draws on a new thread", async () => {
+    const render = cardRenderer(fixture, { deadlineMs: 10_000 });
+    const before = answerOf(await render(named("before"), noArt, cardWordsOf(quietMember)));
+
+    const [crashed, after] = await Promise.allSettled([render(named("crash"), noArt, cardWordsOf(quietMember)), render(named("after"), noArt, cardWordsOf(quietMember))]);
+
+    expect(crashed.status).toBe("rejected");
+    expect(after.status).toBe("fulfilled");
+    const drawnAfter = answerOf((after as PromiseFulfilledResult<Uint8Array>).value);
+    expect(drawnAfter).toMatch(/^after on thread \d+$/);
+    expect(drawnAfter.split(" ").at(-1)).not.toBe(before.split(" ").at(-1));
+  });
+
+  test("a render past its deadline fails, and the card queued behind it draws on a new thread", async () => {
+    const render = cardRenderer(fixture, { deadlineMs: 300 });
+
+    const [stalled, after] = await Promise.allSettled([render(named("stall"), noArt, cardWordsOf(quietMember)), render(named("after"), noArt, cardWordsOf(quietMember))]);
+
+    expect(stalled.status).toBe("rejected");
+    expect(String((stalled as PromiseRejectedResult).reason)).toMatch(/deadline/);
+    expect(after.status).toBe("fulfilled");
+    expect(answerOf((after as PromiseFulfilledResult<Uint8Array>).value)).toMatch(/^after on thread \d+$/);
+  });
+
+  test("an idle renderer thread doesn't hold the process open", async () => {
+    const renderer = new URL("./cardRenderer.ts", import.meta.url).href;
+    const words = { quiet: "", quietLine: "", place: "", rarity: null, foundDay: null };
+    const script = `const { renderedCard } = await import(${JSON.stringify(renderer)});
+const png = await renderedCard(${JSON.stringify(quietMember)}, ${JSON.stringify(noArt)}, ${JSON.stringify(words)});
+console.log("drawn", png.byteLength);`;
+    const folder = mkdtempSync(join(tmpdir(), "card-renderer-"));
+    const file = join(folder, "drawOne.mjs");
+    writeFileSync(file, script);
+    onTestFinished(() => rmSync(folder, { recursive: true, force: true }));
+    const child = spawn(process.execPath, [file], { stdio: ["ignore", "pipe", "inherit"] });
+    let out = "";
+    child.stdout.on("data", (chunk: Buffer) => (out += chunk.toString()));
+
+    const exited = await new Promise<number | "still running">((resolve) => {
+      const late = setTimeout(() => (child.kill(), resolve("still running")), 25_000);
+      child.on("exit", (code) => (clearTimeout(late), resolve(code ?? -1)));
+    });
+
+    expect(out).toMatch(/^drawn \d+/);
+    expect(exited).toBe(0);
+  });
+});
+
+describe("art is bounded before it reaches the renderer", () => {
+  const face = "https://res.cloudinary.com/posthog/face.png";
+  const withFace = { ...quietMember, face: { picture: face, initials: "IF" } };
+  const answering = (bytes: Uint8Array, type: string) => vi.stubGlobal("fetch", async () => new Response(Buffer.from(bytes), { headers: { "content-type": type } }));
+
+  test.each([
+    ["a PNG", pngOf(64, 64), "image/png"],
+    ["a JPEG", jpegOf(64, 64), "image/jpeg"],
+    ["a GIF", gifOf(64, 64), "image/gif"],
+  ])("%s within the ceiling is drawn", async (_, bytes, type) => {
+    answering(bytes, type);
+
+    const { art, lasting } = await artOf(withFace);
+
+    expect(art.face).toBe(`data:${type};base64,${Buffer.from(bytes).toString("base64")}`);
+    expect(lasting).toBe(true);
+  });
+
+  test.each([
+    ["a PNG wider than the ceiling", pngOf(20_000, 64), "image/png"],
+    ["a PNG taller than the ceiling", pngOf(64, 20_000), "image/png"],
+    ["a JPEG larger than the ceiling", jpegOf(30_000, 30_000), "image/jpeg"],
+    ["a GIF larger than the ceiling", gifOf(9_000, 9_000), "image/gif"],
+    ["a file whose header isn't its type's", new TextEncoder().encode("not a picture at all"), "image/png"],
+    ["a file past the download cap", padded(pngOf(64, 64), 3 * 1_048_576), "image/png"],
+  ])("%s isn't drawn, and the card keeps without it", async (_, bytes, type) => {
+    answering(bytes, type);
+
+    const { art, lasting } = await artOf(withFace);
+
+    expect(art.face).toBeNull();
+    expect(lasting).toBe(true);
+  });
+});
+
 describe("LP101: a card's key is a hash of its facts", () => {
   test("the same facts give the same key", async () => {
     expect(await cardKeyOf({ ...richMember })).toBe(await cardKeyOf(richMember));
@@ -148,6 +240,34 @@ describe("LP101: a card's key is a hash of its facts", () => {
     expect(await cardKeyOf({ ...richMember, ...change })).not.toBe(await cardKeyOf(richMember));
   });
 });
+
+function pngOf(width: number, height: number) {
+  const bytes = new Uint8Array(33);
+  bytes.set(pngSignature);
+  const view = new DataView(bytes.buffer);
+  view.setUint32(8, 13);
+  bytes.set(new TextEncoder().encode("IHDR"), 12);
+  view.setUint32(16, width);
+  view.setUint32(20, height);
+  bytes.set([8, 6, 0, 0, 0], 24);
+  return bytes;
+}
+
+function jpegOf(width: number, height: number) {
+  const app0 = [0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00];
+  const sof0 = [0xff, 0xc0, 0x00, 0x11, 0x08, height >> 8, height & 0xff, width >> 8, width & 0xff, 0x03, 0x01, 0x22, 0x00, 0x02, 0x11, 0x01, 0x03, 0x11, 0x01];
+  return new Uint8Array([0xff, 0xd8, ...app0, ...sof0, 0xff, 0xd9]);
+}
+
+function gifOf(width: number, height: number) {
+  return new Uint8Array([...new TextEncoder().encode("GIF89a"), width & 0xff, width >> 8, height & 0xff, height >> 8, 0, 0, 0, 0x3b]);
+}
+
+function padded(bytes: Uint8Array, size: number) {
+  const all = new Uint8Array(size);
+  all.set(bytes);
+  return all;
+}
 
 function dimensionsOf(png: Uint8Array) {
   const header = new DataView(png.buffer, png.byteOffset + 16, 8);
