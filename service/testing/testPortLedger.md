@@ -82,7 +82,7 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/companyProfiles/faces.test.ts | S12 | | |
 | convex/companyProfiles/matcher.test.ts | S12 | | |
 | convex/companyProfiles/storedFaces.test.ts | S12 | | |
-| convex/companyProfiles/sync.test.ts | S12 | | |
+| convex/companyProfiles/sync.test.ts | S12 | service/src/companyProfiles/sync.test.ts | |
 | convex/engine/awardsInsertOnly.test.ts | S4 | | |
 | convex/engine/engine.test.ts | S4 | | |
 | convex/engine/home.test.ts | S4 | | |

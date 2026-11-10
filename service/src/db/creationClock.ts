@@ -1,4 +1,4 @@
-// The creation clock (schema/service.ts, migration 0005): the highest `_creationTime` any writer has used, which every
+// The creation clock (schema/service.ts, migration 0006): the highest `_creationTime` any writer has used, which every
 // runner's new rows stamp after, so "the latest" by `_creationTime` is the row written last whichever runner wrote it.
 // It holds a float64 as an int64 that orders the same way: a non-negative one's bits as they are, a negative one's
 // with all but the sign bit flipped. Exact, so no stamp rounds below the one it keys.

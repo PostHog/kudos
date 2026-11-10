@@ -5,7 +5,7 @@ import pg from "pg";
 import { afterEach, describe, expect, inject, test } from "vitest";
 import { chunksOf, zip } from "../../testing/zip.ts";
 import { useTestDatabase, withSearchPath } from "../../testing/database.ts";
-import { decodeStored, printExport, type Value } from "../db/codec.ts";
+import { decodeStored, encodeStored, printExport, type Value } from "../db/codec.ts";
 import { fromDocument, toDocument } from "../db/documents.ts";
 import { archive, files, hypeReactions, kudosMessages, members, wordDeletionRequests } from "../db/schema/index.ts";
 import { createPool } from "../db/pool.ts";
@@ -21,6 +21,7 @@ const db = drizzle({ client: database.pool });
 const token = "a-load-token";
 
 type Doc = { [field: string]: Value };
+const printStored = (doc: Doc) => encodeStored(doc).replaceAll("'", "''");
 const jsonl = (docs: Doc[]) => docs.map((doc) => printExport(doc)).join("\n") + (docs.length ? "\n" : "");
 
 interface Copy {
@@ -70,17 +71,18 @@ interface Status {
   stagedChunks: number;
   entries: Array<{ entry: string; lines: number; done: boolean }>;
   reports: Array<Record<string, string>>;
+  roundTrip: { equal: boolean; tables: Array<{ table: string; snapshot: { rows: number; hash: string }; copy: { rows: number; hash: string }; equal: boolean }> } | null;
 }
 
 async function status(service: Copy): Promise<Status> {
   return (await (await service.request("/admin/load")).json()) as Status;
 }
 
-/** Waits until the load leaves `loading` or stops on an error. */
+/** Waits until the load is written and round-tripped, or stops on an error. */
 async function settled(service: Copy): Promise<Status> {
   for (let tries = 0; tries < 600; tries++) {
     const now = await status(service);
-    if (now.phase !== "loading" || now.error !== null) return now;
+    if ((now.phase !== "loading" && now.phase !== "verifying") || now.error !== null) return now;
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
   throw new Error("The load didn't settle");
@@ -170,7 +172,24 @@ describe("loading a Convex snapshot", () => {
     expect(started.status, "finish starts the load").toBe(202);
     const done = await settled(service);
 
-    expect(done, "the load wrote every entry and waits for its round trip").toMatchObject({ phase: "verifying", error: null });
+    expect(done, "the load wrote every entry, its round trip is equal, and recovery is next").toMatchObject({ phase: "recovering", error: null });
+    expect(
+      done.roundTrip?.tables.map(({ table, snapshot, copy, equal }) => [table, snapshot.rows, copy.rows, equal]),
+      "every table and each namespace's files, counted on both sides",
+    ).toStrictEqual([
+      ["_components/app/hypeReactions", 1, 1, true],
+      ["_components/posthog/_storage", 1, 1, true],
+      ["_components/posthog/_storage/files", 1, 1, true],
+      ["_components/posthog/flags", 1, 1, true],
+      ["_scheduled_functions", 1, 1, true],
+      ["_storage", 2, 2, true],
+      ["_storage/files", 2, 2, true],
+      ["authAccounts", 1, 1, true],
+      ["hypeReactions", 3, 3, true],
+      ["kudosMessages", 2, 2, true],
+      ["retiredTable", 1, 1, true],
+      ["wordDeletionRequests", 2, 2, true],
+    ]);
     expect(await documents(kudosMessages), "messages keep _id, _creationTime, int64 and optional fields").toStrictEqual(messages);
     expect(await documents(wordDeletionRequests), "a null author stays null").toStrictEqual(deletions);
     expect((await documents(hypeReactions)).map((doc) => doc.at), "-0 and NaN are stored").toStrictEqual([-0, Number.NaN, 5]);
@@ -222,7 +241,7 @@ describe("loading a Convex snapshot", () => {
     const service = await copy();
 
     expect((await finish(service, archive)).status).toBe(202);
-    expect(await settled(service), "loaded").toMatchObject({ phase: "verifying", error: null });
+    expect(await settled(service), "loaded").toMatchObject({ phase: "recovering", error: null });
 
     const behind = createOperations({ pool: database.pool, clock: createClock({ real: () => 1_700_000_000_000 }), log: { info: () => {}, error: () => {} } });
     const stamp = await behind.mutation("write after the load", async ({ newRow }) => newRow()._creationTime);
@@ -246,7 +265,7 @@ describe("loading a Convex snapshot", () => {
     );
     const done = await settled(second);
 
-    expect(done, "the load finishes").toMatchObject({ phase: "verifying", error: null });
+    expect(done, "the load finishes").toMatchObject({ phase: "recovering", error: null });
     const logs = [...first.logs, ...second.logs];
     expect(logs, "the owner's load was interrupted, not stopped").toContain("load interrupted");
     expect(logs.filter((line) => line === "load running").length, "a copy took it over").toBeGreaterThanOrEqual(2);
@@ -261,9 +280,190 @@ describe("loading a Convex snapshot", () => {
     await finish(first, zip({ "hypeReactions/documents.jsonl": jsonl(reactions) }));
     const done = await settled(first);
 
-    expect(done, "the load finishes").toMatchObject({ phase: "verifying", error: null });
+    expect(done, "the load finishes").toMatchObject({ phase: "recovering", error: null });
     expect([...first.logs, ...second.logs].filter((line) => line === "load running"), "one copy ran it, once").toStrictEqual(["load running"]);
     expect((await documents(hypeReactions)).length, "every row once").toBe(reactions.length);
+  });
+});
+
+describe("the round trip", () => {
+  test("a copy that differs from its snapshot fails it, named by table and never by content", async () => {
+    const asset = Buffer.from("<svg/>");
+    const sha256 = createHash("sha256").update(asset).digest("base64");
+    const stored = (id: string): Doc => ({ _id: id, _creationTime: 1, sha256, size: BigInt(asset.length), contentType: null, internalId: `i-${id}` });
+    const service = await copy();
+    await finish(
+      service,
+      zip({
+        "hypeReactions/documents.jsonl": jsonl([reaction("h1"), reaction("h2")]),
+        "kudosMessages/documents.jsonl": jsonl([message("k1")]),
+        "_storage/documents.jsonl": jsonl([stored("st1")]),
+        "_storage/st1": asset,
+        "_components/c1/_storage/documents.jsonl": jsonl([stored("cs1")]),
+        "_components/c1/_storage/cs1": asset,
+      }),
+    );
+    expect(await settled(service), "the untouched copy is equal").toMatchObject({ phase: "recovering", roundTrip: { equal: true } });
+
+    // The copy drifts from the snapshot, then the load is back at its round trip, as after a restart while verifying.
+    await database.pool.query(`update "hypeReactions" set emoji = 'a-secret-emoji' where _id = 'h1'`);
+    await database.pool.query(`update files set bytes = '\\x00'`);
+    await database.pool.query(`update archive set document = '{"_id":"cs1","_creationTime":1,"bytes":{"$bytes":"AA=="}}' where "table" = '_storage/bytes'`);
+    await database.pool.query(`update "loadState" set phase = 'verifying', "roundTrip" = null`);
+    await waitFor(async () => (await status(service)).error !== null);
+
+    const failed = await status(service);
+    expect(failed, "the load stops before recovery").toMatchObject({
+      phase: "verifying",
+      error: "The round trip differs on _components/c1/_storage/files, _storage/files, hypeReactions",
+    });
+    expect(
+      failed.roundTrip?.tables.filter((table) => !table.equal).map(({ table, snapshot, copy }) => [table, snapshot.rows, copy.rows]),
+      "each differing table, with its counts",
+    ).toStrictEqual([
+      ["_components/c1/_storage/files", 1, 1],
+      ["_storage/files", 1, 1],
+      ["hypeReactions", 2, 2],
+    ]);
+    expect(JSON.stringify(failed), "no row content").not.toMatch(/a-secret-emoji|tada|svg/);
+    expect((await service.request("/anything", { token: null })).status, "the app still holds").toBe(503);
+  });
+
+  /** Sends the load back to its round trip, as after a restart while verifying, and waits for the answer. */
+  const reverify = async (service: Copy): Promise<Status> => {
+    await database.pool.query(`update "loadState" set phase = 'verifying', "roundTrip" = null, error = null`);
+    await waitFor(async () => (await status(service)).roundTrip !== null);
+    return status(service);
+  };
+  const differing = (answer: Status) => answer.roundTrip?.tables.filter((table) => !table.equal).map((table) => table.table);
+
+  test("each stored file's metadata in files counts, not only its bytes", async () => {
+    const asset = Buffer.from("<svg/>");
+    const doc: Doc = { _id: "st1", _creationTime: 1, sha256: createHash("sha256").update(asset).digest("base64"), size: BigInt(asset.length), contentType: "image/svg+xml", internalId: "i1" };
+    const service = await copy();
+    await finish(service, zip({ "_storage/documents.jsonl": jsonl([doc]), "_storage/st1": asset }));
+    expect(await settled(service), "equal as loaded").toMatchObject({ phase: "recovering" });
+
+    for (const change of [`size = 7`, `"contentType" = 'text/plain'`, `"contentType" = null`, `sha256 = 'AAAA'`, `"_creationTime" = 2`]) {
+      await database.pool.query(`update files set ${change}`);
+      expect(differing(await reverify(service)), change).toStrictEqual(["_storage/files"]);
+      await database.pool.query(`delete from files`);
+      await database.pool.query(`insert into files ("_id", "_creationTime", sha256, size, "contentType", bytes) values ('st1', 1, $1, $2, 'image/svg+xml', $3)`, [doc.sha256, asset.length, asset]);
+    }
+    expect(differing(await reverify(service)), "restored").toStrictEqual([]);
+  });
+
+  test("an archive row's key columns count, and so does any row in the service's own tables", async () => {
+    const service = await copy();
+    await finish(service, zip({ "authAccounts/documents.jsonl": jsonl([{ _id: "a1", _creationTime: 5, provider: "slack" }]) }));
+    await settled(service);
+
+    await database.pool.query(`update archive set "_id" = 'a2'`);
+    expect(differing(await reverify(service)), "the archive's _id column").toStrictEqual(["authAccounts"]);
+    await database.pool.query(`update archive set "_id" = 'a1', "_creationTime" = 6`);
+    expect(differing(await reverify(service)), "the archive's _creationTime column").toStrictEqual(["authAccounts"]);
+    await database.pool.query(`update archive set "_creationTime" = 5`);
+    await database.pool.query(`insert into crons (id, "nextRun") values ('a-cron', 1)`);
+    const answer = await reverify(service);
+    expect(differing(answer), "a service table that should be empty").toStrictEqual(["(service) crons"]);
+    expect(answer.error, "named in the stop").toBe("The round trip differs on (service) crons");
+  });
+
+  test("an empty table is answered with its zero counts, and stored bytes without a document count as a file the copy lacks", async () => {
+    const service = await copy();
+    await finish(service, zip({ "hypeReactions/documents.jsonl": "", "_storage/documents.jsonl": "", "_storage/st9": "orphan" }));
+    const answer = await settled(service);
+
+    expect(
+      answer.roundTrip?.tables.map(({ table, snapshot, copy, equal }) => [table, snapshot.rows, copy.rows, equal]),
+      "every table of the snapshot is answered",
+    ).toStrictEqual([
+      ["_storage", 0, 0, true],
+      ["_storage/files", 1, 0, false],
+      ["hypeReactions", 0, 0, true],
+    ]);
+  });
+
+  test("a NaN with its own sign or payload equals the one NaN the copy keeps", async () => {
+    // Convex's export keeps a NaN's bits; the stored form keeps one NaN on purpose, in a column or an archived document.
+    const nan = Buffer.from("010000000000f8ff", "hex").toString("base64");
+    const at = printExport(reaction("h1")).replace(/"at":[^,}]+/, `"at":{"$float":"${nan}"}`);
+    const service = await copy();
+    await finish(service, zip({ "hypeReactions/documents.jsonl": `${at}\n`, "retired/documents.jsonl": `{"_id":"r1","_creationTime":1.0,"n":{"$float":"${nan}"}}\n` }));
+    expect(await settled(service), "both tables are equal").toMatchObject({ phase: "recovering", roundTrip: { equal: true } });
+  });
+
+  test("a database migrated before the round trip's column still reads the load's state", async () => {
+    const schema = `load_older_${process.env.VITEST_POOL_ID ?? "0"}`;
+    const admin = new pg.Client({ connectionString: inject("databaseUrl") });
+    await admin.connect();
+    await admin.query(`drop schema if exists "${schema}" cascade; create schema "${schema}"`);
+    await admin.query(`create table "${schema}"."loadState" (key text primary key, phase text not null, "tokenHash" text not null, chunks integer, sha256 text, error text)`);
+    await admin.query(`insert into "${schema}"."loadState" values ('load', 'loading', 'x', 3, 'y', null)`);
+    await admin.end();
+    const pool = createPool(withSearchPath(inject("databaseUrl"), schema));
+    try {
+      const load = createLoadControl({ pool, token: undefined, log: { info: () => {}, error: () => {} } });
+      await load.refresh();
+      expect(load.held(), "a load is under way, so the copy holds while it migrates").toBe(true);
+    } finally {
+      await pool.end();
+    }
+  });
+
+  test("where a row is stored and under which key counts, not only its document", async () => {
+    const asset = Buffer.from("<svg/>");
+    const stored: Doc = { _id: "cs1", _creationTime: 1, sha256: createHash("sha256").update(asset).digest("base64"), size: BigInt(asset.length), contentType: null, internalId: "i1" };
+    const service = await copy();
+    await finish(
+      service,
+      zip({
+        "hypeReactions/documents.jsonl": jsonl([reaction("h1")]),
+        "authAccounts/documents.jsonl": jsonl([{ _id: "a1", _creationTime: 5, archiveKey: ["a2", 6] }]),
+        "_components/c1/flags/documents.jsonl": jsonl([{ _id: "f1", _creationTime: 1 }]),
+        "_components/c1/_storage/documents.jsonl": jsonl([stored]),
+        "_components/c1/_storage/cs1": asset,
+      }),
+    );
+    expect(await settled(service), "equal as loaded").toMatchObject({ phase: "recovering" });
+    const changes: Array<[string, string, string]> = [
+      [`delete from "hypeReactions"; insert into archive select 'app', 'hypeReactions', a._id, a."_creationTime", a.document from (select '${reaction("h1")._id}' as _id, 1700000000001::float8 as "_creationTime", '${printStored(reaction("h1"))}'::jsonb as document) a`, "hypeReactions", "a live row moved into the archive"],
+      [`update archive set "_id" = 'a2', "_creationTime" = 6 where "table" = 'authAccounts'`, "authAccounts", "keys changed to what a field of the document holds"],
+      [`update archive set source = '_components', "table" = 'c1/flags' where "table" = 'flags'`, "_components/c1/flags", "a source and table that flatten to the same path"],
+      [`update archive set document = jsonb_set(document, '{_id}', '"cs2"') where "table" = '_storage/bytes'`, "_components/c1/_storage/files", "the _id inside a component's bytes document"],
+      [`update archive set document = jsonb_set(document, '{_creationTime}', '2') where "table" = '_storage/bytes'`, "_components/c1/_storage/files", "the _creationTime inside it"],
+      [`insert into files ("_id", "_creationTime", sha256, size, bytes) values ('', 1, 'x', 0, '')`, "_storage/files", "a file whose _id is empty"],
+    ];
+    const restore = await database.pool.query<{ source: string; table: string; _id: string; _creationTime: number; document: string }>("select * from archive");
+    for (const [change, table, why] of changes) {
+      await database.pool.query(change);
+      expect(differing(await reverify(service)), why).toContain(table);
+      await database.pool.query(`delete from archive; delete from files; delete from "hypeReactions"`);
+      for (const row of restore.rows) {
+        await database.pool.query(`insert into archive values ($1, $2, $3, $4, $5)`, [row.source, row.table, row._id, row._creationTime, row.document]);
+      }
+      await db.insert(hypeReactions).values(fromDocument(hypeReactions, reaction("h1")) as never);
+      expect(differing(await reverify(service)), `restored after: ${why}`).toStrictEqual([]);
+    }
+  });
+
+  test("a row missing from the copy, or one it gained, counts on its table", async () => {
+    const service = await copy();
+    await finish(service, zip({ "hypeReactions/documents.jsonl": jsonl([reaction("h1"), reaction("h2")]) }));
+    await settled(service);
+
+    await database.pool.query(`delete from "hypeReactions" where _id = 'h2'`);
+    await database.pool.query(`insert into archive (source, "table", _id, "_creationTime", document) values ('app', 'extra', 'x1', 1, '{"_id":"x1","_creationTime":1}')`);
+    await database.pool.query(`update "loadState" set phase = 'verifying', "roundTrip" = null`);
+    await waitFor(async () => (await status(service)).error !== null);
+
+    expect(
+      (await status(service)).roundTrip?.tables.map(({ table, snapshot, copy, equal }) => [table, snapshot.rows, copy.rows, equal]),
+      "the snapshot's and the copy's counts",
+    ).toStrictEqual([
+      ["extra", 0, 1, false],
+      ["hypeReactions", 2, 1, false],
+    ]);
   });
 });
 
@@ -271,13 +471,21 @@ describe("tables the data model doesn't own", () => {
   test("a retired table named like one of the service's own is archived verbatim, not loaded into it", async () => {
     const service = await copy();
     const retired = { _id: "r1", _creationTime: 1, oldField: "kept" };
-    await finish(service, zip({ "files/documents.jsonl": jsonl([retired]), "archive/documents.jsonl": jsonl([{ ...retired, _id: "r2" }]) }));
+    await finish(
+      service,
+      zip({
+        "files/documents.jsonl": jsonl([retired]),
+        "archive/documents.jsonl": jsonl([{ ...retired, _id: "r2" }]),
+        "jobs/documents.jsonl": jsonl([{ ...retired, _id: "r3" }]),
+      }),
+    );
 
-    expect(await settled(service), "the load writes them").toMatchObject({ phase: "verifying", error: null });
+    expect(await settled(service), "the load writes them").toMatchObject({ phase: "recovering", error: null });
     expect(await documents(files), "no stored file").toStrictEqual([]);
     expect(await documents(archive), "both archived").toStrictEqual([
       { source: "app", table: "files", _id: "r1", _creationTime: 1, document: retired },
       { source: "app", table: "archive", _id: "r2", _creationTime: 1, document: { ...retired, _id: "r2" } },
+      { source: "app", table: "jobs", _id: "r3", _creationTime: 1, document: { ...retired, _id: "r3" } },
     ]);
   });
 
@@ -340,6 +548,21 @@ describe("what stops a load", () => {
     expect((await settled(service)).error, "too large").toBe(`Stored file st1 is larger than the loader takes (${maxFileBytes} bytes)`);
   });
 
+  test("stored bytes in a namespace without _storage documents", async () => {
+    expect((await stops({ "_storage/f1": "orphan" })).error, "bytes the loader would drop").toBe("The snapshot has stored bytes without a _storage document: _storage/f1");
+  });
+
+  test("two stored bytes entries for one file, which the loader would read only one of", async () => {
+    const doc: Doc = { _id: "st1", _creationTime: 1, sha256: createHash("sha256").update("abc").digest("base64"), size: 3n, contentType: null, internalId: "i1" };
+    expect((await stops({ "_storage/documents.jsonl": jsonl([doc]), "_storage/st1.png": "lost", "_storage/st1.jpg": "abc" })).error, "in the app").toBe(
+      "The snapshot has two stored bytes entries for file st1: _storage/st1.jpg and _storage/st1.png",
+    );
+    await copies[0]!.request("/admin/load/reset", { method: "POST" });
+    expect((await stops({ "_components/c1/_storage/documents.jsonl": jsonl([doc]), "_components/c1/_storage/st1": "abc", "_components/c1/_storage/st1.txt": "lost" })).error, "in a component").toBe(
+      "The snapshot has two stored bytes entries for file st1: _components/c1/_storage/st1 and _components/c1/_storage/st1.txt",
+    );
+  });
+
   test("a stored file whose bytes don't match its document", async () => {
     const doc: Doc = { _id: "st1", _creationTime: 1, sha256: "AAAA", size: 3n, contentType: null, internalId: "i1" };
     expect((await stops({ "_storage/documents.jsonl": jsonl([doc]), "_storage/st1": "abc" })).error, "a bad hash").toBe(
@@ -397,7 +620,7 @@ describe("the admin path and the hold", () => {
     expect(await status(service), "nothing left, back to staging").toMatchObject({ phase: "staging", error: null, stagedChunks: 0, entries: [] });
     expect((await copy({ adminToken: undefined })).load.held(), "a copy without the token still holds after the reset").toBe(true);
     await finish(service, zip({ "hypeReactions/documents.jsonl": jsonl([reaction("h1")]) }));
-    expect(await settled(service), "a new load").toMatchObject({ phase: "verifying", error: null });
+    expect(await settled(service), "a new load").toMatchObject({ phase: "recovering", error: null });
   });
 
   test("a stopped load resumes from its checkpoint when finished again, and only with its own snapshot", async () => {
