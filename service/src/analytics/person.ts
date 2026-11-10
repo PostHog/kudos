@@ -7,6 +7,7 @@ import type { Id } from "../db/columns.ts";
 import { encodeStored } from "../db/codec.ts";
 import { toDocument } from "../db/documents.ts";
 import { analyticsIds, analyticsOutbox, type Doc } from "../db/schema/index.ts";
+import { unique } from "../db/unique.ts";
 import type { MutationContext, QueryContext } from "../operations.ts";
 import { captureSettings } from "./capture.ts";
 import { followMembersJob } from "./person.map.ts";
@@ -124,11 +125,10 @@ async function identityOf(ctx: QueryContext, member: MemberId): Promise<Identity
   return row ? toDocument<Identity>(analyticsIds, row) : null;
 }
 
-/** The identity with this analytics ID, or `null`; two would be a broken invariant, as Convex's `unique()` says. */
+/** The identity with this analytics ID, or `null`; two throw Convex's `unique()` refusal, which the sweep reports by table. */
 async function identityWithAnalyticsId(ctx: QueryContext, analyticsId: string): Promise<Identity | null> {
-  const rows = await ctx.tx.select().from(analyticsIds).where(eq(analyticsIds.analyticsId, analyticsId)).limit(2);
-  if (rows.length > 1) throw new Error("Two analytics identities share one analytics ID");
-  return rows[0] ? toDocument<Identity>(analyticsIds, rows[0]) : null;
+  const row = unique("analyticsIds", await ctx.tx.select().from(analyticsIds).where(eq(analyticsIds.analyticsId, analyticsId)).limit(2));
+  return row ? toDocument<Identity>(analyticsIds, row) : null;
 }
 
 export { catchUp, catchUpArgs, catchUpJob, followMembers, followMembersArgs, followMembersJob, followPeople, followPeopleArgs, followPeopleJob, followPeopleLater, identifyNewPeople, identifyNewPeopleArgs, identifyNewPeopleJob, type PersonProfile, profileKeys, requestCatchUp } from "./person.map.ts";
