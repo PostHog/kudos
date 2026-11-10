@@ -299,6 +299,79 @@ describe("the round trip", () => {
     expect((await service.request("/anything", { token: null })).status, "the app still holds").toBe(503);
   });
 
+  /** Sends the load back to its round trip, as after a restart while verifying, and waits for the answer. */
+  const reverify = async (service: Copy): Promise<Status> => {
+    await database.pool.query(`update "loadState" set phase = 'verifying', "roundTrip" = null, error = null`);
+    await waitFor(async () => (await status(service)).roundTrip !== null);
+    return status(service);
+  };
+  const differing = (answer: Status) => answer.roundTrip?.tables.filter((table) => !table.equal).map((table) => table.table);
+
+  test("each stored file's metadata in files counts, not only its bytes", async () => {
+    const asset = Buffer.from("<svg/>");
+    const doc: Doc = { _id: "st1", _creationTime: 1, sha256: createHash("sha256").update(asset).digest("base64"), size: BigInt(asset.length), contentType: "image/svg+xml", internalId: "i1" };
+    const service = await copy();
+    await finish(service, zip({ "_storage/documents.jsonl": jsonl([doc]), "_storage/st1": asset }));
+    expect(await settled(service), "equal as loaded").toMatchObject({ phase: "recovering" });
+
+    for (const change of [`size = 7`, `"contentType" = 'text/plain'`, `"contentType" = null`, `sha256 = 'AAAA'`, `"_creationTime" = 2`]) {
+      await database.pool.query(`update files set ${change}`);
+      expect(differing(await reverify(service)), change).toStrictEqual(["_storage/files"]);
+      await database.pool.query(`delete from files`);
+      await database.pool.query(`insert into files ("_id", "_creationTime", sha256, size, "contentType", bytes) values ('st1', 1, $1, $2, 'image/svg+xml', $3)`, [doc.sha256, asset.length, asset]);
+    }
+    expect(differing(await reverify(service)), "restored").toStrictEqual([]);
+  });
+
+  test("an archive row's key columns count, and so does any row in the service's own tables", async () => {
+    const service = await copy();
+    await finish(service, zip({ "authAccounts/documents.jsonl": jsonl([{ _id: "a1", _creationTime: 5, provider: "slack" }]) }));
+    await settled(service);
+
+    await database.pool.query(`update archive set "_id" = 'a2'`);
+    expect(differing(await reverify(service)), "the archive's _id column").toStrictEqual(["authAccounts"]);
+    await database.pool.query(`update archive set "_id" = 'a1', "_creationTime" = 6`);
+    expect(differing(await reverify(service)), "the archive's _creationTime column").toStrictEqual(["authAccounts"]);
+    await database.pool.query(`update archive set "_creationTime" = 5`);
+    await database.pool.query(`insert into crons (id, "nextRun") values ('a-cron', 1)`);
+    const answer = await reverify(service);
+    expect(differing(answer), "a service table that should be empty").toStrictEqual(["(service) crons"]);
+    expect(answer.error, "named in the stop").toBe("The round trip differs on (service) crons");
+  });
+
+  test("an empty table is answered with its zero counts, and stored bytes without a document count as a file the copy lacks", async () => {
+    const service = await copy();
+    await finish(service, zip({ "hypeReactions/documents.jsonl": "", "_storage/documents.jsonl": "", "_storage/st9": "orphan" }));
+    const answer = await settled(service);
+
+    expect(
+      answer.roundTrip?.tables.map(({ table, snapshot, copy, equal }) => [table, snapshot.rows, copy.rows, equal]),
+      "every table of the snapshot is answered",
+    ).toStrictEqual([
+      ["_storage", 0, 0, true],
+      ["_storage/files", 1, 0, false],
+      ["hypeReactions", 0, 0, true],
+    ]);
+  });
+
+  test("a database migrated before the round trip's column still reads the load's state", async () => {
+    const schema = `load_older_${process.env.VITEST_POOL_ID ?? "0"}`;
+    const admin = new pg.Client({ connectionString: inject("databaseUrl") });
+    await admin.connect();
+    await admin.query(`drop schema if exists "${schema}" cascade; create schema "${schema}"`);
+    await admin.query(`create table "${schema}"."loadState" (key text primary key, phase text not null, "tokenHash" text not null, chunks integer, sha256 text, error text)`);
+    await admin.query(`insert into "${schema}"."loadState" values ('load', 'loading', 'x', 3, 'y', null)`);
+    await admin.end();
+    const pool = createPool(withSearchPath(inject("databaseUrl"), schema));
+    try {
+      const load = createLoadControl({ pool, token: undefined, log: { info: () => {}, error: () => {} } });
+      await load.refresh();
+      expect(load.held(), "a load is under way, so the copy holds while it migrates").toBe(true);
+    } finally {
+      await pool.end();
+    }
+  });
+
   test("a row missing from the copy, or one it gained, counts on its table", async () => {
     const service = await copy();
     await finish(service, zip({ "hypeReactions/documents.jsonl": jsonl([reaction("h1"), reaction("h2")]) }));

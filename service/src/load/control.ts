@@ -49,14 +49,14 @@ interface State {
   chunks: number | null;
   sha256: string | null;
   error: string | null;
-  roundTrip: string | null;
 }
 
 type Queryable = Pick<pg.Pool, "query"> | pg.PoolClient;
 
 const maxChunkBytes = 16 * 1024 * 1024;
 const sha256 = (data: string | Buffer) => createHash("sha256").update(data).digest();
-const selectState = `select phase, "tokenHash", chunks, sha256, error, "roundTrip" from "loadState" where key = 'load'`;
+// Only 0001's columns: boot reads the state before it migrates, so a later column would fail on an older database.
+const selectState = `select phase, "tokenHash", chunks, sha256, error from "loadState" where key = 'load'`;
 
 /** A load this copy can take on: written or verifying, and not stopped. */
 function runnable(current: State | undefined): boolean {
@@ -212,13 +212,14 @@ export function createLoadControl({ pool, token, log, limits = { rows: 500, byte
       const chunks = await pool.query<{ count: number }>('select count(*)::int as count from "loadChunks"');
       const entries = await pool.query('select entry, lines, done from "loadCheckpoints" order by entry');
       const reports = await pool.query<{ reports: string }>('select reports from "loadCheckpoints" where reports <> \'[]\'::jsonb');
+      const answer = await pool.query<{ roundTrip: string | null }>(`select "roundTrip" from "loadState" where key = 'load'`);
       return c.json({
         phase: current?.phase ?? "none",
         error: current?.error ?? null,
         stagedChunks: chunks.rows[0]!.count,
         entries: entries.rows,
         reports: reports.rows.flatMap((row) => JSON.parse(row.reports) as unknown[]),
-        roundTrip: current?.roundTrip ? (decodeStored(current.roundTrip) as unknown as RoundTrip) : null,
+        roundTrip: answer.rows[0]?.roundTrip ? (decodeStored(answer.rows[0].roundTrip) as unknown as RoundTrip) : null,
       });
     });
 
