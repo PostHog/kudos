@@ -20,7 +20,7 @@ import type { MemberId } from "../workspace/directory.ts";
 import { tick } from "./clock.ts";
 import type { VerifiedMember } from "./memberQuery.ts";
 import { getMyProfile, type MyProfile } from "./profile.ts";
-import { signedInThroughSso, websiteAs } from "./routesTesting.ts";
+import { signedInThroughSso, ssoEmailOf, websiteAs } from "./routesTesting.ts";
 
 const allowedWorkspace = "T1";
 const now = new Date("2026-10-13T10:00:00Z");
@@ -154,6 +154,8 @@ describe("website reads pass one guard", () => {
     });
 
     waitsOn(memberCheck, "a signed-in person the directory doesn't know yet is being verified", async () => {
+      // Slack knows Juno by the email she signs in with, as S15's identity mapping looks her up (users.lookupByEmail).
+      t.slack.withMember(juno.user, { profile: { email: ssoEmailOf(juno.user) } });
       const asSignedIn = await aSession(juno);
       await t.seed.insert("memberVerifications", { workspace: allowedWorkspace, user: juno.user, attempts: 1, state: "pending" });
 
@@ -161,6 +163,8 @@ describe("website reads pass one guard", () => {
     });
 
     waitsOn(memberCheck, "a signed-in person whose verification failed reads unverified, never a member", async () => {
+      // Slack knows Juno by the email she signs in with, as S15's identity mapping looks her up (users.lookupByEmail).
+      t.slack.withMember(juno.user, { profile: { email: ssoEmailOf(juno.user) } });
       const asSignedIn = await aSession(juno);
       await t.seed.insert("memberVerifications", { workspace: allowedWorkspace, user: juno.user, attempts: 3, state: "failed" });
 

@@ -84,8 +84,13 @@ export const argumentsRefused = "the arguments don't fit the route";
  * directory row the workspace already has for them carries, and the website's requests come as them. A made-up email
  * stands in when the person has none. Answers the website's API as that person.
  */
+/** The synthetic email a person signs in through SSO with, unless a test names another. */
+export function ssoEmailOf(user: string): string {
+  return `${user.toLowerCase()}@example.com`;
+}
+
 export async function signedInThroughSso(t: AppUnderTest & { seed: Seeder }, person: { user: string; email?: string }, workspace = "T1") {
-  const email = person.email ?? `${person.user.toLowerCase()}@example.com`;
+  const email = person.email ?? ssoEmailOf(person.user);
   for (const row of await t.seed.all("members")) {
     if (row.workspace === workspace && row.user === person.user && row.email !== email) await t.seed.patch("members", row._id, { email });
   }
