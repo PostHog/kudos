@@ -84,7 +84,7 @@ export const flagRefreshes = pgTable("flagRefreshes", {
 
 /**
  * The creation order every runner shares: the highest `_creationTime` a mutation has stamped, as the order-keeping
- * int64 key of its float64 (operations.ts). A sequence, so moving it forward neither waits for nor conflicts with any
+ * int64 key of its float64 (db/creationClock.ts). A sequence, so moving it forward neither waits for nor conflicts with any
  * transaction; `"advanceCreationClock"` (migration 0005) moves it, and only forward. Unset until the first stamp.
  */
 export const creationClock = pgSequence("creationClock", { minValue: "-9223372036854775808", startWith: "0" });

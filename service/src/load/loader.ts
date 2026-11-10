@@ -9,6 +9,7 @@ import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import type pg from "pg";
 import { decodeStored, encodeStored, parseExport, type Value } from "../db/codec.ts";
+import { advanceCreationClockPastRows } from "../db/creationClock.ts";
 import { fromDocument } from "../db/documents.ts";
 import * as schema from "../db/schema/index.ts";
 import { openSnapshot, type Snapshot } from "./snapshot.ts";
@@ -48,6 +49,8 @@ export async function loadSnapshot(pool: pg.Pool, client: pg.PoolClient, chunks:
   try {
     const plan = planEntries(snapshot);
     for (const step of plan) await loadEntry(client, snapshot, step, limits);
+    // The rows keep Convex's stamps; every row written after the load must still sort after them (db/creationClock.ts).
+    await advanceCreationClockPastRows(client);
   } finally {
     snapshot.close();
   }
