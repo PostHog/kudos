@@ -2,24 +2,26 @@
 // stack. A hug find and a quest hoggie that pass their checks reach S3's directory and S10's draws and rarity caps, the
 // loop lesson S3's settings, the milestone unlocks S9's milestones, and a turned find S10's drops; their tests are in
 // the ported files beside this one.
+import { asc, eq } from "drizzle-orm";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { useTestDatabase } from "../../testing/database.ts";
 import { definitionsStored, onForEveryone, postHogDeciding } from "../../testing/flags.ts";
 import { seeder } from "../../testing/seed.ts";
 import { createClock } from "../clock.ts";
+import type { DomainEvent } from "../bus/events.ts";
 import type { Id } from "../db/columns.ts";
+import { jobs } from "../db/schema/index.ts";
 import type { MessageRef } from "../engine/messageEvent.ts";
+import { createWorker } from "../jobs/worker.ts";
 import type { Log } from "../log.ts";
 import { createOperations, type MutationContext, type QueryContext } from "../operations.ts";
 import { serviceRegistry } from "../registry.ts";
 import type { MemberId } from "../workspace/directory.ts";
 import { turnedFindOf } from "./items/finds.ts";
-import { findOnHug } from "./items/hugFinds.ts";
 import { hypeWaitsForItsItem } from "./items/hypes.ts";
 import { earnItem, markTurned } from "./items/ledger.ts";
-import { earnQuestHoggie } from "./items/questHoggies.ts";
 import type { Turned } from "./items/turn.ts";
-import { earnWelcomeItemOnGreeting, lessonAfter, shownWaitingHoggiesAtTheWelcomeOf, welcomeCrateKey, welcomeItemOwedTo } from "./items/welcome.ts";
+import { lessonAfter, shownWaitingHoggiesAtTheWelcomeOf, welcomeCrateKey, welcomeItemOwedTo } from "./items/welcome.ts";
 import { crateKeyOf, thanksEarningOf } from "./packs.ts";
 
 const database = useTestDatabase();
@@ -33,13 +35,21 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-// The one setup of this file: the operation runner on the test database and the seeder. S4's in-process backend
-// replaces it.
+// The one setup of this file: the operation runner on the test database with the service's own subscribers, the
+// worker over the service's jobs, and the seeder. S4's in-process backend replaces it.
 function backend() {
-  const operations = createOperations({ pool: database.pool, clock: createClock({ real: () => at }), log: quiet, retryDelayMs: () => 1 });
+  const operations = createOperations({ pool: database.pool, clock: createClock({ real: () => at }), log: quiet, retryDelayMs: () => 1, subscribers: serviceRegistry.subscribers });
+  const worker = createWorker({ operations, log: quiet, registry: serviceRegistry.jobs, pollMs: 3_600_000 });
   const seed = seeder(operations);
   return {
     seed,
+    // Publishes the event on the bus and runs every job it queued, as the worker runs them.
+    published: async (event: DomainEvent) => {
+      await operations.mutation("test.publish", (ctx) => ctx.publish(event));
+      expect((await worker.settle(30_000)).done).toBe(true);
+    },
+    ran: (name: string) =>
+      operations.query("test.jobs", async ({ tx }) => tx.select({ state: jobs.state, error: jobs.error }).from(jobs).where(eq(jobs.name, name)).orderBy(asc(jobs._creationTime), asc(jobs._id))),
     // Flags decide only with the flags key set and a subject: the workspace's key stands in for every member.
     flagsOn: async (...keys: string[]) => {
       postHogDeciding("sandbox");
@@ -58,26 +68,37 @@ function backend() {
   }
 }
 
-describe("a source that owes no item earns none", () => {
-  test("a hug without rewards, a quest without a reward key and a greeting that owes no welcome item earn nothing", async () => {
+describe("the album's item jobs run on their events", () => {
+  const hug = (giver: MemberId, rewards?: boolean): DomainEvent => ({ type: "hugGiven", workspace: "T1", giver, message: ref, onKudos: false, at, day: "2026-10-13", ...(rewards === undefined ? {} : { rewards }) });
+  const quest = (member: MemberId, rewardKey?: string): DomainEvent => ({ type: "questFinished", workspace: "T1", member, quest: { kind: "journey", step: "first-thanks" }, at, ...(rewardKey === undefined ? {} : { rewardKey }) });
+  const greeting = (member: MemberId, owesTheWelcomeItem: boolean): DomainEvent => ({ type: "memberGreeted", workspace: "T1", member, owesTheWelcomeItem, at });
+
+  test("a hug without rewards, a quest without a reward key and a greeting that owes no welcome item run their job and earn nothing", async () => {
     const t = backend();
     const alice = await t.member("U_ALICE");
-    const hug = { type: "hugGiven" as const, workspace: "T1", giver: alice, message: ref, onKudos: false, at, day: "2026-10-13" };
-    const quest = { type: "questFinished" as const, workspace: "T1", member: alice, quest: { kind: "journey" as const, step: "first-thanks" as const }, at };
 
-    await t.mutation((ctx) => findOnHug(ctx, { event: hug }));
-    await t.mutation((ctx) => findOnHug(ctx, { event: { ...hug, rewards: false } }));
-    await t.mutation((ctx) => earnQuestHoggie(ctx, { event: quest }));
-    await t.mutation((ctx) => earnWelcomeItemOnGreeting(ctx, { event: { type: "memberGreeted", workspace: "T1", member: alice, owesTheWelcomeItem: false, at } }));
+    for (const event of [hug(alice), hug(alice, false), quest(alice), greeting(alice, false)]) await t.published(event);
 
+    expect(await t.ran("album.items.hugFinds.findOnHug")).toEqual([{ state: "success", error: null }, { state: "success", error: null }]);
+    expect(await t.ran("album.items.questHoggies.earnQuestHoggie")).toEqual([{ state: "success", error: null }]);
+    expect(await t.ran("album.items.welcome.earnWelcomeItemOnGreeting")).toEqual([{ state: "success", error: null }]);
     expect(await t.seed.all("items")).toEqual([]);
   });
 
-  test("the album subscribes its item jobs to hugs, finished quests and greetings", () => {
-    const subscribed = (event: string) => serviceRegistry.subscribers.get(event as never)?.map(({ job }) => job.name);
-    expect(subscribed("hugGiven")).toContain("album.items.hugFinds.findOnHug");
-    expect(subscribed("questFinished")).toContain("album.items.questHoggies.earnQuestHoggie");
-    expect(subscribed("memberGreeted")).toContain("album.items.welcome.earnWelcomeItemOnGreeting");
+  // Waits on S3 and S10: a rewarding hug and a rewarded quest check membership in S3's directory first, and a greeting
+  // that owes the welcome item earns it through S10's rarity caps. Each job ends in that body's stub, which proves the
+  // event reached the job that owes the item; once those stacks land, the jobs earn and this test fails, to be turned
+  // into the earning tests of the ported ledger files.
+  test("a rewarding hug, a rewarded quest and a greeting that owes the welcome item reach the bodies that earn them (waits on S3 S10)", async () => {
+    const t = backend();
+    const alice = await t.member("U_ALICE");
+
+    for (const event of [hug(alice, true), quest(alice, "journey:first-thanks"), greeting(alice, true)]) await t.published(event);
+
+    const notPorted = (path: string) => [{ state: "failed", error: `NotPortedError: ${path} is not ported yet` }];
+    expect(await t.ran("album.items.hugFinds.findOnHug")).toEqual(notPorted("workspace.directory.isMember"));
+    expect(await t.ran("album.items.questHoggies.earnQuestHoggie")).toEqual(notPorted("workspace.directory.isMember"));
+    expect(await t.ran("album.items.welcome.earnWelcomeItemOnGreeting")).toEqual(notPorted("album.hoggies.rarityCaps.earnHoggieItem"));
   });
 });
 
@@ -118,24 +139,33 @@ describe("the welcome item", () => {
 });
 
 describe("a hype waits for its item", () => {
-  test("while hidden items show, until both the sticker and the crate of the first pack for its person are turned", async () => {
-    const t = backend();
-    const [alice, bob, carol] = [await t.member("U_ALICE"), await t.member("U_BOB"), await t.member("U_CAROL")];
-    const pack = await t.pack(alice, bob);
+  async function packWithItems(t: ReturnType<typeof backend>, giver: MemberId, recipient: MemberId) {
+    const pack = await t.pack(giver, recipient);
     const earning = thanksEarningOf((await t.seed.get("thoughtfulPacks", pack))!);
     await t.mutation((ctx) => earnItem(ctx, { ...earning, source: "hoggie", key: crateKeyOf(pack) }));
     await t.mutation((ctx) => earnItem(ctx, { ...earning, source: "sticker", key: pack }));
-    const waits = (person: MemberId) => t.query((ctx) => hypeWaitsForItsItem(ctx, alice, person));
+    return pack;
+  }
 
-    expect(await waits(bob)).toBe(false);
-    await t.flagsOn("hidden-items");
-    expect([await waits(bob), await waits(carol)]).toEqual([true, false]);
+  for (const [first, second] of [["sticker", "hoggie"], ["hoggie", "sticker"]] as const) {
+    test(`while hidden items show, until the first pack's ${first} and then its ${second} are both turned, whatever a later pack holds`, async () => {
+      const t = backend();
+      const [alice, bob, carol] = [await t.member("U_ALICE"), await t.member("U_BOB"), await t.member("U_CAROL")];
+      const pack = await packWithItems(t, alice, bob);
+      await packWithItems(t, alice, bob);
+      const keyOf = { sticker: pack, hoggie: crateKeyOf(pack) };
+      const waits = (person: MemberId) => t.query((ctx) => hypeWaitsForItsItem(ctx, alice, person));
 
-    await t.mutation((ctx) => markTurned(ctx, alice, "sticker", pack, at + 1));
-    expect(await waits(bob)).toBe(true);
-    await t.mutation((ctx) => markTurned(ctx, alice, "hoggie", crateKeyOf(pack), at + 2));
-    expect(await waits(bob)).toBe(false);
-  });
+      expect(await waits(bob)).toBe(false);
+      await t.flagsOn("hidden-items");
+      expect([await waits(bob), await waits(carol)]).toEqual([true, false]);
+
+      await t.mutation((ctx) => markTurned(ctx, alice, first, keyOf[first], at + 1));
+      expect(await waits(bob)).toBe(true);
+      await t.mutation((ctx) => markTurned(ctx, alice, second, keyOf[second], at + 2));
+      expect(await waits(bob)).toBe(false);
+    });
+  }
 });
 
 describe("a kudos's shared find", () => {
