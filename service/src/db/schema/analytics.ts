@@ -1,8 +1,8 @@
 // Generated once from convex/schema.ts by tools/rewrite/drizzle; owned by hand from here on.
-import { index, pgTable } from "drizzle-orm/pg-core";
-import { bool, creationTime, f64, i64, id, str, value, type Id } from "../columns.ts";
+import { index } from "drizzle-orm/pg-core";
+import { bool, creationTime, documentTable, f64, i64, id, type Id, str, value } from "../columns.ts";
 
-export const analyticsIds = pgTable(
+export const analyticsIds = documentTable(
   "analyticsIds",
   {
     _id: id(),
@@ -19,7 +19,7 @@ export const analyticsIds = pgTable(
   ],
 );
 
-export const workspaceKeys = pgTable(
+export const workspaceKeys = documentTable(
   "workspaceKeys",
   {
     _id: id(),
@@ -32,7 +32,7 @@ export const workspaceKeys = pgTable(
   ],
 );
 
-export const analyticsOutbox = pgTable(
+export const analyticsOutbox = documentTable(
   "analyticsOutbox",
   {
     _id: id(),
@@ -56,7 +56,7 @@ export const analyticsOutbox = pgTable(
   ],
 );
 
-export const recordedFacts = pgTable(
+export const recordedFacts = documentTable(
   "recordedFacts",
   {
     _id: id(),
@@ -68,7 +68,7 @@ export const recordedFacts = pgTable(
   ],
 );
 
-export const analyticsDrain = pgTable(
+export const analyticsDrain = documentTable(
   "analyticsDrain",
   {
     _id: id(),
@@ -81,7 +81,7 @@ export const analyticsDrain = pgTable(
   ],
 );
 
-export const errorSweep = pgTable(
+export const errorSweep = documentTable(
   "errorSweep",
   {
     _id: id(),
@@ -94,7 +94,7 @@ export const errorSweep = pgTable(
   ],
 );
 
-export const watchedJobs = pgTable(
+export const watchedJobs = documentTable(
   "watchedJobs",
   {
     _id: id(),
@@ -106,7 +106,7 @@ export const watchedJobs = pgTable(
   ],
 );
 
-export const reportedJobs = pgTable(
+export const reportedJobs = documentTable(
   "reportedJobs",
   {
     _id: id(),
@@ -118,7 +118,7 @@ export const reportedJobs = pgTable(
   ],
 );
 
-export const flagExposures = pgTable(
+export const flagExposures = documentTable(
   "flagExposures",
   {
     _id: id(),

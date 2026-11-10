@@ -74,7 +74,9 @@ describe("a kudos message that gave nothing", () => {
     await reply(t, "U_CAROL", { kind: "accepted-message-edited" });
     await t.settle();
 
-    expect(t.slack.callsTo("chat.postEphemeral").map(({ user }) => user)).toEqual(["U_ALICE", "U_CAROL"]);
+    // Each delivery is its own job, and the worker runs two at once, so the two givers' replies arrive in either order;
+    // neither giver sees the other's, and Convex's scheduler promised no order between them either.
+    expect(t.slack.callsTo("chat.postEphemeral").map(({ user }) => user).toSorted()).toEqual(["U_ALICE", "U_CAROL"]);
   });
 });
 
