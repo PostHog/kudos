@@ -13,6 +13,8 @@ export const loadState = pgTable("loadState", {
   sha256: text(),
   /** Why the load stopped; a stopped load waits for `finish` again or a reset. */
   error: text(),
+  /** The round trip's answer, table by table, in the stored encoding: counts and hashes, never row content. */
+  roundTrip: value(),
 });
 
 export type LoadPhase = "staging" | "loading" | "verifying" | "recovering" | "done";
