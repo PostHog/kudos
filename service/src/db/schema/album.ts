@@ -1,10 +1,10 @@
 // Generated once from convex/schema.ts by tools/rewrite/drizzle; owned by hand from here on.
 import { sql } from "drizzle-orm";
-import { index, pgTable } from "drizzle-orm/pg-core";
-import { bool, creationTime, f64, i64, id, str, value, type Id } from "../columns.ts";
+import { index } from "drizzle-orm/pg-core";
+import { bool, creationTime, documentTable, f64, i64, id, type Id, str, value } from "../columns.ts";
 import { nullValued } from "../documents.ts";
 
-export const thoughtfulGiverCounts = pgTable(
+export const thoughtfulGiverCounts = documentTable(
   "thoughtfulGiverCounts",
   {
     _id: id(),
@@ -18,7 +18,7 @@ export const thoughtfulGiverCounts = pgTable(
   ],
 );
 
-export const drops = pgTable(
+export const drops = documentTable(
   "drops",
   {
     _id: id(),
@@ -40,7 +40,7 @@ export const drops = pgTable(
   ],
 );
 
-export const hoggieTallies = pgTable(
+export const hoggieTallies = documentTable(
   "hoggieTallies",
   {
     _id: id(),
@@ -56,7 +56,7 @@ export const hoggieTallies = pgTable(
   ],
 );
 
-export const dropTallies = pgTable(
+export const dropTallies = documentTable(
   "dropTallies",
   {
     _id: id(),
@@ -69,7 +69,7 @@ export const dropTallies = pgTable(
   ],
 );
 
-export const trayDrops = pgTable(
+export const trayDrops = documentTable(
   "trayDrops",
   {
     _id: id(),
@@ -85,7 +85,7 @@ export const trayDrops = pgTable(
   ],
 );
 
-export const hoggieAvatars = pgTable(
+export const hoggieAvatars = documentTable(
   "hoggieAvatars",
   {
     _id: id(),
@@ -98,7 +98,7 @@ export const hoggieAvatars = pgTable(
   ],
 );
 
-export const petHoggies = pgTable(
+export const petHoggies = documentTable(
   "petHoggies",
   {
     _id: id(),
@@ -112,7 +112,7 @@ export const petHoggies = pgTable(
   ],
 );
 
-export const thoughtfulPacks = pgTable(
+export const thoughtfulPacks = documentTable(
   "thoughtfulPacks",
   {
     _id: id(),
@@ -135,7 +135,7 @@ export const thoughtfulPacks = pgTable(
   ],
 );
 
-export const items = pgTable(
+export const items = documentTable(
   "items",
   {
     _id: id(),
@@ -157,7 +157,7 @@ export const items = pgTable(
   ],
 );
 
-export const trayItems = pgTable(
+export const trayItems = documentTable(
   "trayItems",
   {
     _id: id(),
@@ -179,7 +179,7 @@ export const trayItems = pgTable(
   ],
 );
 
-export const grantRecords = pgTable(
+export const grantRecords = documentTable(
   "grantRecords",
   {
     _id: id(),
@@ -197,7 +197,7 @@ export const grantRecords = pgTable(
   ],
 );
 
-export const grantsTold = pgTable(
+export const grantsTold = documentTable(
   "grantsTold",
   {
     _id: id(),
@@ -215,7 +215,7 @@ export const grantsTold = pgTable(
   ],
 );
 
-export const thoughtfulTallies = pgTable(
+export const thoughtfulTallies = documentTable(
   "thoughtfulTallies",
   {
     _id: id(),
@@ -230,7 +230,7 @@ export const thoughtfulTallies = pgTable(
   ],
 );
 
-export const thoughtfulBoardTallies = pgTable(
+export const thoughtfulBoardTallies = documentTable(
   "thoughtfulBoardTallies",
   {
     _id: id(),
@@ -245,7 +245,7 @@ export const thoughtfulBoardTallies = pgTable(
   ],
 );
 
-export const boardCountedAwards = pgTable(
+export const boardCountedAwards = documentTable(
   "boardCountedAwards",
   {
     _id: id(),
@@ -257,7 +257,7 @@ export const boardCountedAwards = pgTable(
   ],
 );
 
-export const albumStickers = pgTable(
+export const albumStickers = documentTable(
   "albumStickers",
   {
     _id: id(),
@@ -273,7 +273,7 @@ export const albumStickers = pgTable(
   ],
 );
 
-export const teamStickers = pgTable(
+export const teamStickers = documentTable(
   "teamStickers",
   {
     _id: id(),
@@ -292,7 +292,7 @@ export const teamStickers = pgTable(
   ],
 );
 
-export const milestoneTiers = pgTable(
+export const milestoneTiers = documentTable(
   "milestoneTiers",
   {
     _id: id(),
@@ -308,7 +308,7 @@ export const milestoneTiers = pgTable(
   ],
 );
 
-export const emojiNames = pgTable(
+export const emojiNames = documentTable(
   "emojiNames",
   {
     _id: id(),
@@ -326,7 +326,7 @@ export const emojiNames = pgTable(
   ],
 );
 
-export const secondEmojiNames = pgTable(
+export const secondEmojiNames = documentTable(
   "secondEmojiNames",
   {
     _id: id(),
@@ -340,7 +340,7 @@ export const secondEmojiNames = pgTable(
   ],
 );
 
-export const emojiNameNumbers = pgTable(
+export const emojiNameNumbers = documentTable(
   "emojiNameNumbers",
   {
     _id: id(),
@@ -354,7 +354,7 @@ export const emojiNameNumbers = pgTable(
   ],
 );
 
-export const seenEmojis = pgTable(
+export const seenEmojis = documentTable(
   "seenEmojis",
   {
     _id: id(),
@@ -369,7 +369,7 @@ export const seenEmojis = pgTable(
   ],
 );
 
-export const kudosEmojiPicks = pgTable(
+export const kudosEmojiPicks = documentTable(
   "kudosEmojiPicks",
   {
     _id: id(),
@@ -382,7 +382,7 @@ export const kudosEmojiPicks = pgTable(
   ],
 );
 
-export const emojiClasses = pgTable(
+export const emojiClasses = documentTable(
   "emojiClasses",
   {
     _id: id(),
@@ -397,7 +397,7 @@ export const emojiClasses = pgTable(
   ],
 );
 
-export const randomEmojiDrops = pgTable(
+export const randomEmojiDrops = documentTable(
   "randomEmojiDrops",
   {
     _id: id(),
@@ -412,7 +412,7 @@ export const randomEmojiDrops = pgTable(
   ],
 );
 
-export const albumHistory = pgTable(
+export const albumHistory = documentTable(
   "albumHistory",
   {
     _id: id(),
@@ -431,7 +431,7 @@ export const albumHistory = pgTable(
 );
 nullValued(albumHistory, ["cursor"]);
 
-export const pairTallies = pgTable(
+export const pairTallies = documentTable(
   "pairTallies",
   {
     _id: id(),
@@ -451,7 +451,7 @@ export const pairTallies = pgTable(
 );
 nullValued(pairTallies, ["firstThankedAt"]);
 
-export const weekTallies = pgTable(
+export const weekTallies = documentTable(
   "weekTallies",
   {
     _id: id(),
@@ -479,7 +479,7 @@ export const weekTallies = pgTable(
   ],
 );
 
-export const weekPeople = pgTable(
+export const weekPeople = documentTable(
   "weekPeople",
   {
     _id: id(),
@@ -494,7 +494,7 @@ export const weekPeople = pgTable(
   ],
 );
 
-export const talliedAwards = pgTable(
+export const talliedAwards = documentTable(
   "talliedAwards",
   {
     _id: id(),
@@ -507,7 +507,7 @@ export const talliedAwards = pgTable(
   ],
 );
 
-export const talliedHugs = pgTable(
+export const talliedHugs = documentTable(
   "talliedHugs",
   {
     _id: id(),
@@ -520,7 +520,7 @@ export const talliedHugs = pgTable(
   ],
 );
 
-export const hypeReactions = pgTable(
+export const hypeReactions = documentTable(
   "hypeReactions",
   {
     _id: id(),
@@ -541,7 +541,7 @@ export const hypeReactions = pgTable(
   ],
 );
 
-export const hypesCollected = pgTable(
+export const hypesCollected = documentTable(
   "hypesCollected",
   {
     _id: id(),
@@ -556,7 +556,7 @@ export const hypesCollected = pgTable(
   ],
 );
 
-export const boughtCrates = pgTable(
+export const boughtCrates = documentTable(
   "boughtCrates",
   {
     _id: id(),
