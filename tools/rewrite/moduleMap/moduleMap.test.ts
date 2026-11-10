@@ -374,6 +374,10 @@ export async function projected(ctx: QueryContext, member: Id<"members">): Promi
   throw notPorted("skeleton.edges.projected");
 }
 
+export async function indexed(ctx: QueryContext, member: Id<"members">): Promise<{ _id: Id<"members">; _creationTime: number; name: string; xp: number; [key: string]: unknown }> {
+  throw notPorted("skeleton.edges.indexed");
+}
+
 export type Drafts = Page<Omit<Doc<"members">, "_id" | "_creationTime">>;
 
 const names = new Map<string, number>();
@@ -384,6 +388,10 @@ export { half, names };
 
 export const cache = new Map<string, number>();
 const seeded = cache.set("first", 1);
+const called = (() => cache.set("called", 1))();
+class Seeder {
+  static seeded = cache.set("static", 1);
+}
 
 const query = (fn: () => number) => fn();
 export const answer = query(() => 42);
@@ -426,7 +434,12 @@ export async function viaAlias(ctx: QueryContext, args: z.infer<typeof viaAliasA
         "convex/skeleton/inline.ts: its skeleton line 7: import(), which no skeleton may",
       ],
     });
-    expect(skeleton(6)).toEqual({ refusals: ["convex/skeleton/shadowed.ts:4: declares QueryContext, a name the skeleton writes for the service's own"] });
+    expect(skeleton(6)).toEqual({
+      refusals: [
+        "convex/skeleton/shadowed.ts:5: declares QueryContext, a name the skeleton writes for the service's own",
+        "convex/skeleton/shadowed.ts:9: declares Doc, a name the skeleton writes for the service's own",
+      ],
+    });
   });
 
   describe("its output in the service", () => {
@@ -461,7 +474,7 @@ export async function viaAlias(ctx: QueryContext, args: z.infer<typeof viaAliasA
       expect(edgesModule.byValidatorJob.args.safeParse({ note: "x" }).success).toBe(true);
       expect(edgesModule.byValidatorJob.args.safeParse({ note: "x", extra: 1 }).success).toBe(false);
       expect(edgesModule.byShorthandJob.args.safeParse({ note: "x" }).success).toBe(true); // `{ args }` keeps its fields
-      expect(edgesModule.cache.size).toBe(1); // an unread initializer still ran
+      expect([...edgesModule.cache.keys()]).toEqual(["first", "called", "static"]); // unread initializers, a function called at once and a static field still ran
       expect(edgesModule.answer).toBe(42); // a local function named like a builder is no builder
       await expect(edgesModule.viaAlias({}, {})).rejects.toThrow(new NotPortedError("skeleton.edges.viaAlias")); // a builder through a local alias is one
       expect(edgesModule.viaAliasJob).toBeUndefined();

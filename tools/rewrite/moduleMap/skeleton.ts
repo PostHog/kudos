@@ -285,7 +285,7 @@ export function skeletonModule(program: ts.Program, sourceFile: ts.SourceFile, c
       }
       continue;
     }
-    if (!declaration.exported && ts.isVariableStatement(statement) && hasEffects(statement, moduleValue)) {
+    if (!declaration.exported && (ts.isVariableStatement(statement) || ts.isClassDeclaration(statement)) && hasEffects(statement, moduleValue)) {
       // `const seeded = cache.set(…)` runs when its module loads, whether or not anything reads it. State over a
       // context (`new WeakMap<QueryCtx, …>()`) only stubbed bodies read, so it is left out and listed.
       if (declaration.convex || declaration.machinery) omitted.push(`${declaration.names.join(", ")}: state over a context or Convex's machinery that only stubbed bodies read`);
@@ -360,7 +360,13 @@ export function skeletonModule(program: ts.Program, sourceFile: ts.SourceFile, c
   const landedAt = (start: number) => ranges.some(([from, to]) => start >= from && start < to);
   refusals.push(...editRefusals.filter(({ start }) => landedAt(start)).map(({ message }) => message));
   // A name the skeleton writes for the service must mean the service's: a local of the same name would take it over.
-  const written = new Set([...typeEdits.filter(({ start }) => landedAt(start)).map(({ text: written }) => /^[A-Za-z]+/.exec(written)?.[0] ?? ""), ...generated]);
+  const written = new Set([
+    ...typeEdits.filter(({ start }) => landedAt(start)).map(({ text: written }) => /^[A-Za-z]+/.exec(written)?.[0] ?? ""),
+    ...generated,
+    // The service's types a printed type names (`Doc`, `Id`), and zod's names where the codemod wrote them.
+    ...[...printed.imports.values()].flatMap((names) => [...names]),
+    ...edits.filter(({ start, text: written }) => landedAt(start) && /^zv?\./.test(written)).map(({ text: written }) => /^zv?/.exec(written)![0]),
+  ]);
   for (const name of written) if (taken.has(name)) refusals.push(`${convexPath}: declares or imports ${name}, a name the skeleton writes for the service's own`);
   // A parameter, type parameter or local in what lands would take it over as well.
   walk(sourceFile, (node) => {
@@ -616,9 +622,11 @@ function typePrinter(checker: ts.TypeChecker, servicePath: string, localNames: R
       // A whole document of a table: the same fields as the data model's, each as the data model types it.
       const table = id && checker.getTypeOfSymbol(id).aliasTypeArguments?.[0];
       const document = table?.isStringLiteral() ? documentOf(table.value) : undefined;
+      // Same fields, and no index or call signature a document hasn't (`[key: string]: unknown` would be lost).
       const sameFields = (a: ts.Type, b: ts.Type) => {
         const names = (t: ts.Type) => t.getProperties().map((property) => property.name).sort().join("\n");
-        return names(a) === names(b);
+        const signatures = (t: ts.Type) => [checker.getIndexInfosOfType(t).length, t.getCallSignatures().length, t.getConstructSignatures().length].join();
+        return names(a) === names(b) && signatures(a) === signatures(b);
       };
       if (table?.isStringLiteral() && document && sameFields(type, document) && checker.isTypeAssignableTo(type, document) && checker.isTypeAssignableTo(document, type)) {
         return `${want("db/schema/index.ts", "Doc")}<${JSON.stringify(table.value)}>`;
@@ -702,7 +710,25 @@ function hasEffects(statement: ts.Statement, moduleValue: (node: ts.Identifier) 
     return expression;
   };
   const visit = (node: ts.Node): void => {
-    if (found || ts.isFunctionLike(node) || ts.isClassLike(node)) return;
+    if (found) return;
+    // A function runs only when called: its body counts where it is called at once, `(() => …)()`.
+    if (ts.isFunctionLike(node)) {
+      let call: ts.Node = node;
+      while (ts.isParenthesizedExpression(call.parent)) call = call.parent;
+      if ((ts.isCallExpression(call.parent) || ts.isNewExpression(call.parent)) && call.parent.expression === call) ts.forEachChild(node, visit);
+      return;
+    }
+    // A class runs its static initializers and blocks where it is declared.
+    if (ts.isClassLike(node)) {
+      for (const member of node.members) {
+        const isStatic = ts.isClassStaticBlockDeclaration(member) || (ts.canHaveModifiers(member) && ts.getModifiers(member)?.some((modifier) => modifier.kind === ts.SyntaxKind.StaticKeyword));
+        if (!isStatic) continue;
+        if (ts.isClassStaticBlockDeclaration(member)) ts.forEachChild(member.body, visit);
+        else if (ts.isPropertyDeclaration(member) && member.initializer) visit(member.initializer);
+      }
+      node.heritageClauses?.forEach(visit);
+      return;
+    }
     const callee = ts.isCallExpression(node) || ts.isNewExpression(node) ? rootOf(node.expression) : ts.isTaggedTemplateExpression(node) ? rootOf(node.tag) : undefined;
     if (callee && ts.isIdentifier(callee) && moduleValue(callee)) found = true;
     else if (ts.isAwaitExpression(node) || ts.isDeleteExpression(node)) found = true;

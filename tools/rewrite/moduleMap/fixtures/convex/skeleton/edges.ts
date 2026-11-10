@@ -23,6 +23,11 @@ export async function projected(ctx: Reader, member: Id<"members">) {
   return projection;
 }
 
+export async function indexed(ctx: Reader, member: Id<"members">) {
+  const row: { _id: Id<"members">; _creationTime: number; name: string; xp: number; [key: string]: unknown } = (await ctx.db.get(member))!;
+  return row;
+}
+
 export type Drafts = PaginationResult<WithoutSystemFields<Doc<"members">>>;
 
 const names = new Map<string, number>();
@@ -34,6 +39,10 @@ export { internalQuery };
 
 export const cache = new Map<string, number>();
 const seeded = cache.set("first", 1);
+const called = (() => cache.set("called", 1))();
+class Seeder {
+  static seeded = cache.set("static", 1);
+}
 const readerSeed = cache.set("readers", [async (ctx: Reader) => ctx].length);
 
 const query = (fn: () => number) => fn();
