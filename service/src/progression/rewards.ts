@@ -10,6 +10,7 @@ import type { Doc } from "../db/schema/index.ts";
 import type { MutationContext, QueryContext } from "../operations.ts";
 import { fromDocument, toDocument } from "../db/documents.ts";
 import { indexOrder } from "../db/indexOrder.ts";
+import { unique } from "../db/unique.ts";
 import { rewardRecords } from "../db/schema/index.ts";
 
 export const rewardRecordValidator = z.strictObject({
@@ -46,14 +47,8 @@ const asDocument = (row: Record<string, unknown>) => toDocument<Doc<"rewardRecor
 
 /** The member's reward under the key, or `null`; two under one key fail, as `.unique()` did. */
 export async function rewardOf(ctx: QueryContext, member: MemberId, key: string): Promise<null | Doc<"rewardRecords">> {
-  const rows = await ctx.tx
-    .select()
-    .from(rewardRecords)
-    .where(and(eq(rewardRecords.member, member), eq(rewardRecords.key, key)))
-    .orderBy(...byMemberKey.orderBy())
-    .limit(2);
-  if (rows.length > 1) throw new Error(`The member has more than one reward under ${key}`);
-  return rows[0] ? asDocument(rows[0]) : null;
+  const row = unique("rewardRecords", await ctx.tx.select().from(rewardRecords).where(and(eq(rewardRecords.member, member), eq(rewardRecords.key, key))).orderBy(...byMemberKey.orderBy()).limit(2));
+  return row === null ? null : asDocument(row);
 }
 
 /** One page of every reward, in creation order, through the service's shared keyset paging. */

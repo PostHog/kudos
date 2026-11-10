@@ -234,8 +234,8 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/store/buying.test.ts | S7 | | |
 | convex/store/inventory.test.ts | S7 | | |
 | convex/store/onlyStoreWrites.test.ts | S7 | | |
-| convex/unlocks/launch.test.ts | S6 | | |
-| convex/unlocks/unlocks.test.ts | S6 | | |
+| convex/unlocks/launch.test.ts | S6 | service/src/unlocks/launch.test.ts | |
+| convex/unlocks/unlocks.test.ts | S6 | service/src/unlocks/unlocks.test.ts | S5 S9 |
 | convex/wallet/onlyWalletWrites.test.ts | S7 | | |
 | convex/wallet/wallet.test.ts | S7 | | |
 | convex/website/abandonedHandshakes.test.ts | S15 | | |

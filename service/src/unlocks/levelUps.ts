@@ -1,21 +1,32 @@
-// The module map's skeleton of convex/unlocks/levelUps.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
-// notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
+// A member's recorded level-ups: when they first reached a level, and the level before one.
+// Today's convex/unlocks/levelUps.ts over the service's transaction.
+import { and, eq, gte, lt } from "drizzle-orm";
+import { indexOrder } from "../db/indexOrder.ts";
+import { levelUps } from "../db/schema/index.ts";
 import type { MemberId } from "../workspace/directory.ts";
 import type { QueryContext } from "../operations.ts";
-import { notPorted } from "../notPorted.ts";
+
+const byMemberLevel = indexOrder(levelUps, ["member", "level"]);
 
 export async function levelFirstReachedAt(ctx: QueryContext, member: MemberId, level: number): Promise<number | null> {
-  throw notPorted("unlocks.levelUps.levelFirstReachedAt");
+  const [reached] = await ctx.tx.select({ at: levelUps.at }).from(levelUps).where(and(eq(levelUps.member, member), gte(levelUps.level, level))).orderBy(...byMemberLevel.orderBy()).limit(1);
+  return reached?.at ?? null;
 }
 
 export async function levelUpAt(ctx: QueryContext, member: MemberId, level: number): Promise<number | null> {
-  throw notPorted("unlocks.levelUps.levelUpAt");
+  return (await levelUpRowOf(ctx, member, level))?.at ?? null;
 }
 
 export async function levelUpRecordedAt(ctx: QueryContext, member: MemberId, level: number): Promise<number | null> {
-  throw notPorted("unlocks.levelUps.levelUpRecordedAt");
+  return (await levelUpRowOf(ctx, member, level))?._creationTime ?? null;
+}
+
+async function levelUpRowOf(ctx: QueryContext, member: MemberId, level: number) {
+  const [row] = await ctx.tx.select({ at: levelUps.at, _creationTime: levelUps._creationTime }).from(levelUps).where(and(eq(levelUps.member, member), eq(levelUps.level, level))).orderBy(...byMemberLevel.orderBy()).limit(1);
+  return row ?? null;
 }
 
 export async function levelUpBefore(ctx: QueryContext, member: MemberId, level: number): Promise<number> {
-  throw notPorted("unlocks.levelUps.levelUpBefore");
+  const [previous] = await ctx.tx.select({ level: levelUps.level }).from(levelUps).where(and(eq(levelUps.member, member), lt(levelUps.level, level))).orderBy(...byMemberLevel.orderBy("desc")).limit(1);
+  return previous?.level ?? 1;
 }
