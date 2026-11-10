@@ -5,8 +5,9 @@ import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { useTestBackend, type TestBackend } from "../../testing/backend.ts";
 import { flagsFromPostHog, onForEveryone, postHogDeciding } from "../../testing/flags.ts";
-import type { LevelReachedEvent } from "../bus/events.ts";
-import { levelUps, unlockLaunches, unlocks } from "../db/schema/index.ts";
+import type { LevelReachedEvent, UnlocksLaunchedEvent } from "../bus/events.ts";
+import { levelUps, members, unlockLaunches, unlocks } from "../db/schema/index.ts";
+import type { MutationContext } from "../operations.ts";
 import type { MemberId } from "../workspace/directory.ts";
 import { unlocksLiveIn } from "./launch.ts";
 import { scheduled } from "./schedule.ts";
@@ -68,12 +69,64 @@ test("unlocks turned live twice in a workspace launch it once", async () => {
   expect(await t.query(({ tx }) => tx.select({ at: unlockLaunches.at }).from(unlockLaunches).where(eq(unlockLaunches.workspace, "T1")))).toHaveLength(1);
 });
 
+test("a launch opens what shipped for every member already there, once, in events of 1000 openings", async () => {
+  const t = backend();
+  await flagsFromPostHog(t.operations, t.postHog, ...["xp-levels", "unlocks", "everyone-board", "quests"].map(onForEveryone));
+  const { inT1, bot, elsewhere } = await t.run(async (ctx) => {
+    const inT1: MemberId[] = [];
+    for (let index = 0; index < 501; index += 1) inT1.push(await insertMember(ctx, "T1", `U_${index}`, "member"));
+    return { inT1, bot: await insertMember(ctx, "T1", "U_BOT", "bot"), elsewhere: await insertMember(ctx, "T2", "U_ELSEWHERE", "member") };
+  });
+  t.clock.advance(60_000);
+  const at = t.clock.now();
+
+  await t.run((ctx) => unlocksLiveIn(ctx, "T1"));
+  t.clock.advance(60_000);
+  await t.run((ctx) => unlocksLiveIn(ctx, "T1"));
+
+  const openings = inT1.flatMap((member) => [{ member, feature: "leaderboard" }, { member, feature: "quests" }]);
+  const rows = await t.query(({ tx }) => tx.select({ member: unlocks.member, feature: unlocks.feature, readyAt: unlocks.readyAt, openedAt: unlocks.openedAt }).from(unlocks));
+  expect(sorted(rows)).toEqual(sorted(openings.map((opening) => ({ ...opening, readyAt: at, openedAt: at }))));
+  expect(rows.some(({ member }) => member === bot || member === elsewhere)).toBe(false);
+  const opened = await publishedOf(t, "unlockOpened");
+  expect(sorted(opened.map(({ fact: _, ...event }) => event))).toEqual(sorted(openings.map((opening) => ({ type: "unlockOpened", workspace: "T1", ...opening, at, byLaunch: true }))));
+  const launched = (await t.published()).filter((event) => event.type === "unlocksLaunched") as unknown as UnlocksLaunchedEvent[];
+  expect(launched.map(({ workspace, at, openings }) => ({ workspace, at, count: openings.length }))).toEqual([
+    { workspace: "T1", at, count: 1000 },
+    { workspace: "T1", at, count: 2 },
+  ]);
+  expect(sorted(launched.flatMap(({ openings }) => openings))).toEqual(sorted(openings));
+}, 60_000);
+
+test("a levelReached handled late stores readiness at the time the level was reached", async () => {
+  const { t, alice } = await withMember();
+  await flagsFromPostHog(t.operations, t.postHog, ...["unlocks", "everyone-board"].map(onForEveryone));
+  const event = levelReachedEvent(alice, 3);
+  t.clock.advance(60 * 60 * 1000);
+
+  await t.run((ctx) => makeReadyJob.handler(ctx, makeReadyJob.args.parse({ event })));
+
+  expect(await unlockRows(t, alice)).toEqual([{ feature: "leaderboard", readyAt: now, openedAt: null }]);
+  expect(await t.query(({ tx }) => tx.select({ level: levelUps.level, at: levelUps.at }).from(levelUps).where(eq(levelUps.member, alice)))).toEqual([{ level: 3, at: now }]);
+  expect((await publishedOf(t, "unlockReady")).map(({ at }) => at)).toEqual([now]);
+});
+
 async function withMember() {
   const t = backend();
   await flagsFromPostHog(t.operations, t.postHog, ...["xp-levels", "unlocks", "everyone-board"].map(onForEveryone));
   await t.run((ctx) => unlocksLiveIn(ctx, "T1"));
   const alice = (await t.seed.insert("members", { workspace: "T1", user: "U_ALICE", kind: "member", timeZone: "UTC" })) as MemberId;
   return { t, alice };
+}
+
+async function insertMember(ctx: MutationContext, workspace: string, user: string, kind: "member" | "bot"): Promise<MemberId> {
+  const row = { ...ctx.newRow(), workspace, user, kind, timeZone: "UTC" };
+  await ctx.tx.insert(members).values(row);
+  return row._id as MemberId;
+}
+
+function sorted<T>(rows: T[]): T[] {
+  return [...rows].sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
 }
 
 function unlockRows(t: TestBackend, member: MemberId) {
