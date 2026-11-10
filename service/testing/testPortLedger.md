@@ -13,6 +13,7 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | .github/workflows/deploy.test.ts | S20 | | |
 | .github/workflows/gate.test.ts | S20 | | |
 | .github/workflows/promote.test.ts | S20 | | |
+| .github/workflows/slackManifest.test.ts | S20 | | |
 | convex/achievements/achievements.test.ts | S6 | | |
 | convex/achievements/measures.test.ts | S6 | | |
 | convex/achievements/oldFriends.test.ts | S6 | | |
@@ -294,8 +295,10 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | e2e/target.test.ts | S20 | | |
 | slack-app/manifest.test.ts | S20 | | |
 | testing/privateFolder.test.ts | S20 | | |
+| tools/release/manifestUpdate.test.ts | S20 | | |
 | tools/release/promote.test.ts | S20 | | |
 | tools/release/promotion.test.ts | S20 | | |
+| tools/release/slackManifest.test.ts | S20 | | |
 | tools/rewrite/drizzle/generate.test.ts | S20 | | |
 | tools/rewrite/moduleMap/moduleMap.test.ts | S20 | | |
 | tools/rewrite/schemaParity.test.ts | S20 | | |
