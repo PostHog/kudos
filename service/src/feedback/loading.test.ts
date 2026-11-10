@@ -15,6 +15,8 @@ const firstLoaded = [
   "feedback/beside.ts",
   "feedback/homes.ts",
   "feedback/replies.ts",
+  "feedback/tierNotices.ts",
+  "feedback/registration.ts",
   "slack/directMessages.ts",
   "slack/delivery.ts",
   "slack/appHome.ts",

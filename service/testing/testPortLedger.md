@@ -118,16 +118,16 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/leaderboard/totals.test.ts | S11 | | |
 | convex/mondayDm/mondayDm.test.ts | S12 | | |
 | convex/progression/backfill.test.ts | S6 | | |
-| convex/progression/effectsInsertOnly.test.ts | S6 | | |
+| convex/progression/effectsInsertOnly.test.ts | S6 | service/src/progression/effectsInsertOnly.test.ts | |
 | convex/progression/gate.test.ts | S6 | | |
 | convex/progression/heldReward.test.ts | S6 | | |
 | convex/progression/hugRewards.test.ts | S6 | | |
 | convex/progression/perks.test.ts | S6 | | |
-| convex/progression/progress.test.ts | S6 | | |
+| convex/progression/progress.test.ts | S6 | service/src/progression/progress.test.ts | |
 | convex/progression/progression.test.ts | S6 | | |
 | convex/progression/questRewards.test.ts | S6 | | |
 | convex/progression/retiredPerks.test.ts | S6 | | |
-| convex/progression/rewardsInsertOnly.test.ts | S6 | | |
+| convex/progression/rewardsInsertOnly.test.ts | S6 | service/src/progression/rewardsInsertOnly.test.ts | |
 | convex/publicSurface.test.ts | S20 | | |
 | convex/quests/finishSeed.test.ts | S7 | | |
 | convex/quests/hugLadder.test.ts | S7 | | |
