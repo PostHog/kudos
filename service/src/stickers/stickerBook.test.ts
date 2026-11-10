@@ -240,7 +240,7 @@ describe("stickers of people", () => {
     expect(await t.seed.all("stickers")).toHaveLength(3);
   });
 
-  waitsOn(["S4"], "a kudos gives the giver and the recipient each other's sticker from their first award, and starts the workspace's backfill", async () => {
+  test("a kudos gives the giver and the recipient each other's sticker from their first award, and starts the workspace's backfill", async () => {
     const { t, alice, bob } = await aTeamOn(backend({ registry: stickersAlone }));
     const first = await anAward(t, alice, bob);
 
@@ -257,7 +257,7 @@ describe("stickers of people", () => {
     expect(await t.seed.all("stickerBackfills")).toEqual([expect.objectContaining({ workspace: "T1", isDone: true })]);
   });
 
-  waitsOn(["S4"], "a kudos of more awards than one job records goes on in the next, and every pair gets its stickers once", async () => {
+  test("a kudos of more awards than one job records goes on in the next, and every pair gets its stickers once", async () => {
     const { t, alice } = await aTeamOn(backend({ registry: stickersAlone }));
     const recipients: MemberId[] = [];
     for (let n = 0; n < 51; n++) recipients.push(await t.member(`U_R${n}`, `Rae ${n}`));
