@@ -117,8 +117,7 @@ export type FormerConvexPath =
   | "website.activity.getActivity"
   | "website.commands.openCrate"
   | "website.commands.openFeature"
-  | "website.commands.buyCrate"
-  | "album.emojiNames.reserveSharedEmojiNames";
+  | "website.commands.buyCrate";
 
 // The one seam for the calls that have neither a service route nor a module-map stub yet: each is named by its former
 // Convex path and throws that path's `NotPortedError`, as a stub there would. Once S15's route table
@@ -245,14 +244,19 @@ export function post(t: TestBackend, blocks: RichElement[], options: MessageOpti
   return slackEvent(t, messageEvent(blocks, options));
 }
 
-/** Today's `memberChanged`: a `team_join` or `user_change` event through the signed front door. */
-export function memberChanged(t: TestBackend, ...event: Parameters<typeof memberEvent>) {
-  return slackEvent(t, memberEvent(...event));
+/** The `event_ts` Slack would stamp on an event sent now, by the backend's clock rather than the machine's. */
+export function eventTsAt(t: TestBackend): string {
+  return `${Math.floor(t.clock.now() / 1000)}.000200`;
 }
 
-/** Today's `react`: a `reaction_added` event through the signed front door. */
+/** Today's `memberChanged`: a `team_join` or `user_change` event through the signed front door, stamped by the backend's clock. */
+export function memberChanged(t: TestBackend, type: Parameters<typeof memberEvent>[0], user: Parameters<typeof memberEvent>[1], options: Parameters<typeof memberEvent>[2] = {}) {
+  return slackEvent(t, memberEvent(type, user, { eventTs: eventTsAt(t), ...options }));
+}
+
+/** Today's `react`: a `reaction_added` event through the signed front door, stamped by the backend's clock. */
 export function react(t: TestBackend, options: ReactionOptions = {}) {
-  return slackEvent(t, reactionEvent(options));
+  return slackEvent(t, reactionEvent({ eventTs: eventTsAt(t), ...options }));
 }
 
 /** Today's App Home open: an `app_home_opened` event through the signed front door. */

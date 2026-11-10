@@ -2,7 +2,6 @@
 // read through the website's member routes, as a signed-in member reads them (see ../albumPorts.testing.ts).
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { useTestBackend, type TestBackend } from "../../../testing/backend.ts";
-import { reactionEvent } from "../../../testing/slackMessages.ts";
 import { waitsOn } from "../../../testing/waiting.ts";
 import type { HugGivenEvent } from "../../bus/events.ts";
 import type { Id } from "../../db/columns.ts";
@@ -13,7 +12,7 @@ import type { MemberId } from "../../workspace/directory.ts";
 import { catalogue, rankOf } from "../hoggies/catalogue.ts";
 import { drawOf, findsOnHug } from "../hoggies/draw.ts";
 import { findOnHug } from "./hugFinds.ts";
-import { aDeploymentForWorkspace, aMember, aSignedInSession, registry, setTime, slackEvent, switchWebsite, type Person, type Reader } from "../albumPorts.testing.ts";
+import { aDeploymentForWorkspace, aMember, aSignedInSession, react, registry, setTime, switchWebsite, type Person, type Reader } from "../albumPorts.testing.ts";
 
 const tuesday = new Date("2026-10-13T10:00:00Z").getTime();
 const hourMs = 60 * 60 * 1000;
@@ -146,7 +145,7 @@ async function aDayWhoseUncappedDrawIsAboveRare() {
 }
 
 async function hugAlice(ts: string) {
-  await slackEvent(t, reactionEvent({ user: bob.user, itemUser: alice.user, ts }));
+  await react(t, { user: bob.user, itemUser: alice.user, ts });
   await t.settle();
 }
 

@@ -4,14 +4,14 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { useTestBackend, type TestBackend } from "../../../testing/backend.ts";
 import { httpStatus } from "../../../testing/fakeSlack.ts";
-import { emoji, memberEvent, mention, messageEvent, section, text } from "../../../testing/slackMessages.ts";
+import { emoji, mention, messageEvent, section, text } from "../../../testing/slackMessages.ts";
 import { waitsOn, type Stack } from "../../../testing/waiting.ts";
 import type { Id } from "../../db/columns.ts";
 import type { AlbumAnswer, TurnAnswer } from "../../website/album.ts";
 import type { Denial } from "../../website/memberQuery.ts";
 import { catalogue } from "../hoggies/catalogue.ts";
 import { drawOf } from "../hoggies/draw.ts";
-import { aDeploymentForWorkspace, allowedWorkspace, aSignedInSession, memberOf as memberIn, registry, setTime, settleInTimeOrder, slackEvent, switchWebsite, type Person, type Reader } from "../albumPorts.testing.ts";
+import { aDeploymentForWorkspace, allowedWorkspace, aSignedInSession, memberChanged, memberOf as memberIn, registry, setTime, settleInTimeOrder, slackEvent, switchWebsite, type Person, type Reader } from "../albumPorts.testing.ts";
 import { earnWelcomeItemOnGreeting, welcomeCrateKey } from "./welcome.ts";
 
 const tuesday = new Date("2026-10-13T10:00:00Z").getTime();
@@ -165,7 +165,7 @@ describe("LP11 LP44 LP49: the welcome item turns at least rare, pays no XP and t
 });
 
 async function joins(person: Person) {
-  await slackEvent(t, memberEvent("team_join", { id: person.user, team_id: allowedWorkspace, real_name: person.name }, { team: allowedWorkspace }));
+  await memberChanged(t, "team_join", { id: person.user, team_id: allowedWorkspace, real_name: person.name }, { team: allowedWorkspace });
   await t.settle();
 }
 

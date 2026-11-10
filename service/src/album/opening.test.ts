@@ -3,7 +3,7 @@
 // stub it waits on.
 import { afterEach, describe, expect, vi } from "vitest";
 import { useTestBackend, type TestBackend } from "../../testing/backend.ts";
-import { emoji, memberEvent, mention, messageEvent, section, text } from "../../testing/slackMessages.ts";
+import { emoji, mention, messageEvent, section, text } from "../../testing/slackMessages.ts";
 import { waitsOn } from "../../testing/waiting.ts";
 import type { Id } from "../db/columns.ts";
 import { recordReward } from "../progression/progression.ts";
@@ -12,7 +12,7 @@ import type { Denial } from "../website/memberQuery.ts";
 import type { MemberId } from "../workspace/directory.ts";
 import { catalogue } from "./hoggies/catalogue.ts";
 import { drawOf } from "./hoggies/draw.ts";
-import { aDeploymentForWorkspace, aSignedInSession, everythingWritten, everyTable, extraMemberArgument, memberOrNullOf, registry, signedOut, slackEvent, switchWebsite, type Person, type Reader } from "./albumPorts.testing.ts";
+import { aDeploymentForWorkspace, aSignedInSession, everythingWritten, everyTable, extraMemberArgument, memberChanged, memberOrNullOf, registry, signedOut, slackEvent, switchWebsite, type Person, type Reader } from "./albumPorts.testing.ts";
 
 const tuesday = new Date("2026-10-13T10:00:00Z");
 const minuteMs = 60_000;
@@ -257,7 +257,7 @@ describe("website commands pass one guard", () => {
 
     expect(await open(signedOut, forBob!)).toEqual({ kind: "signed-out" });
     expect(await everyTable(t)).toEqual(before);
-    await slackEvent(t, memberEvent("user_change", { id: alice.user, team_id: "T1", deleted: true }));
+    await memberChanged(t, "user_change", { id: alice.user, team_id: "T1", deleted: true });
     await t.settle();
     const left = await everyTable(t);
     expect(await open(asAlice, forBob!)).toEqual({ kind: "not-a-member" });
