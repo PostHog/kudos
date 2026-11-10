@@ -6,7 +6,7 @@ import type { MessageRef } from "../engine/messageEvent.ts";
 import { catalogue } from "./catalogue.ts";
 import type { Award, AwardWithId } from "../engine/awards.ts";
 import { baseXpOf, type BonusLine, type MemberProgress, type Progressed, type Standing } from "./progress.ts";
-import { type AppliedReward, type RewardRecord } from "./rewards.ts";
+import type { AppliedReward, RewardRecord } from "./rewards.ts";
 import { z } from "zod";
 import { zv } from "../values.ts";
 import type { MutationContext, QueryContext } from "../operations.ts";
