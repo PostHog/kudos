@@ -274,7 +274,7 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/website/preview.test.ts | S17 | service/src/website/preview.test.ts | S3 S4 S6 S7 S8 S9 S10 S11 S15 S16 S17 |
 | convex/website/profile.test.ts | S17 | service/src/website/profile.test.ts | S3 S4 S6 S7 S9 S10 S11 S15 S16 S17 |
 | convex/website/profileCard.test.ts | S17 | service/src/website/profileCard.test.ts | S3 S6 S10 S11 S13 S15 |
-| convex/website/publicCelebrations.test.ts | S17 | service/src/website/publicCelebrations.test.ts | S3 S4 S5 S6 S11 S12 S15 S16 |
+| convex/website/publicCelebrations.test.ts | S17 | service/src/website/publicCelebrations.test.ts | S3 S4 S5 S6 S11 S12 S15 S16 S17 |
 | convex/website/quests.test.ts | S17 | | |
 | convex/website/setAvatar.test.ts | S17 | service/src/website/setAvatar.test.ts | S4 S5 S6 S10 S15 S17 |
 | convex/website/setBoardVisibility.test.ts | S17 | service/src/website/setBoardVisibility.test.ts | S4 S5 S6 S10 S11 S15 S16 S17 |
