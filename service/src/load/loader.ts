@@ -166,6 +166,8 @@ async function loadEntry(client: pg.PoolClient, snapshot: Snapshot, step: Step, 
       throw new LoadError(`Line ${read} of ${step.path} is not a document`);
     }
     refuseNul(doc, `${step.path} line ${read}`);
+    // Convex never stamps -0, and the creation order keeps no place for it apart from 0 (db/indexOrder.ts).
+    if (Object.is(doc._creationTime, -0)) throw new LoadError(`${step.path} line ${read}: a _creationTime of -0, which Convex never stamps`);
     const { inserts, weight } = step.files ? await storedFile(snapshot, step, doc) : { inserts: [documentInsert(step, doc, reports)], weight: 0 };
     batch.push(...inserts);
     batchBytes += line.length + weight;

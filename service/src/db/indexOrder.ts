@@ -1,13 +1,16 @@
 // Convex's index order on Postgres, for a query that walks an index as `.withIndex(...)` did, and pages through it.
 // - Order: the index's fields, then `_creationTime`, then `_id`, each ascending with a missing field (SQL NULL) before
-//   every value, as the migrations build the indexes; `desc`, Convex's `.order("desc")`, is the exact reverse.
+//   every value, as the migrations build the indexes; `desc`, Convex's `.order("desc")`, is the exact reverse. A key
+//   that can't be NULL takes no nulls clause, so the ORDER BY is the index's own and Postgres walks it with no sort.
 // - `after`: the rows that follow a document in that order, for keyset paging. A plain row-value comparison,
 //   `(a, b) > ($1, $2)`, yields NULL where a field is NULL and drops those rows, so this one is spelled out field by
-//   field: equal on every earlier field and after on this one, where both "equal" and "after" know NULL.
+//   field: equal on every earlier field and after on this one, where both "equal" and "after" know NULL. A bound goes in
+//   front, which those terms imply, so Postgres starts the walk at the cursor: a row comparison over the leading
+//   columns that can't be NULL, `(a, b) >= ($1, $2)`, or, where the first one can, `a >= $1`.
 // - Paging: only an index over strings, floats, booleans and int64 can be paged. Postgres orders jsonb by its own rules,
 //   not Convex's, and a missing field (SQL NULL) and a JSON null would share one place; a cursor can't carry bytes as
 //   the column compares them. Either way a walk could repeat or skip rows, so paging such an index throws.
-import { and, eq, getTableColumns, getTableName, gt, isNotNull, isNull, lt, or, sql, type Column, type SQL } from "drizzle-orm";
+import { and, Column, eq, getTableColumns, getTableName, gt, gte, is, isNotNull, isNull, lt, or, sql, type SQL } from "drizzle-orm";
 import type { PgTable } from "drizzle-orm/pg-core";
 
 export type Direction = "asc" | "desc";
@@ -39,12 +42,16 @@ export function indexOrder<Table extends PgTable>(table: Table, fields: Readonly
     if (!column) throw new Error(`The table has no field ${field}`);
     // A nested field's generated column, `chatIdentity$workspace`, holds the document's `chatIdentity.workspace`.
     const path = field.split("$");
-    const key: Key = { expression: column, path, valueOf: (document) => valueAt(document, path), accepts: acceptsOf(column) };
-    if (column.getSQLType() !== "double precision") return [key];
-    // Postgres holds -0 equal to 0, where Convex orders -0 first: a second key tells them apart, false for -0.
+    const notNull = column.notNull || field === "_creationTime" || field === "_id";
+    const key: Key = { expression: column, path, notNull, valueOf: (document) => valueAt(document, path), accepts: acceptsOf(column) };
+    // Postgres holds -0 equal to 0, where Convex orders -0 first: a second key tells them apart, false for -0. No
+    // `_creationTime` is -0, as Convex stamps none and neither the clock nor the load writes one (operations.ts,
+    // load/loader.ts), so that key walks its index as it is.
+    if (column.getSQLType() !== "double precision" || field === "_creationTime") return [key];
     const zeroSign: Key = {
       expression: sql`(${column}::text <> '-0')`,
       path,
+      notNull,
       valueOf: (document) => {
         const value = key.valueOf(document);
         return value === null ? null : !Object.is(value, -0);
@@ -63,12 +70,18 @@ export function indexOrder<Table extends PgTable>(table: Table, fields: Readonly
   const order: IndexOrder = {
     name,
     refuseUnpageable,
-    orderBy: (direction = "asc") => keys.map(({ expression }) => (direction === "asc" ? sql`${expression} asc nulls first` : sql`${expression} desc nulls last`)),
+    orderBy: (direction = "asc") =>
+      keys.map(({ expression, notNull }) => {
+        if (notNull) return direction === "asc" ? sql`${expression} asc` : sql`${expression} desc`;
+        return direction === "asc" ? sql`${expression} asc nulls first` : sql`${expression} desc nulls last`;
+      }),
     after(document, direction = "asc") {
       refuseUnpageable();
       const values = keys.map((key) => key.valueOf(document));
+      // Where no key can be NULL and none is a -0 sign key, a row comparison over them all is "after" exactly.
+      if (keys.every(isPlainColumn)) return rowAfter(keys, values, direction);
       const terms = keys.map((key, i) => and(...keys.slice(0, i).map((earlier, j) => same(earlier.expression, values[j])), follows(key.expression, values[i], direction)));
-      return or(...terms)!;
+      return and(atOrAfter(keys, values, direction), or(...terms))!;
     },
     keyOf(document) {
       refuseUnpageable();
@@ -115,6 +128,8 @@ function sameShape(expected: unknown, actual: unknown): boolean {
 
 interface Key {
   expression: Column | SQL;
+  /** Whether the key is never NULL: its ORDER BY takes no nulls clause, as its index column has none. */
+  notNull: boolean;
   /** The field's path in a document: `["chatIdentity", "workspace"]` for the column `chatIdentity$workspace`. */
   path: readonly string[];
   /** The document's value for the key; null for a missing field. */
@@ -133,6 +148,32 @@ function valueAt(document: Readonly<Record<string, unknown>>, path: readonly str
 // as it is; the zero-sign key is the one expression, and its values are booleans.
 function same(expression: Column | SQL, value: unknown): SQL {
   return value === null ? isNull(expression) : eq(expression as Column, value);
+}
+
+// A key Postgres compares as the index holds it: a column that is never NULL.
+function isPlainColumn(key: Key): boolean {
+  return key.notNull && is(key.expression, Column);
+}
+
+// The rows after `values` on `keys`, all plain columns, as one row comparison: `(a, b) > ($1, $2)`, `<` descending. A
+// row comparison on an index's leading columns is one range of it, which Postgres walks from the cursor.
+function rowAfter(keys: readonly Key[], values: readonly unknown[], direction: Direction, orAt = false): SQL {
+  const columns = keys.map((key) => key.expression as Column);
+  const comparison = direction === "asc" ? (orAt ? sql`>=` : sql`>`) : orAt ? sql`<=` : sql`<`;
+  return sql`(${sql.join(columns, sql`, `)}) ${comparison} (${sql.join(columns.map((column, i) => sql.param(values[i], column)), sql`, `)})`;
+}
+
+// A range of rows that holds every row after `values`, which Postgres can start an index walk from, where some key can
+// be NULL or is a -0 sign key, which no index holds.
+// - The plain columns before that key compare as a row, at or after: `(a, b) >= ($1, $2)`.
+// - Where the first key can be NULL, it bounds alone: ascending, at or after a value, which leaves NULL out; descending,
+//   from NULL only NULL. None where no range is: ascending from NULL, or descending from a value, where NULL follows.
+function atOrAfter(keys: readonly Key[], values: readonly unknown[], direction: Direction): SQL | undefined {
+  const length = keys.findIndex((key) => !isPlainColumn(key));
+  if (length > 0) return rowAfter(keys.slice(0, length), values, direction, true);
+  const [key, value] = [keys[0]!, values[0]];
+  if (direction === "asc") return value === null ? undefined : gte(key.expression as Column, value);
+  return value === null ? isNull(key.expression) : undefined;
 }
 
 // Ascending, NULL comes first: after NULL is any value, after a value only a greater one. Descending is the reverse:
