@@ -5,6 +5,7 @@ import type { CrateBoughtEvent } from "../../bus/events.ts";
 import type { Surface } from "../../commands/surface.ts";
 import { toDocument } from "../../db/documents.ts";
 import { indexOrder } from "../../db/indexOrder.ts";
+import { unique } from "../../db/unique.ts";
 import { boughtCrates, type Doc } from "../../db/schema/index.ts";
 import type { MutationContext, QueryContext, Transaction } from "../../operations.ts";
 import { coinsVisibleTo } from "../../wallet/visibility.ts";
@@ -93,13 +94,12 @@ async function boughtSoFar(tx: Transaction, member: MemberId) {
   return last?.n ?? 0;
 }
 
-// Convex's `.unique()`: a second row for one member's crate is an error.
 async function boughtCrateOf(tx: Transaction, member: MemberId, crate: string): Promise<Doc<"boughtCrates"> | null> {
   const rows = await tx
     .select()
     .from(boughtCrates)
     .where(and(eq(boughtCrates.member, member), eq(boughtCrates.crate, crate)))
     .limit(2);
-  if (rows.length > 1) throw new Error("More than one bought crate is stored for a member's crate");
-  return rows[0] === undefined ? null : toDocument<Doc<"boughtCrates">>(boughtCrates, rows[0]);
+  const row = unique("boughtCrates", rows);
+  return row === null ? null : toDocument<Doc<"boughtCrates">>(boughtCrates, row);
 }

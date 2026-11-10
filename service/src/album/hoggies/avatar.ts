@@ -2,6 +2,7 @@
 // shown only where both the viewer and the member see avatars.
 import { eq } from "drizzle-orm";
 import { toDocument } from "../../db/documents.ts";
+import { unique } from "../../db/unique.ts";
 import { hoggieAvatars, type Doc } from "../../db/schema/index.ts";
 import type { MutationContext, QueryContext, Transaction } from "../../operations.ts";
 import type { MemberId } from "../../workspace/directory.ts";
@@ -51,9 +52,7 @@ async function holds(ctx: QueryContext, member: MemberId, hoggie: string) {
   return hoggieNamed(hoggie) !== undefined && (await tallyOf(ctx, member, hoggie)) !== null;
 }
 
-// Convex's `.unique()`: a second avatar row for one member is an error.
 async function avatarRowOf(tx: Transaction, member: MemberId): Promise<Doc<"hoggieAvatars"> | null> {
-  const rows = await tx.select().from(hoggieAvatars).where(eq(hoggieAvatars.member, member)).limit(2);
-  if (rows.length > 1) throw new Error("More than one hoggie avatar is stored for a member");
-  return rows[0] === undefined ? null : toDocument<Doc<"hoggieAvatars">>(hoggieAvatars, rows[0]);
+  const row = unique("hoggieAvatars", await tx.select().from(hoggieAvatars).where(eq(hoggieAvatars.member, member)).limit(2));
+  return row === null ? null : toDocument<Doc<"hoggieAvatars">>(hoggieAvatars, row);
 }

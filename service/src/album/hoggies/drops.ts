@@ -7,6 +7,7 @@ import type { Surface } from "../../commands/surface.ts";
 import { encodeStored } from "../../db/codec.ts";
 import { fromDocument, toDocument } from "../../db/documents.ts";
 import { indexOrder } from "../../db/indexOrder.ts";
+import { unique } from "../../db/unique.ts";
 import { drops, dropTallies, hoggieTallies, trayDrops, type Doc } from "../../db/schema/index.ts";
 import { type DecidedBelow, fromTheNewestDecided } from "../../engine/awards.ts";
 import type { MutationContext, QueryContext, Transaction } from "../../operations.ts";
@@ -129,7 +130,7 @@ async function asFound(tx: Transaction, record: DropRecord, shown: CrestsShown):
 }
 
 function trayDropOf(tx: Transaction, member: MemberId, crate: string): Promise<Doc<"trayDrops"> | null> {
-  return uniqueOf<Doc<"trayDrops">>(tx, trayDrops, and(eq(trayDrops.member, member), eq(trayDrops.crate, crate))!, "tray drop");
+  return uniqueOf<Doc<"trayDrops">>(tx, trayDrops, and(eq(trayDrops.member, member), eq(trayDrops.crate, crate))!, "trayDrops");
 }
 
 export async function packOf(ctx: QueryContext, member: MemberId, crate: string): Promise<AppliedReward | null> {
@@ -200,7 +201,7 @@ async function crestRecordedFor(tx: Transaction, member: MemberId, hoggie: strin
 }
 
 async function countDrop(ctx: MutationContext, member: MemberId) {
-  const tally = await uniqueOf<Doc<"dropTallies">>(ctx.tx, dropTallies, eq(dropTallies.member, member), "drop tally");
+  const tally = await uniqueOf<Doc<"dropTallies">>(ctx.tx, dropTallies, eq(dropTallies.member, member), "dropTallies");
   const count = (tally?.drops ?? 0) + 1;
   if (tally === null) await insert(ctx, dropTallies, { member, drops: count });
   else await ctx.tx.update(dropTallies).set({ drops: count }).where(eq(dropTallies._id, tally._id));
@@ -236,11 +237,11 @@ export function tallyOf(ctx: QueryContext, member: MemberId, hoggie: string): Pr
 }
 
 function tallyRowOf(tx: Transaction, member: MemberId, hoggie: string): Promise<Doc<"hoggieTallies"> | null> {
-  return uniqueOf<Doc<"hoggieTallies">>(tx, hoggieTallies, and(eq(hoggieTallies.member, member), eq(hoggieTallies.hoggie, hoggie))!, "hoggie tally");
+  return uniqueOf<Doc<"hoggieTallies">>(tx, hoggieTallies, and(eq(hoggieTallies.member, member), eq(hoggieTallies.hoggie, hoggie))!, "hoggieTallies");
 }
 
 function dropRecordOf(tx: Transaction, member: MemberId, crate: string): Promise<Doc<"drops"> | null> {
-  return uniqueOf<Doc<"drops">>(tx, drops, and(eq(drops.member, member), eq(drops.crate, crate))!, "drop");
+  return uniqueOf<Doc<"drops">>(tx, drops, and(eq(drops.member, member), eq(drops.crate, crate))!, "drops");
 }
 
 export function drawSecret() {
@@ -249,11 +250,10 @@ export function drawSecret() {
 
 type HoggieTable = typeof drops | typeof dropTallies | typeof hoggieTallies | typeof trayDrops;
 
-// Convex's `.unique()`: the one row, or null; a second one is an error, not a choice.
-async function uniqueOf<Document>(tx: Transaction, table: HoggieTable, where: SQL, what: string): Promise<Document | null> {
-  const rows = await tx.select().from(table).where(where).limit(2);
-  if (rows.length > 1) throw new Error(`More than one ${what} is stored for a member`);
-  return rows[0] === undefined ? null : toDocument<Document>(table, rows[0]);
+// Convex's `.unique()` on the table Convex named: the one row, or null; a second one is Convex's refusal.
+async function uniqueOf<Document>(tx: Transaction, table: HoggieTable, where: SQL, named: string): Promise<Document | null> {
+  const row = unique(named, await tx.select().from(table).where(where).limit(2));
+  return row === null ? null : toDocument<Document>(table, row);
 }
 
 async function insert(ctx: MutationContext, table: HoggieTable, document: Record<string, unknown>): Promise<void> {
