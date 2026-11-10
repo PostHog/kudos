@@ -1,7 +1,7 @@
 // The module map's skeleton of convex/messageSettings/messageSettings.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
 // notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
-import { type MemberId } from "../workspace/directory.ts";
-import { type MessageKind, type MessageKindEntry, type MessagePlace } from "./kinds.ts";
+import type { MemberId } from "../workspace/directory.ts";
+import type { MessageKind, MessageKindEntry, MessagePlace } from "./kinds.ts";
 import type { MutationContext, QueryContext } from "../operations.ts";
 import { notPorted } from "../notPorted.ts";
 

@@ -20,6 +20,7 @@ import {
   switchWebsite,
   unlocksShippedBeforeAnyoneJoined,
   type Reader,
+  registry,
 } from "../albumPorts.testing.ts";
 
 const now = new Date("2026-10-14T10:00:00Z");
@@ -34,7 +35,7 @@ const everyKindWaiting = [
 
 type Collector = Awaited<ReturnType<typeof aCollectorWithEveryKindWaiting>>;
 
-const testBackend = useTestBackend({ now: now.getTime() });
+const testBackend = useTestBackend({ now: now.getTime(), registry });
 let t: TestBackend;
 
 afterEach(() => {
