@@ -1,12 +1,11 @@
 // The quests panel's read passes the website's one guard: today's convex/website/quests.test.ts, on the service's test
 // backend. Each read goes through the whole app by its route name, signed in through SSO or not at all, so the app's own
-// identity mapping and member check (S15) answer it; until S15 ports them, a request that reaches them waits on S15.
+// identity mapping and member check answer it.
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { useTestBackend, type TestBackend } from "../../testing/backend.ts";
 import { flagsKey, postHogHost, projectToken } from "../../testing/fakePostHog.ts";
 import { definitionsStored, offForEveryone, onForEveryone } from "../../testing/flags.ts";
 import { signingSecret } from "../../testing/signedSlack.ts";
-import { waitsOn } from "../../testing/waiting.ts";
 import { workspaceKeyOf } from "../analytics/outbox.ts";
 import { argumentsRefused, signedInThroughSso, websiteAs } from "./routesTesting.ts";
 
@@ -59,7 +58,7 @@ async function signedIn(person = juno) {
 }
 
 describe("website reads pass one guard", () => {
-  waitsOn(["S15"], "getQuests reads closed while the website flag is off, even on the Monday path", async () => {
+  test("getQuests reads closed while the website flag is off, even on the Monday path", async () => {
     await onTheMondayPath();
     const { asSignedIn } = await signedIn();
     await switchWebsite(false, ...mondayPathFlags);
@@ -67,13 +66,13 @@ describe("website reads pass one guard", () => {
     expect(await asSignedIn.read("website.quests.getQuests", {})).toEqual({ kind: "closed" });
   });
 
-  waitsOn(["S15"], "getQuests reads signed out without a session", async () => {
+  test("getQuests reads signed out without a session", async () => {
     await onTheMondayPath();
 
     expect(await websiteAs(t, null).read("website.quests.getQuests", {})).toEqual({ kind: "signed-out" });
   });
 
-  waitsOn(["S15"], "getQuests reads not-a-member for a former member with a live session", async () => {
+  test("getQuests reads not-a-member for a former member with a live session", async () => {
     await onTheMondayPath();
     await aMember(juno.user, "not-a-member");
     const asSignedIn = await aSession(juno);

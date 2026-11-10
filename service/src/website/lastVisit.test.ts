@@ -176,7 +176,7 @@ describe("LP22: getAlbum answers when each sticker was put in", () => {
 });
 
 describe("website commands pass one guard", () => {
-  waitsOn(["S15"], "WS61: with the website flag off, arriving answers closed and writes nothing at all", async () => {
+  test("WS61: with the website flag off, arriving answers closed and writes nothing at all", async () => {
     const asAlice = await aSession(alice);
     await websiteOff(...itemsOn);
     const before = await everythingWritten();

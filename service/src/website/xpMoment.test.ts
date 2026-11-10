@@ -494,7 +494,7 @@ describe("LP22 LP26: an item the member turned is never New at a later visit", (
 });
 
 describe("website reads pass one guard", () => {
-  waitsOn(["S15"], "WS61: getXpMoment answers closed with the website off, and signed-out without a session", async () => {
+  test("WS61: getXpMoment answers closed with the website off, and signed-out without a session", async () => {
     const asAlice = await aSession(alice);
     expect(await websiteAs(t, null).read("website.xpMoment.getXpMoment", {})).toEqual({ kind: "signed-out" });
     await websiteOff(...everyFlagOfTheMoment);
@@ -503,7 +503,7 @@ describe("website reads pass one guard", () => {
 });
 
 describe("website commands pass one guard", () => {
-  waitsOn(["S15"], "WS61: ending answers closed with the website off and signed-out without a session, writing nothing at all", async () => {
+  test("WS61: ending answers closed with the website off and signed-out without a session, writing nothing at all", async () => {
     const asAlice = await aSession(alice);
     const ending = { from: 1, until: 2, skipped: false };
     const before = await everythingWritten();

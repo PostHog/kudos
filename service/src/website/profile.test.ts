@@ -3,7 +3,7 @@
 // is the member check itself (closed, signed out, verifying, unverified, not a member) go through S15's route transport
 // with the reader's identity, in S17's route pull request. Today's `prepareWebsiteFlag` made the workspace's key;
 // `workspaceKeyOf` stands in for it.
-import { afterEach, beforeEach, describe, expect, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, vi, test } from "vitest";
 import { useTestBackend, type TestBackend } from "../../testing/backend.ts";
 import { flagsKey, postHogHost, projectToken, type FlagDefinition } from "../../testing/fakePostHog.ts";
 import { definitionsStored, offForEveryone, onForEveryone, onInTheSandboxOnly } from "../../testing/flags.ts";
@@ -94,7 +94,7 @@ async function prepareWebsiteFlag() {
 
 describe("website reads pass one guard", () => {
   describe("WS2 WS3 WS4: the website flag closes every read", () => {
-    waitsOn(memberCheck, "a member with a live session reads closed while the flag is off", async () => {
+    test("a member with a live session reads closed while the flag is off", async () => {
       await aMember(juno.user);
       const asSignedIn = await aSession(juno);
       await switchWebsite(false);
@@ -102,13 +102,13 @@ describe("website reads pass one guard", () => {
       expect(await myProfileAs(asSignedIn)).toEqual({ kind: "closed" });
     });
 
-    waitsOn(memberCheck, "a visitor with no session reads closed, not signed out, while the flag is off", async () => {
+    test("a visitor with no session reads closed, not signed out, while the flag is off", async () => {
       await switchWebsite(false);
 
       expect(await myProfileAs()).toEqual({ kind: "closed" });
     });
 
-    waitsOn(memberCheck, "a flag nobody created in PostHog answers off", async () => {
+    test("a flag nobody created in PostHog answers off", async () => {
       await aMember(juno.user);
       const asSignedIn = await aSession(juno);
       await definitionsStored(t.operations);
@@ -117,7 +117,7 @@ describe("website reads pass one guard", () => {
       expect(await myProfileAs(asSignedIn)).toEqual({ kind: "closed" });
     });
 
-    waitsOn(memberCheck, "the flag on for the workspace still reads closed until prepareWebsiteFlag made its workspace key", async () => {
+    test("the flag on for the workspace still reads closed until prepareWebsiteFlag made its workspace key", async () => {
       await aMember(juno.user);
       const asSignedIn = await aSession(juno);
       await definitionsStored(t.operations, { key: "website", filters: { groups: [{ properties: [], rollout_percentage: 100 }] } });
@@ -125,7 +125,7 @@ describe("website reads pass one guard", () => {
       expect(await myProfileAs(asSignedIn)).toEqual({ kind: "closed" });
     });
 
-    waitsOn(memberCheck, "an unset SLACK_WORKSPACE_ID reads closed, whatever the flag says", async () => {
+    test("an unset SLACK_WORKSPACE_ID reads closed, whatever the flag says", async () => {
       await aMember(juno.user);
       const asSignedIn = await aSession(juno);
       await switchWebsite(true);
@@ -149,7 +149,7 @@ describe("website reads pass one guard", () => {
   describe("WS9 WS11 WS14: every read checks the live session, the workspace and the directory, in that order", () => {
     beforeEach(() => switchWebsite(true));
 
-    waitsOn(memberCheck, "a visitor with no session is signed out, never an empty profile", async () => {
+    test("a visitor with no session is signed out, never an empty profile", async () => {
       expect(await myProfileAs()).toEqual({ kind: "signed-out" });
     });
 
@@ -399,7 +399,7 @@ describe("getMyProfile says bookSpread only while book-spread is on", () => {
     });
   }
 
-  waitsOn(memberCheck, "#587: without the flags key the website reads closed, with no bookSpread, even while PostHog turned book-spread on", async () => {
+  test("#587: without the flags key the website reads closed, with no bookSpread, even while PostHog turned book-spread on", async () => {
     await aMemberServed(undefined, onForEveryone(bookSpread));
     const asSignedIn = await signedInThroughSso(t, juno);
     vi.stubEnv("POSTHOG_PERSONAL_API_KEY", "");
@@ -435,7 +435,7 @@ describe("AL39: getMyProfile says album only while album is on", () => {
     expect(await exposuresTo(album)).toEqual([]);
   });
 
-  waitsOn(memberCheck, "without the flags key the website reads closed, with no album, even while PostHog turned album on", async () => {
+  test("without the flags key the website reads closed, with no album, even while PostHog turned album on", async () => {
     await aMemberServed(undefined, onForEveryone(album));
     const asSignedIn = await signedInThroughSso(t, juno);
     vi.stubEnv("POSTHOG_PERSONAL_API_KEY", "");

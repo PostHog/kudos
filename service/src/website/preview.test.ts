@@ -43,6 +43,7 @@ beforeEach(() => {
   vi.stubEnv("POSTHOG_PROJECT_TOKEN", projectToken);
   vi.stubEnv("POSTHOG_PERSONAL_API_KEY", flagsKey);
   vi.stubEnv("POSTHOG_HOST", postHogHost);
+  vi.stubEnv("SLACK_BOT_TOKEN", "xoxb-test");
   vi.stubEnv("KUDOS_ENVIRONMENT", "sandbox");
   vi.stubEnv("SITE_URL", siteUrl);
   t = backend();
@@ -205,7 +206,7 @@ describe("F26 F27 F28 F29: a member previews the website by their own decision",
   });
 
   describe("F27: a signed-in member's reads follow their own decision", () => {
-    waitsOn(["S15"], "while the website is closed for the workspace, a member it doesn't name reads closed with a live session, as a visitor without one does", async () => {
+    test("while the website is closed for the workspace, a member it doesn't name reads closed with a live session, as a visitor without one does", async () => {
       const bobs = await aMemberWithEmail(bob);
       await aMemberWithEmail(alice);
       await flagsServed(websiteForAlice);
@@ -216,8 +217,10 @@ describe("F26 F27 F28 F29: a member previews the website by their own decision",
       expect(await myProfile()).toEqual({ kind: "closed" });
     });
 
-    waitsOn(["S15"], "a previewer's session that hasn't been verified yet reads closed, since the workspace decides for a person the directory doesn't know", async () => {
+    waitsOn(["S3"], "a previewer's session that hasn't been verified yet reads closed, since the workspace decides for a person the directory doesn't know", async () => {
       await flagsServed(websiteForAlice);
+      // Slack knows Alice by the email she signs in with, as S15's identity mapping looks her up (users.lookupByEmail).
+      t.slack.withMember(alice.user, { profile: { email: alice.email } });
       const { asSignedIn } = await aSession(alice);
 
       expect(await myProfile(asSignedIn)).toEqual({ kind: "closed" });

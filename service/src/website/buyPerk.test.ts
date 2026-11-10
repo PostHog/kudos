@@ -7,7 +7,7 @@
 // table's rows, and today's second backend is the same one emptied.
 import { asc, getTableColumns, getTableName, is, sql } from "drizzle-orm";
 import { PgTable } from "drizzle-orm/pg-core";
-import { afterEach, beforeEach, describe, expect, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, vi, test } from "vitest";
 import { useTestBackend, type TestBackend } from "../../testing/backend.ts";
 import { flagsKey, postHogHost, projectToken } from "../../testing/fakePostHog.ts";
 import { definitionsStored, offForEveryone, onForEveryone, onForPercent } from "../../testing/flags.ts";
@@ -269,7 +269,7 @@ describe("website commands pass one guard", () => {
       expect(await everythingWritten()).toEqual(before);
     });
 
-    waitsOn(["S15"], "with a flags key but no workspace key yet, the purchase answers closed and makes no key", async () => {
+    test("with a flags key but no workspace key yet, the purchase answers closed and makes no key", async () => {
       await definitionsStored(t.operations, { key: "website", filters: { groups: [{ properties: [], rollout_percentage: 100 }] } });
       await t.seed.insert("members", { workspace: allowedWorkspace, user: juno.user, kind: "member", asOf: 0 });
       const asSignedIn = await aSession(juno);

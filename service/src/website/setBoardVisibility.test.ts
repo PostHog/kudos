@@ -191,7 +191,7 @@ function onTheBoards(member: MemberId) {
 
 describe("website commands pass one guard", () => {
   describe("WS61: a denial answers as a read does and writes nothing at all", () => {
-    waitsOn(memberCheck, "with the website flag off, the switch answers closed", async () => {
+    test("with the website flag off, the switch answers closed", async () => {
       await aBoardWithoutUnlocks();
       const asSignedIn = await aSession(juno);
       await switchWebsite(false, "everyone-board");
@@ -201,7 +201,7 @@ describe("website commands pass one guard", () => {
       expect(await everythingWritten()).toEqual(before);
     });
 
-    waitsOn(memberCheck, "without a session, the switch answers signed-out", async () => {
+    test("without a session, the switch answers signed-out", async () => {
       await aBoardWithoutUnlocks();
       const before = await everythingWritten();
 

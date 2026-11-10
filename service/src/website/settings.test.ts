@@ -178,7 +178,7 @@ async function homeRepublishes() {
 }
 
 describe("website reads pass one guard", () => {
-  waitsOn(memberCheck, "WS11: with the website flag off, the settings read answers closed", async () => {
+  test("WS11: with the website flag off, the settings read answers closed", async () => {
     await signedInWith(messageSettings);
     const asSignedIn = await aSession({ user: "U_OTHER" });
     await switchWebsite(false, messageSettings);
@@ -186,7 +186,7 @@ describe("website reads pass one guard", () => {
     expect(await asSignedIn.read("website.settings.getSettings", {})).toEqual({ kind: "closed" });
   });
 
-  waitsOn(memberCheck, "WS11: without a session, the settings read answers signed-out", async () => {
+  test("WS11: without a session, the settings read answers signed-out", async () => {
     await signedInWith(messageSettings);
 
     expect(await websiteAs(t, null).read("website.settings.getSettings", {})).toEqual({ kind: "signed-out" });
@@ -249,7 +249,7 @@ describe("the settings read", () => {
 });
 
 describe("website commands pass one guard", () => {
-  waitsOn(memberCheck, "WS61: with the website flag off, the message setting answers closed and writes nothing", async () => {
+  test("WS61: with the website flag off, the message setting answers closed and writes nothing", async () => {
     await signedInWith(messageSettings);
     const asSignedIn = await aSession(juno);
     await switchWebsite(false, messageSettings);
@@ -259,7 +259,7 @@ describe("website commands pass one guard", () => {
     expect(await everythingWritten()).toEqual(before);
   });
 
-  waitsOn(memberCheck, "WS61: without a session, the message setting and the group pick answer signed-out and write nothing", async () => {
+  test("WS61: without a session, the message setting and the group pick answer signed-out and write nothing", async () => {
     await signedInWith(messageSettings, "groups");
     const before = await everythingWritten();
     const signedOut = websiteAs(t, null);
