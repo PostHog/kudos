@@ -1,6 +1,7 @@
 // A job that handles members' words withholds them from any error it throws, so a job's failure row never carries
 // them. A stub not ported yet carries no words, only its module's path, so its NotPortedError passes as it is: the test
-// backend's settle then names it, and a waiting test keeps waiting.
+// backend's settle then names it, and a waiting test keeps waiting. A database error keeps its code, which carries no
+// words either, so a serialization failure still retries.
 import { eq } from "drizzle-orm";
 import { expect, test } from "vitest";
 import { z } from "zod";
@@ -26,7 +27,16 @@ const replyWithWords = mutationJob(
     throw notPorted("feedback.replies.privateReply");
   }),
 );
-const backend = useTestBackend({ registry: createRegistry({ testing: { jobs: [quote, replyWithWords] } }) });
+let conflicts = 0;
+const forgetOnce = mutationJob(
+  "testing.forgetOnce",
+  z.object({}),
+  withholdingWords(async (ctx) => {
+    if (conflicts-- > 0) throw Object.assign(new Error("could not serialize access due to concurrent update of thanks"), { code: "40001" });
+    await ctx.tx.update(jobs).set({ error: "forgotten" }).where(eq(jobs.name, "testing.forgetOnce"));
+  }),
+);
+const backend = useTestBackend({ registry: createRegistry({ testing: { jobs: [quote, replyWithWords, forgetOnce] } }) });
 
 test("a job's error keeps the member's words out of its failure row", async () => {
   const t = backend();
@@ -48,4 +58,16 @@ test("a stub not ported yet passes through as itself, so a waiting test keeps wa
   });
 
   expect(path, "the stub the job reached").toBe("feedback.replies.privateReply");
+});
+
+test("a serialization failure in a job that withholds words retries, and the job completes", async () => {
+  const t = backend();
+  conflicts = 1;
+  await t.run(async (ctx) => void (await ctx.jobs.enqueue(forgetOnce, {})));
+
+  await t.settle();
+  const [row] = await t.query(async ({ tx }) => tx.select({ state: jobs.state, error: jobs.error }).from(jobs).where(eq(jobs.name, "testing.forgetOnce")));
+
+  expect(conflicts, "the conflicts left").toBe(-1);
+  expect(row, "the job").toEqual({ state: "success", error: "forgotten" });
 });

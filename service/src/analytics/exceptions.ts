@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { errorFields } from "../log.ts";
 import { NotPortedError } from "../notPorted.ts";
 import { zv } from "../values.ts";
 
@@ -37,7 +38,10 @@ export function withheldExceptionOf(error: unknown): Exception {
 export function withheldErrorOf(error: unknown): Error {
   const withheld = new Error(`${wordsWithheld} (${typeOf(error)})`);
   if (error instanceof Error) withheld.stack = [`Error: ${withheld.message}`, ...stackLinesAfterTheMessage(error)].join("\n");
-  return withheld;
+  // The service reads whether a failure is the database's, and retries one that is, by its code alone; a code is never
+  // a member's words.
+  const { code } = errorFields(error);
+  return code === undefined ? withheld : Object.assign(withheld, { code });
 }
 
 export function withholdingWords<Ctx, Args extends unknown[], Output>(handler: (ctx: Ctx, ...args: Args) => Promise<Output>) {

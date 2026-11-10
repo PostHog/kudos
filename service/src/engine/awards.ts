@@ -286,6 +286,11 @@ function latestDayAt(at: number): DayKey {
   return allowanceDay(at + dayMs, "UTC");
 }
 
+/** When the award's row was recorded, its creation time, as `ctx.db.get(award)` read it; `null` for none. */
+export async function recordedAtOfAward({ tx }: QueryContext, award: AwardId): Promise<number | null> {
+  return (await awardById(tx, award))?._creationTime ?? null;
+}
+
 export async function awardAt({ tx }: QueryContext, award: AwardId): Promise<number | null> {
   return (await awardById(tx, award))?.at ?? null;
 }
