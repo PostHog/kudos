@@ -9,13 +9,13 @@ import { useTestDatabase } from "../../../testing/database.ts";
 import { createClock } from "../../clock.ts";
 import type { HomeMember } from "../../feedback/homes.ts";
 import { createApp } from "../../http/app.ts";
-import { createLiveFeed } from "../../live.ts";
+import { createLiveFeed, type LiveFeed } from "../../live.ts";
 import { jsonLog } from "../../log.ts";
 import { createOperations } from "../../operations.ts";
 import { websiteClock } from "../../db/schema/website.ts";
 import type { Denial, Verified } from "../memberQuery.ts";
 import { memberCommand, memberRead, type Route } from "./route.ts";
-import { apiHeader, apiTransport, maxBodyBytes, type Identity, type MemberCheck, type SignedIn } from "./transport.ts";
+import { apiHeader, apiTransport, maxBodyBytes, type Enter, type Identity, type MemberCheck, type SignedIn } from "./transport.ts";
 
 const database = useTestDatabase();
 
@@ -65,7 +65,9 @@ const nested = memberRead("website.test.nested", { filter: z.strictObject({ week
 
 const allRoutes: Route[] = [greeting, ticks, tick, tickThenFail, nothing, closesItself, failing, nested];
 
-function apiWith({ read = "admit", command = "admit", routes = allRoutes }: { read?: Gate; command?: Gate; routes?: Route[] } = {}) {
+const entering: Enter = async (_ctx, identity) => ("kind" in identity ? identity : { kind: "entered" });
+
+function apiWith({ read = "admit", command = "admit", routes = allRoutes, enter = entering, live = createLiveFeed() }: { read?: Gate; command?: Gate; routes?: Route[]; enter?: Enter | null; live?: LiveFeed | null } = {}) {
   const lines: Array<Record<string, unknown>> = [];
   const log = jsonLog((line) => lines.push(JSON.parse(line) as Record<string, unknown>));
   const clock = createClock();
@@ -81,7 +83,7 @@ function apiWith({ read = "admit", command = "admit", routes = allRoutes }: { re
     off: false,
     log,
     clock,
-    routes: [apiTransport({ operations, log, live: createLiveFeed(), routes, identify, check: checkOf({ read, command }), enter: async (_ctx, identity) => ("kind" in identity ? identity : { kind: "entered" }) })],
+    routes: [apiTransport({ operations, log, routes, identify, check: checkOf({ read, command }), ...(enter !== null && { enter }), ...(live !== null && { live }) })],
   });
   const ticked = async () => (await (await app.request("/api/query/website.test.ticks", sent({}))).json()) as number[];
   return { app, lines, ticked };
@@ -343,6 +345,15 @@ describe("only the table's routes answer", () => {
       expect(answer.status, path).toBe(404);
       expect(answer.headers.get("content-type"), path).toMatch(/^application\/json/);
     }
+  });
+
+  test("a transport built without an entry or a live feed, as a route test may build one, has neither route", async () => {
+    const without = apiWith({ enter: null, live: null });
+    const withBoth = apiWith();
+
+    expect((await without.app.request("/api/entry", sent({}))).status).toBe(404);
+    expect((await without.app.request("/api/live", { headers: { "x-signed-in-as": "juno" } })).status).toBe(404);
+    expect(await (await withBoth.app.request("/api/entry", sent({}))).json()).toEqual({ kind: "entered" });
   });
 
   test("a read is never a command, nor a command a read", async () => {

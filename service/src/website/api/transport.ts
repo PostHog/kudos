@@ -45,13 +45,15 @@ export interface MemberCheck {
 export interface TransportOptions {
   operations: Operations;
   log: Log;
-  /** What `GET /api/live` streams to the members who follow it. */
-  live: LiveFeed;
+  /** What `GET /api/live` streams to the members who follow it. The website's registration always gives it; a
+   *  transport without it, as a route test may build, has no live route. */
+  live?: LiveFeed;
   routes: readonly Route[];
   identify: Identify;
   check: MemberCheck;
-  /** The page load that signs the person in, run by `POST /api/entry` in one command of its own. */
-  enter: Enter;
+  /** The page load that signs the person in, run by `POST /api/entry` in one command of its own. The website's
+   *  registration always gives it; a transport without it, as a route test may build, has no entry route. */
+  enter?: Enter;
 }
 
 /** Runs a person's entry: their sign-in effects when they're due, or the denial that writes nothing. */
@@ -74,8 +76,8 @@ export function apiTransport({ operations, log, live, routes, identify, check, e
   const limited = bodyLimit({ maxSize: maxBodyBytes, onError: (c) => c.json({ error: "the request is too large" }, 413, { "cache-control": "no-store" }) });
   api.post("/api/query/:name", limited, (c) => answer(c, reads.get(c.req.param("name"))));
   api.post("/api/mutation/:name", limited, (c) => answer(c, commands.get(c.req.param("name"))));
-  api.post("/api/entry", limited, entry);
-  api.get("/api/live", follow);
+  if (enter !== undefined) api.post("/api/entry", limited, (c) => entry(c, enter));
+  if (live !== undefined) api.get("/api/live", (c) => follow(c, live));
   // Every other API path, and any other method on these, is no route: never the website's page.
   api.all("/api", (c) => c.json({ error: "no such route" }, 404));
   api.all("/api/*", (c) => c.json({ error: "no such route" }, 404));
@@ -105,7 +107,7 @@ export function apiTransport({ operations, log, live, routes, identify, check, e
     return c.json(result === undefined ? null : result, 200, { "cache-control": "no-store" });
   }
 
-  async function entry(c: Context): Promise<Response> {
+  async function entry(c: Context, enter: Enter): Promise<Response> {
     const args = await argumentsOf(c, noArguments);
     if (args instanceof Response) return args;
     const identity = await identify(c.req.raw);
@@ -114,7 +116,7 @@ export function apiTransport({ operations, log, live, routes, identify, check, e
     return c.json(result, 200, { "cache-control": "no-store" });
   }
 
-  async function follow(c: Context): Promise<Response> {
+  async function follow(c: Context, live: LiveFeed): Promise<Response> {
     if (crossSite(c)) return refused(c, 403, "not a request of the website's own");
     const identity = await identify(c.req.raw);
     const verified = await operations.query("website.live", (ctx) => check.read(ctx, identity));

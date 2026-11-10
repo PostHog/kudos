@@ -90,6 +90,16 @@ function lastOf(answer: pg.QueryResult | pg.QueryResult[]): pg.QueryResult {
 // Postgres's serialization failure and deadlock: the transaction did nothing, and running it again may succeed.
 const retryable = new Set(["40001", "40P01"]);
 
+// Failures that provably committed nothing because the connection was lost before COMMIT was sent: a failover, a
+// restart, a network fault. Such an operation runs again on a new connection, as Convex re-ran a mutation after a
+// transient error. A loss during COMMIT leaves the outcome unknown, so that one is never run again blindly.
+const ranNothing = new WeakSet<object>();
+
+/** Postgres's answers that the session is gone: a connection exception, or a shutdown that ended it. */
+function endsSession(error: unknown): boolean {
+  return hasSqlState(error) && (error.code.startsWith("08") || ["57P01", "57P02", "57P03"].includes(error.code));
+}
+
 // The runner sends each handler statement on its own (pg's extended protocol), so Postgres refuses a text of several,
 // and a statement's first words decide whether it begins or ends a transaction.
 
@@ -207,10 +217,22 @@ export function createOperations({ pool, clock, log, maxAttempts = 10, retryDela
     const stamps: Stamps = { floor: Number.NEGATIVE_INFINITY };
     // This attempt's alone: a retry starts on a new transaction, so with nothing written.
     let shown = false;
-    const client = await pool.connect();
+    // Without a connection, nothing began. pg's own failures to connect have no SQLSTATE; one with a SQLSTATE that
+    // doesn't say the server is unreachable, such as a refused password, would fail every time.
+    const client = await pool.connect().catch((error: unknown) => {
+      if (!hasSqlState(error) || endsSession(error)) markRanNothing(error);
+      throw error;
+    });
     let broken: unknown;
+    // The connection lost before COMMIT was sent: the transaction ended with it, so nothing it did committed.
+    let lost: unknown;
+    let committing = false;
     // A checked-out client has no listener of the pool's; without one, a dropped connection would crash the process.
-    const onError = (error: unknown) => (broken ??= error);
+    // pg emits it when the socket fails or ends, before it fails the statements that were waiting on it.
+    const onError = (error: unknown) => {
+      broken ??= error;
+      if (!committing) lost ??= error;
+    };
     client.on("error", onError);
     // The first statement Postgres failed. It aborts the transaction on it, even when the handler catches it; pg's own
     // refusals, such as a prepared statement's name used twice, never reach Postgres and abort nothing.
@@ -241,6 +263,12 @@ export function createOperations({ pool, clock, log, maxAttempts = 10, retryDela
             return result;
           },
           (error: unknown) => {
+            // The server may answer that it ends the session before the socket closes. An answer that lands after
+            // COMMIT was sent proves nothing about it: the COMMIT may have run, so it is no loss before COMMIT.
+            if (endsSession(error)) {
+              broken ??= error;
+              if (!committing) lost ??= error;
+            }
             if (!hasSqlState(error)) throw error;
             // Every statement after a failed one answers 25P02; the failure the handler went on after is the answer.
             if (error.code === "25P02" && aborted !== undefined) throw wentOnAfter(aborted);
@@ -282,6 +310,7 @@ export function createOperations({ pool, clock, log, maxAttempts = 10, retryDela
     try {
       const began = await client.query(stamping ? `${begin}; ${readCreationClock}` : begin).catch((error: unknown) => {
         broken ??= error;
+        if (!hasSqlState(error) || endsSession(error)) lost ??= error;
         throw error;
       });
       if (stamping) stamps.floor = creationClockFloor(lastOf(began));
@@ -296,9 +325,12 @@ export function createOperations({ pool, clock, log, maxAttempts = 10, retryDela
         throw scope.network ?? scope.networkBehind ?? error;
       }
       scope.open = false;
+      // A handler that caught the lost connection and went on: COMMIT is never sent on it, so nothing committed.
+      if (lost !== undefined) throw lost;
       // Only a transaction still able to commit moves the clock; an aborted one answers COMMIT with ROLLBACK below.
       const advance = stamps.highest !== undefined && aborted === undefined ? `${advanceCreationClock(stamps.highest)}; ` : "";
       const notify = shown && aborted === undefined ? `${notifyLive}; ` : "";
+      committing = true;
       const committed = await client.query(`${notify}${advance}COMMIT`).catch((error: unknown) => {
         // The connection may be gone even when Postgres answered: a session ended at COMMIT answers 57P01 first. A
         // failed advance drops it too, and with it any lock the advance held, and the transaction it left aborted.
@@ -313,6 +345,10 @@ export function createOperations({ pool, clock, log, maxAttempts = 10, retryDela
       // On an aborted transaction Postgres answers COMMIT with ROLLBACK: the handler went on after a failed statement.
       if (commit.command !== "COMMIT") throw wentOnAfter(aborted);
       return result;
+    } catch (error) {
+      // `lost` is only ever set before COMMIT is sent.
+      if (lost !== undefined) markRanNothing(error);
+      throw error;
     } finally {
       scope.open = false;
       client.removeListener("error", onError);
@@ -320,39 +356,44 @@ export function createOperations({ pool, clock, log, maxAttempts = 10, retryDela
     }
   }
 
+  // Runs an operation's attempts: again, after a jittered wait, when an attempt did nothing that committed, up to
+  // `maxAttempts`; every other failure is the operation's answer.
+  async function attempts<T>(name: string, kind: "mutation" | "query", attempt: () => Promise<T>): Promise<T> {
+    for (let count = 1; ; count++) {
+      try {
+        return await attempt();
+      } catch (error) {
+        const fields = errorFields(error);
+        const again = (fields.code !== undefined && retryable.has(fields.code)) || (error instanceof Object && ranNothing.has(error));
+        if (!again) return failed(name, kind, error);
+        if (count >= maxAttempts) {
+          log.error(`${kind} retries exhausted`, { operation: name, attempts: count, ...fields });
+          throw error;
+        }
+        await new Promise((resolve) => setTimeout(resolve, retryDelayMs(count)));
+      }
+    }
+  }
+
   const operations: Operations = {
     async mutation(name, handler) {
       const now = clock.now();
-      for (let attempt = 1; ; attempt++) {
-        try {
-          return await inTransaction(
-            name,
-            "BEGIN ISOLATION LEVEL SERIALIZABLE",
-            (tx, stamps) => {
-              const stamp = () => newRow(now, stamps);
-              const jobs = createScheduler(tx, now, stamp);
-              return handler({ tx, now, newRow: stamp, jobs, publish: (event) => publish(jobs, subscribers, event) });
-            },
-            { stamping: true },
-          );
-        } catch (error) {
-          const fields = errorFields(error);
-          if (!fields.code || !retryable.has(fields.code)) return failed(name, "mutation", error);
-          if (attempt >= maxAttempts) {
-            log.error("mutation retries exhausted", { operation: name, attempts: attempt, ...fields });
-            throw error;
-          }
-          await new Promise((resolve) => setTimeout(resolve, retryDelayMs(attempt)));
-        }
-      }
+      return attempts(name, "mutation", () =>
+        inTransaction(
+          name,
+          "BEGIN ISOLATION LEVEL SERIALIZABLE",
+          (tx, stamps) => {
+            const stamp = () => newRow(now, stamps);
+            const jobs = createScheduler(tx, now, stamp);
+            return handler({ tx, now, newRow: stamp, jobs, publish: (event) => publish(jobs, subscribers, event) });
+          },
+          { stamping: true },
+        ),
+      );
     },
     async query(name, handler) {
       const now = clock.now();
-      try {
-        return await inTransaction(name, "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY", (tx) => handler({ tx, now }));
-      } catch (error) {
-        return failed(name, "query", error);
-      }
+      return attempts(name, "query", () => inTransaction(name, "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY", (tx) => handler({ tx, now })));
     },
     async action(name, handler) {
       try {
@@ -441,6 +482,10 @@ function transactionOwned(name: string): Error {
 function wentOnAfter(aborted: unknown): Error {
   const error = new Error("The operation went on after a failed statement, so its transaction rolled back", { cause: aborted });
   return Object.assign(error, { code: hasSqlState(aborted) ? aborted.code : "25P02" });
+}
+
+function markRanNothing(error: unknown): void {
+  if (error instanceof Object) ranNothing.add(error);
 }
 
 // An error Postgres answered with, as opposed to one of the connection's.

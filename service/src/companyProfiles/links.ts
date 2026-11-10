@@ -9,6 +9,7 @@ import { companyFaceOfProfile, type CompanyFace } from "./faces.ts";
 import { companyProfilesIn, publicNameOf, type CompanyProfile, type CompanyProfiles, type MatchedBy } from "./matcher.ts";
 import { keepCompanyFacesLater } from "./storedFaces.ts";
 import { companyTeamsOf } from "./teams.ts";
+import { unique } from "../db/unique.ts";
 
 export type ProfileChoice = { profile: number; name: string; role: string | null; teams: string[]; face: CompanyFace | null };
 
@@ -72,8 +73,8 @@ export async function linkOf(ctx: QueryContext, workspace: string, member: Membe
     .from(companyProfileLinks)
     .where(and(eq(companyProfileLinks.workspace, workspace), eq(companyProfileLinks.member, member), eq(companyProfileLinks.by, by)))
     .limit(2);
-  if (rows.length > 1) throw new Error(`More than one ${by} company profile link is held for ${member}`);
-  return rows[0] ? toDocument<Link>(companyProfileLinks, rows[0]) : null;
+  const row = unique("companyProfileLinks", rows);
+  return row ? toDocument<Link>(companyProfileLinks, row) : null;
 }
 
 export async function insertLink(ctx: MutationContext, link: Omit<Link, "_id" | "_creationTime">): Promise<void> {
