@@ -1,13 +1,13 @@
 // The onboarding journey over the service's transaction: Give a kudos to someone, Thank someone new and Thank someone on
 // two different days, each finished once, at the kudos that reached it. The journey reads awards through S4's engine, the
-// teammates through S3's directory and the xp-levels flag through S6, all still stubs on main: this file stands them in
-// over the awards rows it seeds, as today's reads answer. The harness ports (mondayPath.test.ts) wait on those stacks.
+// teammates through S3's directory and the xp-levels flag and rewards through S6, all still stubs on main: this file
+// stands them in over the awards, members and reward rows it seeds, as today's reads answer. The harness ports (mondayPath.test.ts) wait on those stacks.
 import { asc, eq } from "drizzle-orm";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { KudosGivenEvent } from "../bus/events.ts";
 import { createClock } from "../clock.ts";
 import { toDocument } from "../db/documents.ts";
-import { awards, jobs, type Doc } from "../db/schema/index.ts";
+import { awards, jobs, members, rewardRecords, type Doc } from "../db/schema/index.ts";
 import type { AwardId, DatedAward, GivenKudos } from "../engine/awards.ts";
 import type { MessageRef } from "../engine/messageEvent.ts";
 import type { Log } from "../log.ts";
@@ -20,8 +20,6 @@ import { questsFinishedByMessage } from "./finishedBy.ts";
 import { hasThankedEveryone, recheckRejoined, recheckSomeoneNewOf } from "./journey.ts";
 import { advanceOnboarding, nextOnboardingQuestOf, onboardingFinishedAt, onboardingMovedBy, onboardingQuestsOf, someoneNewWaitsOnTheMondayPath } from "./onboarding.ts";
 import { startQuests } from "./start.ts";
-
-const standIn = { teammates: [] as MemberId[], rewardsCausedBy: [] as Array<{ key: string; xp: number; catalogueVersion: string }> };
 
 async function awardRows(ctx: QueryContext, giver: MemberId): Promise<Array<Doc<"awards">>> {
   const rows = await ctx.tx.select().from(awards).where(eq(awards.giver, giver)).orderBy(asc(awards._creationTime), asc(awards._id));
@@ -46,9 +44,24 @@ vi.mock("../engine/awards.ts", async (original) => ({
     return rows.map((row) => toDocument<Doc<"awards">>(awards, row)).find((row) => row.workspace === workspace && row.conversation === conversation)?._creationTime ?? null;
   },
 }));
-vi.mock("../workspace/directory.ts", async (original) => ({ ...(await original<object>()), teammatesOf: async () => standIn.teammates }));
+// S3's teammatesOf: the workspace's current members (kind "member") but the member, as convex/workspace/directory.ts reads them.
+vi.mock("../workspace/directory.ts", async (original) => ({
+  ...(await original<object>()),
+  teammatesOf: async (ctx: QueryContext, workspace: string, member: MemberId) =>
+    (await ctx.tx.select().from(members).where(eq(members.workspace, workspace)).orderBy(asc(members._creationTime), asc(members._id)))
+      .map((row) => toDocument<Doc<"members">>(members, row))
+      .filter(({ _id, kind }) => kind === "member" && _id !== member)
+      .map(({ _id }) => _id),
+}));
 vi.mock("../progression/xpLevels.ts", async (original) => ({ ...(await original<object>()), xpLevelsOnFor: async () => true }));
-vi.mock("../progression/rewards.ts", async (original) => ({ ...(await original<object>()), rewardsCausedBy: async () => standIn.rewardsCausedBy }));
+// S6's rewardsCausedBy: the member's reward records whose cause is the message, as convex/progression/rewards.ts reads them.
+vi.mock("../progression/rewards.ts", async (original) => ({
+  ...(await original<object>()),
+  rewardsCausedBy: async (ctx: QueryContext, member: MemberId, { workspace, conversation, message }: MessageRef) =>
+    (await ctx.tx.select().from(rewardRecords).where(eq(rewardRecords.member, member)).orderBy(asc(rewardRecords._creationTime), asc(rewardRecords._id)))
+      .map((row) => toDocument<Doc<"rewardRecords">>(rewardRecords, row))
+      .filter(({ cause }) => cause?.workspace === workspace && cause.conversation === conversation && cause.message === message),
+}));
 
 const database = useTestDatabase();
 const quiet: Log = { info: () => {}, error: () => {} };
@@ -68,9 +81,12 @@ async function setUp() {
   const seed = seeder(operations);
   const member = (user: string) => seed.insert("members", { workspace: "T1", user, kind: "member" }) as Promise<MemberId>;
   const [bob, alice, carol, dana] = [await member("U_BOB"), await member("U_ALICE"), await member("U_CAROL"), await member("U_DANA")];
-  standIn.teammates = [alice, carol, dana];
-  standIn.rewardsCausedBy = [];
   let messages = 0;
+  /** The next kudos is recorded at `minutes` after Tuesday 10:00, however long after it was given. */
+  const recordAt = (minutes: number) => {
+    now = tuesday + minutes * minuteMs;
+  };
+  const leaves = (who: MemberId) => seed.patch("members", who, { kind: "not-a-member" });
 
   /** Bob's kudos to the recipients, given `minutes` after Tuesday 10:00 and recorded as its awards, not yet followed. */
   const give = async (minutes: number, ...recipients: MemberId[]) => {
@@ -96,7 +112,7 @@ async function setUp() {
   const next = () => operations.query("test", (ctx) => nextOnboardingQuestOf(ctx, bob));
   const enqueued = () => operations.query("test", async ({ tx }) => (await tx.select().from(jobs).orderBy(asc(jobs._creationTime))).map((row) => toDocument<{ name: string; args: unknown }>(jobs, row)));
   await operations.mutation("test", (ctx) => startQuests(ctx, bob, tuesday));
-  return { operations, seed, bob, alice, carol, dana, give, follow, thanks, finishes, next, enqueued, at: (minutes: number) => tuesday + minutes * minuteMs };
+  return { operations, seed, bob, alice, carol, dana, recordAt, leaves, give, follow, thanks, finishes, next, enqueued, at: (minutes: number) => tuesday + minutes * minuteMs };
 }
 
 describe("the onboarding journey", () => {
@@ -167,6 +183,27 @@ describe("the onboarding journey", () => {
     ]);
     expect(await follow(earlier), "following the earlier kudos reports the step it finished").toEqual(["first-thanks"]);
   });
+
+  test("a kudos recorded long after it was given looks for earlier kudos only from ten minutes before its own recording", async () => {
+    const { alice, carol, give, follow, recordAt, finishes, at } = await setUp();
+    // Given at minute 1 and recorded at once, never followed; the next kudos is given at minute 5 but recorded at minute 60.
+    await give(1, alice);
+    recordAt(60);
+    const late = await give(5, carol);
+
+    expect(await follow(late)).toEqual(["first-thanks"]);
+    expect(await finishes(), "the minute-1 kudos was recorded before the window").toEqual([{ key: "journey:first-thanks", at: at(5), cause: late.message.message }]);
+  });
+
+  test("an earlier kudos Quests has already judged is not the one Give a kudos to someone names", async () => {
+    const { alice, carol, give, follow, seed, finishes, at } = await setUp();
+    const judged = await give(1, alice);
+    await seed.insert("questsJudged", { award: judged.awards[0]!.award });
+    const later = await give(5, carol);
+
+    expect(await follow(later)).toEqual(["first-thanks"]);
+    expect(await finishes()).toEqual([{ key: "journey:first-thanks", at: at(5), cause: later.message.message }]);
+  });
 });
 
 describe("Thank someone new when teammates leave and come back", () => {
@@ -190,32 +227,31 @@ describe("Thank someone new when teammates leave and come back", () => {
   test("the recheck finishes Thank someone new once the member has thanked everyone left, after their first kudos", async () => {
     vi.stubEnv("KUDOS_ENVIRONMENT", "sandbox");
     postHogDeciding("sandbox");
-    const { operations, bob, alice, carol, thanks, finishes, at } = await setUp();
+    const { operations, bob, alice, carol, dana, leaves, thanks, finishes, at } = await setUp();
     await definitionsStored(operations, onForEveryone("monday-quest"));
     await thanks(1, alice);
     await thanks(2, alice);
+    const recheck = () => operations.mutation("test", (ctx) => recheckSomeoneNewOf(ctx, { workspace: "T1", member: bob, at: at(3) }));
 
     expect(await operations.query("test", (ctx) => hasThankedEveryone(ctx, "T1", bob, at(3)))).toBe(false);
-    await recheckAfter(carol);
-    expect((await finishes()).map(({ key }) => key), "Carol is still a teammate").toEqual(["journey:first-thanks"]);
+    await leaves(carol);
+    await recheck();
+    expect((await finishes()).map(({ key }) => key), "Dana is still a teammate").toEqual(["journey:first-thanks"]);
 
-    // Carol left: Bob has now thanked everyone who's left.
-    await recheckAfter(null);
+    // Dana left as well: Bob has now thanked everyone who's left.
+    await leaves(dana);
+    await recheck();
     expect(await finishes()).toEqual([
       { key: "journey:first-thanks", at: at(1), cause: "1.000100" },
       { key: "journey:someone-new", at: at(3), cause: undefined },
     ]);
-
-    async function recheckAfter(stillThere: MemberId | null) {
-      standIn.teammates = stillThere === null ? [alice] : [alice, stillThere];
-      await operations.mutation("test", (ctx) => recheckSomeoneNewOf(ctx, { workspace: "T1", member: bob, at: at(3) }));
-    }
   });
 
   test("the recheck finishes nothing while the monday-quest flag is off", async () => {
-    const { operations, bob, alice, thanks, finishes, at } = await setUp();
+    const { operations, bob, alice, carol, dana, leaves, thanks, finishes, at } = await setUp();
     await thanks(1, alice);
-    standIn.teammates = [alice];
+    await leaves(carol);
+    await leaves(dana);
 
     await operations.mutation("test", (ctx) => recheckSomeoneNewOf(ctx, { workspace: "T1", member: bob, at: at(3) }));
 
@@ -224,19 +260,25 @@ describe("Thank someone new when teammates leave and come back", () => {
 });
 
 describe("the quests a kudos message finished", () => {
-  test("names each journey step the message paid on the Monday path, and leaves out what it paid before the Monday path", async () => {
-    const { operations, bob } = await setUp();
-    standIn.rewardsCausedBy = [
-      { key: "journey:first-thanks", xp: 50, catalogueVersion: "monday-1" },
-      { key: "journey:hugs-3", xp: 20, catalogueVersion: "monday-1" },
-      { key: "journey:first-thanks", xp: 50, catalogueVersion: "1" },
-    ];
+  test("names each journey step the message paid the member on the Monday path, and nothing paid before it or for another member or message", async () => {
+    const { operations, seed, bob, alice } = await setUp();
+    const message = { workspace: "T1", conversation: "C1", message: "1.000100" };
+    const reward = (member: MemberId, key: string, xp: number, catalogueVersion: string, cause: MessageRef) =>
+      seed.insert("rewardRecords", { member, key, xp, coins: 0, item: null, catalogueVersion, at: tuesday, cause });
+    await reward(bob, "journey:first-thanks", 50, "monday-1", message);
+    await reward(bob, "journey:hugs-3", 20, "monday-1", message);
+    await reward(bob, "journey:someone-new", 30, "1", message);
+    await reward(alice, "journey:two-days", 40, "monday-1", message);
+    await reward(bob, "journey:two-days", 40, "monday-1", { ...message, workspace: "T2" });
+    await reward(bob, "journey:two-days", 40, "monday-1", { ...message, conversation: "C2" });
+    await reward(bob, "journey:two-days", 40, "monday-1", { ...message, message: "2.000100" });
+    const finishedBy = (member: MemberId, ref: MessageRef) => operations.query("test", (ctx) => questsFinishedByMessage(ctx, member, ref));
 
-    const finished = await operations.query("test", (ctx) => questsFinishedByMessage(ctx, bob, { workspace: "T1", conversation: "C1", message: "1.000100" }));
-
-    expect(finished).toEqual([
+    expect(await finishedBy(bob, message)).toEqual([
       { kind: "journey", goal: "Give a kudos to someone", xp: 50, hoggie: true },
       { kind: "journey", goal: "Give 3 hugs", xp: 20, hoggie: true },
     ]);
+    expect(await finishedBy(alice, message), "another member's rewards").toEqual([{ kind: "journey", goal: "Thank someone on two different days", xp: 40, hoggie: true }]);
+    expect(await finishedBy(bob, { ...message, message: "3.000100" }), "a message that paid nothing").toEqual([]);
   });
 });
