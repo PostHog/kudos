@@ -65,7 +65,6 @@ export const landed = [
   "convex/album/levelUpHoggies.ts",
   "convex/album/milestoneCatalogue.ts",
   "convex/album/milestoneXp.ts",
-  "convex/album/milestones.ts",
   "convex/album/opening.ts",
   "convex/album/packs.ts",
   "convex/album/personPage.ts",
