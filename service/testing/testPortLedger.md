@@ -167,7 +167,7 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/slack/events.test.ts | S4 | | |
 | convex/slack/everyoneBoardFlag.test.ts | S11 | | |
 | convex/slack/failedDirectoryCheck.test.ts | S3 | | |
-| convex/slack/firstHugReply.test.ts | S13 | | |
+| convex/slack/firstHugReply.test.ts | S13 | service/src/slack/firstHugReply.test.ts | S3 S4 S5 S6 S7 S8 S9 S11 S14 |
 | convex/slack/firstThanksTopUp.test.ts | S6 | | |
 | convex/slack/frontDoor.test.ts | S17 | | |
 | convex/slack/gainsLine.test.ts | S5 | | |
@@ -177,9 +177,9 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/slack/hoggieAvatarGate.test.ts | S10 | | |
 | convex/slack/hoggiesHome.test.ts | S10 | | |
 | convex/slack/homeTabBar.test.ts | S17 | | |
-| convex/slack/hugFacts.test.ts | S13 | | |
-| convex/slack/hugRewards.test.ts | S13 | | |
-| convex/slack/hugs.test.ts | S13 | | |
+| convex/slack/hugFacts.test.ts | S13 | service/src/slack/hugFacts.test.ts | S3 S4 S5 S6 S7 S8 S9 S11 S14 |
+| convex/slack/hugRewards.test.ts | S13 | service/src/slack/hugRewards.test.ts | S3 S4 S5 S6 S7 S8 S9 S11 S14 |
+| convex/slack/hugs.test.ts | S13 | service/src/slack/hugs.test.ts | S3 S4 S5 S6 S7 S8 S9 S10 S11 S14 |
 | convex/slack/hugsGate.test.ts | S13 | | |
 | convex/slack/inventory.test.ts | S8 | | |
 | convex/slack/kudosGivenScale.test.ts | S4 | | |
