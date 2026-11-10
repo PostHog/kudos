@@ -10,7 +10,7 @@
 //     await t.settle();
 //     expect(t.slack.messagesIn("C_GENERAL")).toEqual(...);
 //   });
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq, ne } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { afterEach, vi } from "vitest";
 import { z } from "zod";
@@ -18,6 +18,7 @@ import { createAppTime, type AppTime, type TimeAnswer } from "../src/appTime.ts"
 import type { Subscribers, Subscription } from "../src/bus/publish.ts";
 import { createClock, type Clock } from "../src/clock.ts";
 import { decodeStored } from "../src/db/codec.ts";
+import { toDocument } from "../src/db/documents.ts";
 import { jobs } from "../src/db/schema/service.ts";
 import { createApp } from "../src/http/app.ts";
 import { mutationJob } from "../src/jobs/define.ts";
@@ -29,8 +30,9 @@ import type { Registry } from "../src/registration.ts";
 import { serviceRegistry } from "../src/registry.ts";
 import { createFrontDoor } from "../src/slack/frontDoor.ts";
 import { useTestDatabase } from "./database.ts";
-import { FakePostHog, routedFetch } from "./fakePostHog.ts";
+import { FakePostHog, routedFetch, type FlagDefinition } from "./fakePostHog.ts";
 import { FakeSlack } from "./fakeSlack.ts";
+import { definitionsStored } from "./flags.ts";
 import { seeder, type Seeder } from "./seed.ts";
 import { signingSecret, slackClient, type SlackClient } from "./signedSlack.ts";
 
@@ -75,6 +77,10 @@ export interface TestBackend extends SlackClient {
    * the order of their publishing, which is not always the order they committed.
    */
   published(): Promise<PublishedEvent[]>;
+  /** Stores flag definitions as PostHog would serve them, for the flags operations read. */
+  flags(...definitions: FlagDefinition[]): Promise<void>;
+  /** The jobs operations enqueued that haven't run yet, by name and arguments, in the order they were enqueued; never the recorder of published events. */
+  scheduled(): Promise<Array<{ name: string; args: unknown }>>;
 }
 
 // The recorder: one more subscriber of every event type, whose job row holds the published event. A job row is
@@ -173,6 +179,14 @@ export function useTestBackend(defaults: BackendOptions = {}): (options?: Backen
       published: async () => {
         const rows = await db.select({ args: jobs.args }).from(jobs).where(eq(jobs.name, recorderName)).orderBy(asc(jobs._creationTime), asc(jobs._id));
         return rows.map(({ args }) => (decodeStored(args) as { event: PublishedEvent }).event);
+      },
+      flags: (...definitions) => definitionsStored(operations, ...definitions),
+      scheduled: async () => {
+        const rows = await db.select().from(jobs).where(and(eq(jobs.state, "pending"), ne(jobs.name, recorderName))).orderBy(asc(jobs._creationTime), asc(jobs._id));
+        return rows.map((row) => {
+          const { name, args } = toDocument<{ name: string; args: unknown }>(jobs, row);
+          return { name, args };
+        });
       },
     };
   };

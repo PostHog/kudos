@@ -1,10 +1,10 @@
 // The directory of the workspace's people: who each one is, whether a member, their name, time zone, admin flag and
-// profile. Today's convex/workspace/directory.ts; the member reads are ported, and the stubs left throw notPorted until
-// the directory sync (S3 3.2) and the keyset paging they wait on land.
+// profile. Today's convex/workspace/directory.ts, with its pages on the service's keyset paging (../db/page.ts).
 import { and, eq } from "drizzle-orm";
 import { ReportableError } from "../analytics/exceptions.ts";
 import { toDocument } from "../db/documents.ts";
 import { indexOrder } from "../db/indexOrder.ts";
+import { paginate } from "../db/page.ts";
 import { members } from "../db/schema/index.ts";
 import { insertRow, patchRow, replaceRow, rowById, uniqueRow } from "./rows.ts";
 import { followMembersLater } from "../analytics/person.ts";
@@ -18,7 +18,6 @@ import { zv } from "../values.ts";
 import type { Id } from "../db/columns.ts";
 import type { Doc } from "../db/schema/index.ts";
 import type { MutationContext, QueryContext } from "../operations.ts";
-import { notPorted } from "../notPorted.ts";
 import { mutationJob } from "../jobs/define.ts";
 
 export type MemberId = Id<"members">;
@@ -97,11 +96,18 @@ export async function personFactsOf(ctx: QueryContext, member: MemberId): Promis
 }
 
 export async function adminsPageIn(ctx: QueryContext, workspace: string, cursor: string | null, numItems: number): Promise<{ admins: string[]; continueCursor: null | string }> {
-  throw notPorted("workspace.directory.adminsPageIn");
+  const { page, isDone, continueCursor } = await paginate<Doc<"members">>(
+    ctx.tx,
+    { table: members, order: byAdmin, where: and(eq(members.workspace, workspace), eq(members.admin, true)) },
+    { cursor, numItems },
+  );
+  const admins = page.filter(({ kind }) => kind === "member").map(({ user }) => user);
+  return { admins, continueCursor: isDone ? null : continueCursor };
 }
 
 export async function membersPageIn(ctx: QueryContext, workspace: string, cursor: string | null, numItems: number): Promise<{ members: Id<"members">[]; continueCursor: null | string }> {
-  throw notPorted("workspace.directory.membersPageIn");
+  const { page, isDone, continueCursor } = await paginate<Doc<"members">>(ctx.tx, { table: members, order: byUser, where: eq(members.workspace, workspace) }, { cursor, numItems });
+  return { members: page.map(({ _id }) => _id), continueCursor: isDone ? null : continueCursor };
 }
 
 export const directoryRecordArgs = { workspace: z.string(), user: z.string(), entry: directoryEntryValidator, asOf: zv.number() };
@@ -259,6 +265,7 @@ function profileOf(row: Doc<"members">): MemberProfile {
 }
 
 const byUser = indexOrder(members, ["workspace", "user"]);
+const byAdmin = indexOrder(members, ["workspace", "admin"]);
 
 function memberById(ctx: QueryContext, member: MemberId): Promise<Doc<"members"> | null> {
   return rowById<Doc<"members">>(ctx, members, member);

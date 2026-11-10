@@ -145,8 +145,8 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/slack/book.test.ts | S6 | | |
 | convex/slack/cardDrawing.test.ts | S10 | | |
 | convex/slack/celebrationsSwitch.test.ts | S5 | | |
-| convex/slack/channelJoins.test.ts | S3 | | |
-| convex/slack/channelLeaves.test.ts | S3 | | |
+| convex/slack/channelJoins.test.ts | S3 | service/src/slack/channelJoins.test.ts | |
+| convex/slack/channelLeaves.test.ts | S3 | service/src/slack/channelLeaves.test.ts | |
 | convex/slack/coinUpgrades.test.ts | S6 | | |
 | convex/slack/coinsGate.test.ts | S7 | | |
 | convex/slack/coinsOpen.test.ts | S7 | | |
