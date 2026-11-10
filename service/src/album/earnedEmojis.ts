@@ -1,15 +1,15 @@
 // The module map's skeleton of convex/album/earnedEmojis.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
 // notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
-import { type TeamCrestArt } from "../companyProfiles/teams.ts";
-import { type MemberId } from "../workspace/directory.ts";
+import type { TeamCrestArt } from "../companyProfiles/teams.ts";
+import type { MemberId } from "../workspace/directory.ts";
 import { emojiArtPictureOf, teamEmblemPicture } from "./emojiCatalogue.ts";
-import { type EarnedEmojiId } from "./emojiNames.ts";
+import type { EarnedEmojiId } from "./emojiNames.ts";
 import type { MilestoneAnswer, ReachedTier } from "./milestones.ts";
-import { type Instants } from "./packs.ts";
+import type { Instants } from "./packs.ts";
 import type { TeamSticker } from "./records.ts";
-import { type RandomEmojiId } from "./randomEmojis.ts";
+import type { RandomEmojiId } from "./randomEmojis.ts";
 import type { PageOwner, TeamPage } from "./teamPages.ts";
-import { type HypesHeld } from "./items/hypes.ts";
+import type { HypesHeld } from "./items/hypes.ts";
 import type { MutationContext, QueryContext } from "../operations.ts";
 import { notPorted } from "../notPorted.ts";
 

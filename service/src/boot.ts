@@ -71,7 +71,7 @@ export async function boot({
   const clock = createClock();
   const pool = databaseUrl ? createPool(databaseUrl, { connectTimeoutMs }) : undefined;
   pool?.on("error", (error) => log.error("database connection lost", errorFields(error)));
-  const load = pool ? createLoadControl({ pool, token: env.HEDGEHUG_ADMIN_TOKEN || undefined, log }) : undefined;
+  const load = pool ? createLoadControl({ pool, token: env.HEDGEHUG_ADMIN_TOKEN || undefined, log, jobs: registry.jobs, now: clock.now }) : undefined;
   const operations = pool ? createOperations({ pool, clock, log, subscribers: registry.subscribers }) : undefined;
   // While a load holds, no cron is written or fired and no job starts.
   const worker = operations && load ? createWorker({ operations, log, registry: registry.jobs, held: load.held, ...(pollMs ? { pollMs } : {}) }) : undefined;
