@@ -11,6 +11,7 @@ import { archive, files, hypeReactions, kudosMessages, members, wordDeletionRequ
 import { createPool } from "../db/pool.ts";
 import { createApp, type Migrations } from "../http/app.ts";
 import { createClock } from "../clock.ts";
+import { createOperations } from "../operations.ts";
 import type { Log } from "../log.ts";
 import { createLoadControl, type LoadControl } from "./control.ts";
 import { maxFileBytes } from "./loader.ts";
@@ -219,6 +220,34 @@ describe("loading a Convex snapshot", () => {
       { _id: "st2", _creationTime: 11, sha256: base64(asset), size: asset.length, bytes: asset },
     ]);
     expect((await service.request("/anything", { token: null })).status, "the app holds until the load is done").toBe(503);
+  });
+
+  test("a row written after the load sorts after every loaded row, though its runner's clock is behind them", async () => {
+    // Convex's stamps from later than the runner's clock, in a data-model table and in an archived one.
+    const latest = 1_900_000_000_000.25;
+    const deletions: Doc[] = [
+      { _id: "w1", _creationTime: 1_800_000_000_000, workspace: "T1", author: null },
+      { _id: "w2", _creationTime: latest - 1, workspace: "T1", author: "U2" },
+    ];
+    const retired: Doc = { _id: "r1", _creationTime: latest, kept: true };
+    const archive = zip({
+      "_tables/documents.jsonl": jsonl([
+        { name: "wordDeletionRequests", id: 10001n },
+        { name: "retiredTable", id: 10002n },
+      ]),
+      "wordDeletionRequests/documents.jsonl": jsonl(deletions),
+      "retiredTable/documents.jsonl": jsonl([retired]),
+    });
+    const service = await copy();
+
+    expect((await finish(service, archive)).status).toBe(202);
+    expect(await settled(service), "loaded").toMatchObject({ phase: "recovering", error: null });
+
+    const behind = createOperations({ pool: database.pool, clock: createClock({ real: () => 1_700_000_000_000 }), log: { info: () => {}, error: () => {} } });
+    const stamp = await behind.mutation("write after the load", async ({ newRow }) => newRow()._creationTime);
+    expect(stamp, "after the newest loaded row, archived ones included").toBeGreaterThan(latest);
+    expect(stamp - latest, "just after it").toBeLessThan(1);
+    expect(await documents(wordDeletionRequests), "the loaded rows keep their stamps").toStrictEqual(deletions);
   });
 
   test("a restarted copy resumes from the checkpoints without writing a row twice", async () => {

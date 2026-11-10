@@ -1,14 +1,24 @@
-// The module map's skeleton of convex/feedback/publicReplies.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
-// notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
+// The one public reply, as today's convex/feedback/publicReplies.ts: what it may show and the states of its one post
+// (posting, sending, posted, unposted), which slack/publicReplies.ts moves as it delivers. Celebrating a level and
+// announcing still throw notPorted until S5's public celebrations port them.
+import { eq } from "drizzle-orm";
+import { achievementsApplyIn } from "../achievements/flag.ts";
 import { levelReachedEventValidator } from "../bus/events.ts";
+import { decodeStored, encodeStored } from "../db/codec.ts";
+import { toDocument } from "../db/documents.ts";
+import { publicReplies } from "../db/schema/feedback.ts";
 import { messageRefValidator, type MessageRef } from "../engine/messageEvent.ts";
+import { wantsMessage } from "../messageSettings/messageSettings.ts";
+import { xpLevelsShownIn } from "../progression/xpLevels.ts";
+import { publicCelebrationsOn } from "../workspace/celebrationsSwitch.ts";
 import { type MemberId } from "../workspace/directory.ts";
+import { settingsOf } from "../workspace/settings.ts";
 import { segmentValidator, type Line } from "./segments.ts";
 import { z } from "zod";
 import { zv } from "../values.ts";
 import type { Id } from "../db/columns.ts";
 import type { Doc } from "../db/schema/index.ts";
-import type { MutationContext, QueryContext } from "../operations.ts";
+import type { MutationContext, QueryContext, Transaction } from "../operations.ts";
 import { notPorted } from "../notPorted.ts";
 import { mutationJob } from "../jobs/define.ts";
 
@@ -32,6 +42,7 @@ export const publicReplyValidator = z.union([
 export const celebratedLevelValidator = z.strictObject({ ...messageRefValidator.shape, member: zv.id("members"), level: zv.number() });
 
 export type PublicSection = z.infer<typeof publicSectionValidator>;
+type Shown = z.infer<typeof shownValidator>;
 
 type Announced = { reached: { member: MemberId; level: number } } | { summary: Id<"tierSummaries"> };
 
@@ -50,35 +61,82 @@ export async function announce(ctx: MutationContext, workspace: string, announce
 }
 
 export const desiredArgs = z.strictObject({ reply: zv.id("publicReplies") });
-export async function desired(ctx: QueryContext, args: z.infer<typeof desiredArgs>): Promise<null | { sections: { member: Id<"members">; line: ({ text: string } | { mention: { user: string; kind: "person" } | { kind: "group"; group: string } | { kind: "broadcast"; range: string } } | { link: { url: string; label: string } })[]; key: string; about: "level" | "achievement" }[]; _id: Id<"publicReplies">; _creationTime: number; threadTs?: string; workspace: string; conversation: string; message: string; channel: string; version: number; shown: { state: "unposted" } | { state: "posting" } | { state: "sending" } | { state: "posted"; ts: string } } | { sections: { member: Id<"members">; line: ({ text: string } | { mention: { user: string; kind: "person" } | { kind: "group"; group: string } | { kind: "broadcast"; range: string } } | { link: { url: string; label: string } })[]; key: string; about: "level" | "achievement" }[]; _id: Id<"publicReplies">; _creationTime: number; workspace: string; channel: string; version: number; shown: { state: "unposted" } | { state: "posting" } | { state: "sending" } | { state: "posted"; ts: string }; reached: { member: Id<"members">; level: number } } | { sections: { member: Id<"members">; line: ({ text: string } | { mention: { user: string; kind: "person" } | { kind: "group"; group: string } | { kind: "broadcast"; range: string } } | { link: { url: string; label: string } })[]; key: string; about: "level" | "achievement" }[]; _id: Id<"publicReplies">; _creationTime: number; workspace: string; channel: string; version: number; shown: { state: "unposted" } | { state: "posting" } | { state: "sending" } | { state: "posted"; ts: string }; summary: Id<"tierSummaries"> }> {
-  throw notPorted("feedback.publicReplies.desired");
+/** The reply with only the sections it may show now: none where public celebrations or levels are off, or where it would sit in a work thread. */
+export async function desired(ctx: QueryContext, { reply }: z.infer<typeof desiredArgs>): Promise<Doc<"publicReplies"> | null> {
+  const row = await publicReplyOf(ctx.tx, reply);
+  if (row === null) return null;
+  if (!(await isShownAtAll(ctx, row))) return { ...row, sections: [] };
+  const bookApplies = await achievementsApplyIn(ctx, row.workspace);
+  const shown = await Promise.all(row.sections.map((section) => (section.about !== "achievement" || bookApplies) && isShownPublicly(ctx, section)));
+  return { ...row, sections: row.sections.filter((_, index) => shown[index]) };
 }
 
 export const recordPostedArgs = z.strictObject({ reply: zv.id("publicReplies"), ts: z.string() });
-export async function recordPosted(ctx: MutationContext, args: z.infer<typeof recordPostedArgs>): Promise<number> {
-  throw notPorted("feedback.publicReplies.recordPosted");
+/** Records the posted message's ts, and answers the reply's version now, so a change made while it posted is delivered next. */
+export async function recordPosted({ tx }: MutationContext, { reply, ts }: z.infer<typeof recordPostedArgs>): Promise<number> {
+  const row = await shownOf(tx, reply);
+  if (row === null) return 0;
+  await setShown(tx, reply, { state: "posted", ts });
+  return row.version;
 }
 
 export const startSendingArgs = z.strictObject({ reply: zv.id("publicReplies") });
-export async function startSending(ctx: MutationContext, args: z.infer<typeof startSendingArgs>): Promise<boolean> {
-  throw notPorted("feedback.publicReplies.startSending");
+/** Claims the one post of a reply waiting to be posted; false when another delivery claimed it, or nothing waits. */
+export async function startSending({ tx }: MutationContext, { reply }: z.infer<typeof startSendingArgs>): Promise<boolean> {
+  const row = await shownOf(tx, reply);
+  if (row?.shown.state !== "posting") return false;
+  await setShown(tx, reply, { state: "sending" });
+  return true;
 }
 
 export const sendingFailedArgs = z.strictObject({ reply: zv.id("publicReplies") });
-export async function sendingFailed(ctx: MutationContext, args: z.infer<typeof sendingFailedArgs>): Promise<void> {
-  throw notPorted("feedback.publicReplies.sendingFailed");
+/** A post Slack refused waits to be posted again. */
+export async function sendingFailed({ tx }: MutationContext, { reply }: z.infer<typeof sendingFailedArgs>): Promise<void> {
+  if ((await shownOf(tx, reply))?.shown.state === "sending") await setShown(tx, reply, { state: "posting" });
 }
 
 export const stopPostingArgs = z.strictObject({ reply: zv.id("publicReplies") });
-export async function stopPosting(ctx: MutationContext, args: z.infer<typeof stopPostingArgs>): Promise<void> {
-  throw notPorted("feedback.publicReplies.stopPosting");
+/** A reply still waiting to be posted is never posted; a later section posts it afresh. */
+export async function stopPosting({ tx }: MutationContext, { reply }: z.infer<typeof stopPostingArgs>): Promise<void> {
+  if ((await shownOf(tx, reply))?.shown.state === "posting") await setShown(tx, reply, { state: "unposted" });
 }
 
 export const stopSendingArgs = z.strictObject({ reply: zv.id("publicReplies") });
-export async function stopSending(ctx: MutationContext, args: z.infer<typeof stopSendingArgs>): Promise<void> {
-  throw notPorted("feedback.publicReplies.stopSending");
+/** A post whose conversation is gone is never posted; a later section posts it afresh. */
+export async function stopSending({ tx }: MutationContext, { reply }: z.infer<typeof stopSendingArgs>): Promise<void> {
+  if ((await shownOf(tx, reply))?.shown.state === "sending") await setShown(tx, reply, { state: "unposted" });
 }
 
 export function linesOf(reply: Pick<Doc<"publicReplies">, "sections">): Line[] {
   return reply.sections.map(({ line }) => line);
+}
+
+async function isShownAtAll(ctx: QueryContext, row: Doc<"publicReplies">) {
+  return (await xpLevelsShownIn(ctx, row.workspace)) && (await publicCelebrationsOn(ctx, row.workspace)) && !("reached" in row) && (await isCelebratedWhereItIs(ctx, row));
+}
+
+async function isCelebratedWhereItIs(ctx: QueryContext, row: Doc<"publicReplies">) {
+  const { announcementChannel } = await settingsOf(ctx, row.workspace);
+  if (announcementChannel === null) return false;
+  if (!("conversation" in row)) return true;
+  if (row.threadTs !== undefined) return false;
+  return row.channel !== row.conversation || row.conversation === announcementChannel;
+}
+
+function isShownPublicly(ctx: QueryContext, { member }: PublicSection) {
+  return wantsMessage(ctx, member, "celebrations");
+}
+
+async function publicReplyOf(tx: Transaction, reply: Id<"publicReplies">): Promise<Doc<"publicReplies"> | null> {
+  const [row] = await tx.select().from(publicReplies).where(eq(publicReplies._id, reply));
+  return row === undefined ? null : toDocument<Doc<"publicReplies">>(publicReplies, row);
+}
+
+async function shownOf(tx: Transaction, reply: Id<"publicReplies">): Promise<{ shown: Shown; version: number } | null> {
+  const [row] = await tx.select({ shown: publicReplies.shown, version: publicReplies.version }).from(publicReplies).where(eq(publicReplies._id, reply));
+  return row === undefined ? null : { shown: decodeStored(row.shown) as Shown, version: row.version };
+}
+
+async function setShown(tx: Transaction, reply: Id<"publicReplies">, shown: Shown) {
+  await tx.update(publicReplies).set({ shown: encodeStored(shown) }).where(eq(publicReplies._id, reply));
 }
