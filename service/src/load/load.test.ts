@@ -265,7 +265,7 @@ describe("loading a Convex snapshot", () => {
     const service = await copy();
 
     expect((await finish(service, archive)).status).toBe(202);
-    expect(await settled(service), "loaded").toMatchObject({ phase: "recovering", error: null });
+    expect(await settled(service), "loaded").toMatchObject({ phase: "done", error: null });
 
     const behind = createOperations({ pool: database.pool, clock: createClock({ real: () => 1_700_000_000_000 }), log: { info: () => {}, error: () => {} } });
     const stamp = await behind.mutation("write after the load", async ({ newRow }) => newRow()._creationTime);
