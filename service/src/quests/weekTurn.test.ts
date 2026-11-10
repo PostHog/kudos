@@ -101,14 +101,8 @@ vi.mock("../welcome/welcome.ts", async (original) => ({
 }));
 // S6's xpLevelsOnFor: the member's xp-levels decision, as convex/progression/xpLevels.ts decides it.
 vi.mock("../progression/xpLevels.ts", async (original) => ({ ...(await original<object>()), xpLevelsOnFor: (ctx: QueryContext, member: MemberId) => memberDecision(ctx, xpLevels, member) }));
-// S5's republish: recorded, not run.
-const republished = vi.hoisted(() => [] as string[]);
-vi.mock("../feedback/homes.ts", async (original) => ({
-  ...(await original<object>()),
-  republish: async (_ctx: unknown, member: string) => {
-    republished.push(member);
-  },
-}));
+// S5's republish: still a stub on main, so it does nothing here; weekTurnHome.test.ts proves the home it refreshes.
+vi.mock("../feedback/homes.ts", async (original) => ({ ...(await original<object>()), republish: async () => {} }));
 
 const database = useTestDatabase();
 const quiet: Log = { info: () => {}, error: () => {} };
@@ -133,7 +127,6 @@ const recorders = { questsDrawn: recorder("questsDrawn"), questFinished: recorde
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
-  republished.length = 0;
 });
 
 async function setUp({ flags = ["monday-quest", "xp-levels"], off = ["two-quests"] }: { flags?: string[]; off?: string[] } = {}) {
@@ -229,7 +222,6 @@ describe("the hourly sweep draws each member's week of quests at the turn of the
     expect(await t.published("questsDrawn"), "one questsDrawn per draw, naming its quests").toEqual(
       drawn.map(({ member, week, drawnAt, slots }) => ({ type: "questsDrawn", workspace: "T1", member, week, quests: slots.map(({ quest }) => quest), at: drawnAt })),
     );
-    expect(new Set(republished), "each drawn member's home republished").toEqual(new Set([bob, alice]));
   });
 
   test("a member whose onboarding isn't finished is drawn nothing", async () => {
@@ -255,7 +247,6 @@ describe("the hourly sweep draws each member's week of quests at the turn of the
 
     expect(await t.draws()).toEqual([]);
     expect(await t.ranJobs("quests.weekly.drawNewWeek")).toEqual([]);
-    expect(republished).toEqual([]);
   });
 
   test("a week drawn twice, as two draws scheduled before either ran, is drawn and announced once", async () => {
@@ -274,7 +265,6 @@ describe("the hourly sweep draws each member's week of quests at the turn of the
     expect((await t.ranJobs("quests.weekly.drawNewWeek")).map(({ state }) => state), "both draws ran").toEqual(["success", "success"]);
     expect((await t.draws()).map(({ member, week }) => ({ member, week }))).toEqual([{ member: bob, week: thisWeek }]);
     expect(await t.published("questsDrawn")).toHaveLength(1);
-    expect(republished, "republished for the draw only").toEqual([bob]);
   });
 
   test("the sweep starts the quests of a welcomed member on the Monday path who has none, and no one else's", async () => {
@@ -294,7 +284,8 @@ describe("the hourly sweep draws each member's week of quests at the turn of the
       const ids: MemberId[] = [];
       for (let index = 0; index < 110; index += 1) {
         const id = `m-${String(index).padStart(3, "0")}` as MemberId;
-        await ctx.tx.insert(members).values({ ...ctx.newRow(), _id: id, workspace: "T1", user: `U_${index}`, kind: "member" });
+        // Users sort in another order than the members were created in, so creation order and by_user order differ.
+        await ctx.tx.insert(members).values({ ...ctx.newRow(), _id: id, workspace: "T1", user: `U_${String((index * 37) % 110).padStart(3, "0")}`, kind: "member" });
         ids.push(id);
       }
       return ids;
@@ -314,7 +305,7 @@ describe("the hourly sweep draws each member's week of quests at the turn of the
     expect(sweeps[0]!.args, "the cron starts at the beginning").toEqual({});
     expect(sweeps[1]!.args.cursor, "the second page starts at the first's cursor").toEqual(expect.any(String));
     const drawsScheduled = (await t.ranJobs("quests.weekly.drawNewWeek")).map(({ args }) => args.member);
-    expect(drawsScheduled, "a draw for each onboarded member, the first hundred from the first page").toEqual(onboardedMembers);
+    expect(drawsScheduled, "a draw for each onboarded member in creation order, the first hundred from the first page").toEqual(onboardedMembers);
     expect(new Set((await t.draws()).map(({ member }) => member))).toEqual(new Set(onboardedMembers));
     expect(await t.published("questsDrawn")).toHaveLength(105);
 
@@ -375,7 +366,6 @@ describe("a kudos moves the week's three quests", () => {
     expect(await t.read((ctx) => mondayQuestsMovedSince(ctx, bob, { since: firstDecided - 1, until: ctx.now, mostAwards: 10 })), "moved since just before the first kudos, short of its target").toEqual([
       { name: "Thank someone on two different days", from: 0, to: 1, of: 2 },
     ]);
-    expect(new Set(republished), "bob's home republished").toEqual(new Set([bob]));
   });
 });
 
@@ -408,7 +398,6 @@ describe("under two-quests each side draws a quest of its own pool once its onbo
       { type: "questsDrawn", workspace: "T1", member: bob, week: thisWeek, quests: ["hug-two-days"], at },
       { type: "questsDrawn", workspace: "T1", member: bob, week: thisWeek, quests: ["three-in-a-day"], at },
     ]);
-    expect(republished, "republished for the first draw only").toEqual([bob]);
     expect(await t.mutate((ctx) => awaitsASideDraw(ctx, bob, ctx.now)), "after it").toBe(false);
   });
 
@@ -491,14 +480,15 @@ describe("a teammate leaving rechecks Thank someone new", () => {
   test("for every member of the workspace still on it, paging the workspace a hundred members at a time", { timeout: budgetMs * 2 }, async () => {
     const t = await setUp({ flags: [], off: [] });
     const waiting = await t.mutate(async (ctx) => {
-      const insert = async (id: string, workspace: string, kind: "member" | "bot", someoneNewFinished = false) => {
-        await ctx.tx.insert(members).values({ ...ctx.newRow(), _id: id, workspace, user: `U_${id}`, kind });
+      const insert = async (id: string, workspace: string, kind: "member" | "bot", someoneNewFinished = false, user = `U_${id}`) => {
+        await ctx.tx.insert(members).values({ ...ctx.newRow(), _id: id, workspace, user, kind });
         await ctx.tx.insert(questStarts).values({ ...ctx.newRow(), member: id, at: tuesday });
         if (someoneNewFinished) await ctx.tx.insert(questFinishes).values({ ...ctx.newRow(), member: id, key: "journey:someone-new", xp: 50, catalogueVersion: "monday-1", at: tuesday });
         return id as MemberId;
       };
       const ids: MemberId[] = [];
-      for (let index = 0; index < 105; index += 1) ids.push(await insert(`w-${String(index).padStart(3, "0")}`, "T1", "member"));
+      // Users sort in another order than the members were created in: the recheck pages by_user, not creation order.
+      for (let index = 0; index < 105; index += 1) ids.push(await insert(`w-${String(index).padStart(3, "0")}`, "T1", "member", false, `U_${String((index * 37) % 105).padStart(3, "0")}`));
       await insert("w-bot", "T1", "bot");
       await insert("w-done", "T1", "member", true);
       await insert("w-elsewhere", "T2", "member");
@@ -512,8 +502,10 @@ describe("a teammate leaving rechecks Thank someone new", () => {
     expect(rechecks.map(({ state }) => state), "the subscriber and the page it scheduled").toEqual(["success", "success"]);
     expect(rechecks[1]!.args, "the second page carries the event and the first's cursor").toEqual({ event: rechecks[0]!.args.event, cursor: expect.any(String) });
     const each = await t.ranJobs("quests.journey.recheckSomeoneNewOf");
-    expect(each.map(({ args }) => args.member), "each member still on it, in the workspace's member order").toEqual(waiting);
-    expect(each[0]!.args).toEqual({ workspace: "T1", member: waiting[0], at: tuesday + hourMs });
+    const byUser = await t.mutate(async (ctx) => (await ctx.tx.select({ _id: members._id, user: members.user }).from(members)).filter(({ _id }) => waiting.includes(_id as MemberId)).toSorted((one, other) => (one.user < other.user ? -1 : 1)).map(({ _id }) => _id));
+    expect(byUser, "the fixture's user order differs from its creation order").not.toEqual(waiting);
+    expect(each.map(({ args }) => args.member), "each member still on it, in the workspace's by_user order").toEqual(byUser);
+    expect(each[0]!.args).toEqual({ workspace: "T1", member: byUser[0], at: tuesday + hourMs });
   });
 
   test("and finishes it for a member who has now thanked everyone left", async () => {
