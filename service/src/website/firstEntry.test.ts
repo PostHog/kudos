@@ -55,7 +55,7 @@ const refusalOf = (entry: Promise<unknown>) =>
 const greetings = async () => (await t.published()).filter(({ type }) => type === "memberGreeted");
 
 describe("a member who signed in before the move", () => {
-  waitsOn(["S3"], "enters with their own users row, and nothing is written or published", async () => {
+  test("enters with their own users row, and nothing is written or published", async () => {
     await aMember("U_JUNO");
     const before = await t.seed.insert("users", { name: "Juno Whitlock", chatIdentity: { workspace: allowedWorkspace, user: "U_JUNO" } });
 
