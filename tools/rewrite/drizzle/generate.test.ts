@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, test } from "vitest";
-import { columnOf, fieldsOf, indexName, tableSource, type Field, type Validator } from "./generate.ts";
+import { columnOf, fieldsOf, generate, indexName, tableSource, type Field, type Validator } from "./generate.ts";
 
 const string: Validator = { type: "string" };
 const nil: Validator = { type: "null" };
@@ -57,6 +57,18 @@ describe("indexes", () => {
     );
 
     expect(source).toContain(`index("things_by_a_b").on(t.a, t.b.asc().nullsFirst(), t._creationTime, t._id)`);
+  });
+
+  test("every table is a documentTable, which adds Convex's creation-order index, by_creation_time", () => {
+    const { files } = generate(
+      { tables: [{ tableName: "things", documentType: { type: "object", value: { a: field(string) } }, indexes: [], searchIndexes: [], vectorIndexes: [] }] },
+      () => "domain",
+      new Set(),
+    );
+
+    expect(files["domain.ts"]).toContain(`export const things = documentTable(\n  "things",`);
+    expect(files["domain.ts"]).toMatch(/import \{[^}]*\bdocumentTable\b[^}]*\} from "\.\.\/columns\.ts";/);
+    expect(files["domain.ts"]).not.toMatch(/\bpgTable\b/);
   });
 
   test("a nested index field becomes a generated column read only when it holds its kind", () => {
