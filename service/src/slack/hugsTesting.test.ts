@@ -2,7 +2,8 @@
 import { describe, expect, test } from "vitest";
 import { NotPortedError } from "../notPorted.ts";
 import type { LogLine } from "../../testing/backend.ts";
-import { failureOf } from "./hugsTesting.ts";
+import { notPorted } from "../notPorted.ts";
+import { atOnce, failureOf } from "./hugsTesting.ts";
 
 const failed = (error: string): LogLine => ({ level: "error", message: "slack request failed", fields: { path: "/slack/events", error } });
 const path = "slack.reactions.reactionAdded";
@@ -26,5 +27,27 @@ describe("a send through the front door", () => {
 
   test("that answered 500 with nothing logged ends in nothing here, and the test reads the 500 itself", () => {
     expect(failureOf(500, [], path)).toBeNull();
+  });
+});
+
+describe("sends at once", () => {
+  function deferred<T>() {
+    let settle!: { resolve: (value: T) => void; reject: (error: unknown) => void };
+    const promise = new Promise<T>((resolve, reject) => (settle = { resolve, reject }));
+    return { promise, ...settle };
+  }
+
+  test("end in a real failure that comes after another send ended at a stub", async () => {
+    const [stub, real] = [deferred<Response>(), deferred<Response>()];
+    const both = atOnce([stub.promise, real.promise]);
+    stub.reject(notPorted(path));
+    await Promise.resolve();
+    real.reject(new TypeError("a real failure"));
+    await expect(both).rejects.toThrow("a real failure");
+  });
+
+  test("end at the stub when no send failed for real, and answer every send when none failed", async () => {
+    await expect(atOnce([Promise.reject(notPorted(path)), Promise.resolve(1)])).rejects.toBeInstanceOf(NotPortedError);
+    expect(await atOnce([Promise.resolve(1), Promise.resolve("two")])).toEqual([1, "two"]);
   });
 });

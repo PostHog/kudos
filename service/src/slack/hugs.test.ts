@@ -22,6 +22,7 @@ import {
   react,
   refusalOf,
   setHugBudget,
+  atOnce,
   setWorkspaceSettings,
   settle,
   slackTs,
@@ -212,7 +213,7 @@ describe("SR6 SR23: a hug never passes the hug budget", () => {
       for (const user of ["U_CAROL", "U_DANA"]) await memberChanged(t, "team_join", { id: user });
       await settle(t);
 
-      await Promise.all([
+      await atOnce([
         react(t, { user: "U_BOB", itemUser: "U_CAROL", ts: slackTs(now.getTime() - 20 * 60_000) }),
         react(t, { user: "U_BOB", itemUser: "U_DANA", ts: slackTs(now.getTime() - 21 * 60_000) }),
       ]);

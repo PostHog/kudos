@@ -114,6 +114,19 @@ async function sentTo(t: TestBackend, kind: EventKind, path: string, body: strin
   return response;
 }
 
+/**
+ * Sends that run at once, as today's tests ran them with `Promise.all`: every one settles first, so a send that ends at a
+ * stub early can't hide a real failure another logs later. A real failure ends the step ahead of any stub.
+ */
+export async function atOnce<Results extends readonly unknown[]>(sends: { [Index in keyof Results]: Promise<Results[Index]> }): Promise<Results> {
+  const settled = await Promise.allSettled(sends);
+  const failures = settled.flatMap((result) => (result.status === "rejected" ? [result.reason as unknown] : []));
+  const real = failures.find((failure) => !(failure instanceof NotPortedError));
+  if (real !== undefined) throw real;
+  if (failures.length > 0) throw failures[0];
+  return settled.map((result) => (result as PromiseFulfilledResult<unknown>).value) as unknown as Results;
+}
+
 /** What a send ends in: `null` when it answered, a stub's `NotPortedError`, or the real failure logged while it ran. */
 export function failureOf(status: number, loggedWhileItRan: readonly LogLine[], path: string): Error | null {
   if (status !== 500) return null;
