@@ -1,7 +1,9 @@
 // The album's reply to a thoughtful kudos, delivered to Slack as today's convex/slack/albumReplies.ts delivers it.
 // Convex has no test file for it. Here the delivery runs as the app runs it: its job, under its Convex name, started by
-// the test backend's worker against the fake Slack. What the reply says is feedback/albumReplies.ts's `albumReply`,
-// still a stub in the module map, so the test gives that reply through the function's own signature.
+// the test backend's worker against the fake Slack, and each test reads what Slack accepted and so shows the giver: a
+// post Slack refused, or never answered, shows nothing. What the reply says is feedback/albumReplies.ts's
+// `albumReply`, still a stub in the module map, so the test gives the reply each grant gets, by its fact, through the
+// function's own signature.
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { useTestBackend, type TestBackend } from "../../testing/backend.ts";
 import { networkFailure, rateLimitedFor, slackError } from "../../testing/fakeSlack.ts";
@@ -11,13 +13,11 @@ import { serviceRegistry } from "../registry.ts";
 import type { MemberId } from "../workspace/directory.ts";
 import { deliverAlbumReplyJob } from "./albumReplies.ts";
 
-const replies = vi.hoisted(() => ({ next: null as AlbumReply | null, asked: [] as unknown[] }));
+// The reply each grant gets, by the event's fact; a grant with none set gets no reply.
+const replies = vi.hoisted(() => ({ of: new Map<string, AlbumReply>() }));
 vi.mock("../feedback/albumReplies.ts", async (original) => ({
   ...(await original()),
-  albumReply: async (_ctx: unknown, { event }: { event: ThoughtfulPacksGrantedEvent }) => {
-    replies.asked.push(event);
-    return replies.next;
-  },
+  albumReply: async (_ctx: unknown, { event }: { event: ThoughtfulPacksGrantedEvent }) => replies.of.get(event.fact ?? "") ?? null,
 }));
 
 const now = Date.parse("2026-10-13T10:00:00Z");
@@ -55,13 +55,28 @@ function reply(fields: Partial<AlbumReply> = {}): AlbumReply {
   };
 }
 
+type Shown = { method: string; args: Record<string, unknown> };
+let shown: Shown[];
+
 beforeEach(() => {
   vi.stubEnv("SLACK_BOT_TOKEN", "xoxb-test");
   vi.spyOn(console, "warn").mockImplementation(() => {});
   t = backend();
   t.slack.withMember("U_ALICE");
-  replies.next = reply();
-  replies.asked = [];
+  replies.of.clear();
+  replies.of.set("f1", reply());
+  shown = [];
+  // What Slack accepted: a post whose answer is ok, as Slack answered it.
+  const toSlack = globalThis.fetch;
+  vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
+    const answer = await toSlack(input, init);
+    const url = new URL(input instanceof Request ? input.url : input);
+    const method = url.pathname.split("/").pop() ?? "";
+    if (method.startsWith("chat.post") && ((await answer.clone().json().catch(() => null)) as { ok?: boolean } | null)?.ok === true) {
+      shown.push({ method, args: init?.body ? JSON.parse(String(init.body)) : Object.fromEntries(url.searchParams) });
+    }
+    return answer;
+  });
 });
 
 afterEach(() => {
@@ -79,16 +94,18 @@ async function later(ms: number) {
   await t.settle();
 }
 
+const ephemerals = () => shown.filter(({ method }) => method === "chat.postEphemeral").map(({ args }) => args);
+const directMessages = () => shown.filter(({ method }) => method === "chat.postMessage").map(({ args }) => args);
+
 const sectionText = (block: unknown) => (block as { text: { text: string } }).text.text;
 
 describe("the album's reply goes beside the kudos, or as a direct message", () => {
   test("beside the kudos, only the giver sees it in the kudos thread: each recipient's headline and lines, their hype emoji with its picture, the rest counted, what's waiting, the buttons and the gains", async () => {
     await deliver();
 
-    expect(replies.asked).toEqual([event]);
-    const [posted, ...more] = t.slack.callsTo("chat.postEphemeral");
+    const [posted, ...more] = ephemerals();
     expect(more).toEqual([]);
-    expect(t.slack.callsTo("chat.postMessage")).toEqual([]);
+    expect(directMessages()).toEqual([]);
     expect(posted).toMatchObject({ channel: "C_KUDOS", user: "U_ALICE", thread_ts: "1760349600.000100", text: "Bruno Castellane's pack · Wren Halloway's pack" });
     const blocks = posted!.blocks as Array<Record<string, unknown>>;
     expect(blocks.map(({ type }) => type)).toEqual(["section", "context", "section", "context", "context", "actions", "context"]);
@@ -105,11 +122,11 @@ describe("the album's reply goes beside the kudos, or as a direct message", () =
   });
 
   test("a reply with no one more, nothing waiting, no buttons and no gains is the recipients' blocks alone", async () => {
-    replies.next = reply({ recipients: [wren], more: 0, waiting: null, buttons: [], gains: null });
+    replies.of.set("f1", reply({ recipients: [wren], more: 0, waiting: null, buttons: [], gains: null }));
 
     await deliver();
 
-    expect((t.slack.callsTo("chat.postEphemeral")[0]!.blocks as unknown[]).length).toBe(1);
+    expect(ephemerals().map(({ blocks }) => (blocks as unknown[]).length)).toEqual([1]);
   });
 
   test("where Slack refuses the ephemeral there, it goes to the giver as a direct message, without unfurls", async () => {
@@ -117,25 +134,27 @@ describe("the album's reply goes beside the kudos, or as a direct message", () =
 
     await deliver();
 
-    expect(t.slack.callsTo("chat.postMessage")).toEqual([expect.objectContaining({ channel: "U_ALICE", unfurl_links: false, unfurl_media: false, blocks: expect.any(Array) })]);
+    expect(ephemerals()).toEqual([]);
+    expect(directMessages()).toEqual([expect.objectContaining({ channel: "U_ALICE", unfurl_links: false, unfurl_media: false, text: "Bruno Castellane's pack · Wren Halloway's pack", blocks: expect.any(Array) })]);
+    expect(t.slack.messagesIn("U_ALICE").map(({ text }) => text)).toEqual(["Bruno Castellane's pack · Wren Halloway's pack"]);
   });
 
   test("a reply meant as a direct message goes straight to the giver", async () => {
-    replies.next = reply({ destination: { kind: "dm", user: "U_ALICE" } });
+    replies.of.set("f1", reply({ destination: { kind: "dm", user: "U_ALICE" } }));
 
     await deliver();
 
-    expect(t.slack.callsTo("chat.postEphemeral")).toEqual([]);
-    expect(t.slack.callsTo("chat.postMessage")).toEqual([expect.objectContaining({ channel: "U_ALICE", unfurl_links: false, unfurl_media: false })]);
+    expect(ephemerals()).toEqual([]);
+    expect(directMessages()).toEqual([expect.objectContaining({ channel: "U_ALICE", unfurl_links: false, unfurl_media: false })]);
   });
 
-  test("no reply to give sends nothing", async () => {
-    replies.next = null;
+  test("a grant with no reply to give shows nothing, and the reply a grant gets is its own", async () => {
+    replies.of.clear();
+    replies.of.set("another grant", reply());
 
     await deliver();
 
-    expect(replies.asked).toEqual([event]);
-    expect([...t.slack.callsTo("chat.postEphemeral"), ...t.slack.callsTo("chat.postMessage")]).toEqual([]);
+    expect(shown).toEqual([]);
   });
 });
 
@@ -145,21 +164,20 @@ describe("blocks Slack refuses", () => {
 
     await deliver();
 
-    const [refused, plain, ...more] = t.slack.callsTo("chat.postEphemeral");
+    const [plain, ...more] = ephemerals();
     expect(more).toEqual([]);
-    expect(JSON.stringify(refused!.blocks)).toContain('"type":"image"');
     expect(JSON.stringify(plain!.blocks)).not.toContain('"type":"image"');
     expect((plain!.blocks as Array<{ type: string; elements?: unknown[] }>)[1]).toEqual({ type: "context", elements: [{ type: "mrkdwn", text: "Bruno's hype emoji is yours" }] });
   });
 
   test("refused for its blocks, a reply without pictures isn't sent again", async () => {
-    replies.next = reply({ recipients: [wren] });
+    replies.of.set("f1", reply({ recipients: [wren] }));
     t.slack.answering("chat.postEphemeral", slackError("invalid_blocks"));
 
     await deliver();
+    await later(60_000);
 
-    expect(t.slack.callsTo("chat.postEphemeral")).toHaveLength(1);
-    expect(t.slack.callsTo("chat.postMessage")).toEqual([]);
+    expect(shown, "a second post, answered ok, would show").toEqual([]);
   });
 });
 
@@ -169,32 +187,32 @@ describe("only a rate limit sends it again, at most three tries", () => {
     await deliver();
 
     await later(19_000);
-    expect(t.slack.callsTo("chat.postEphemeral"), "before the Retry-After").toHaveLength(1);
+    expect(ephemerals(), "before the Retry-After").toEqual([]);
     await later(1_000);
-    expect(t.slack.callsTo("chat.postEphemeral"), "at the Retry-After").toHaveLength(2);
+    expect(ephemerals(), "at the Retry-After").toHaveLength(1);
     await later(60_000);
-    expect(t.slack.callsTo("chat.postEphemeral"), "and no more").toHaveLength(2);
+    expect(ephemerals(), "and no more").toHaveLength(1);
   });
 
   test("rate limited every time, it stops after its third try", async () => {
-    t.slack.answering("chat.postEphemeral", rateLimitedFor(1), rateLimitedFor(1), rateLimitedFor(1), rateLimitedFor(1));
+    t.slack.answering("chat.postEphemeral", rateLimitedFor(1), rateLimitedFor(1), rateLimitedFor(1));
     await deliver();
 
     for (let step = 0; step < 5; step += 1) await later(1_000);
 
-    expect(t.slack.callsTo("chat.postEphemeral")).toHaveLength(3);
+    expect(shown, "a fourth try, answered ok, would show").toEqual([]);
   });
 
   test("a post that fails, or whose result nobody knows, is never sent again", async () => {
     t.slack.answering("chat.postEphemeral", slackError("fatal_error"));
     await deliver();
     await later(60_000);
-    expect(t.slack.callsTo("chat.postEphemeral"), "after a failure").toHaveLength(1);
+    expect(shown, "after a failure: a second post, answered ok, would show").toEqual([]);
 
     t.slack.answering("chat.postEphemeral", networkFailure);
     await deliver();
     await later(60_000);
-    expect(t.slack.callsTo("chat.postEphemeral"), "after an uncertain post").toHaveLength(2);
+    expect(shown, "after an uncertain post: a second post, answered ok, would show").toEqual([]);
   });
 });
 
