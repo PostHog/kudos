@@ -3,7 +3,7 @@
 import { ReportableError } from "../analytics/exceptions.ts";
 import type { Line } from "../feedback/segments.ts";
 import { slackTextOf, type Retry } from "./delivery.ts";
-import { type LookUp } from "./directory.ts";
+import type { LookUp } from "./directory.ts";
 import type { ActionContext } from "../operations.ts";
 import { notPorted } from "../notPorted.ts";
 
