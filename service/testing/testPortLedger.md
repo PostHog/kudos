@@ -93,8 +93,8 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/feedback/oneReply.test.ts | S5 | | |
 | convex/feedback/questsHold.test.ts | S5 | | |
 | convex/feedback/replies.test.ts | S5 | service/src/feedback/replies.test.ts | |
-| convex/feedback/republishAdmins.test.ts | S5 | | |
-| convex/feedback/teaser.test.ts | S5 | | |
+| convex/feedback/republishAdmins.test.ts | S5 | service/src/feedback/republishAdmins.test.ts | S3 |
+| convex/feedback/teaser.test.ts | S5 | service/src/feedback/teaser.test.ts | S4 S8 S17 |
 | convex/feedback/welcomeNudge.test.ts | S5 | | |
 | convex/groups/attribution.test.ts | S11 | | |
 | convex/groups/attributionInsertOnly.test.ts | S11 | | |
