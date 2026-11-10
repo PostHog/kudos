@@ -1,6 +1,10 @@
-// The module map's skeleton of convex/workspace/customEmoji.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
-// notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
+// The workspace's custom emoji, as Slack's listing gives them. Today's convex/workspace/customEmoji.ts; the reads of one
+// emoji by name are ported, and the stubs left throw notPorted until the custom emoji sync's slice ports them.
+import { and, eq } from "drizzle-orm";
 import { z } from "zod";
+import { indexOrder } from "../db/indexOrder.ts";
+import { customEmoji, type Doc } from "../db/schema/index.ts";
+import { uniqueRow } from "./rows.ts";
 import { zv } from "../values.ts";
 import type { MutationContext, QueryContext } from "../operations.ts";
 import { notPorted } from "../notPorted.ts";
@@ -13,11 +17,12 @@ export type CustomEmoji = z.infer<typeof customEmojiValidator>;
 export type ListedEmoji = { name: string; image: string };
 
 export async function customEmojiImageOf(ctx: QueryContext, workspace: string, name: string): Promise<string | undefined> {
-  throw notPorted("workspace.customEmoji.customEmojiImageOf");
+  return (await emojiRow(ctx, workspace, name))?.image;
 }
 
 export async function originalCustomEmojiOf(ctx: QueryContext, workspace: string, name: string): Promise<ListedEmoji | null> {
-  throw notPorted("workspace.customEmoji.originalCustomEmojiOf");
+  const row = await emojiRow(ctx, workspace, name);
+  return row === null ? null : { name: row.aliasOf ?? row.name, image: row.image };
 }
 
 export async function originalCustomEmojiStartingWith(ctx: QueryContext, workspace: string, typed: string, limit: number): Promise<ListedEmoji[]> {
@@ -51,3 +56,9 @@ export async function forgetUnlistedCustomEmoji(ctx: MutationContext, args: z.in
   throw notPorted("workspace.customEmoji.forgetUnlistedCustomEmoji");
 }
 export const forgetUnlistedCustomEmojiJob = mutationJob("workspace.customEmoji.forgetUnlistedCustomEmoji", forgetUnlistedCustomEmojiArgs, forgetUnlistedCustomEmoji);
+
+const byName = indexOrder(customEmoji, ["workspace", "name"]);
+
+function emojiRow(ctx: QueryContext, workspace: string, name: string): Promise<Doc<"customEmoji"> | null> {
+  return uniqueRow<Doc<"customEmoji">>(ctx, customEmoji, and(eq(customEmoji.workspace, workspace), eq(customEmoji.name, name)), byName);
+}
