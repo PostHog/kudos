@@ -1,5 +1,6 @@
 // The analytics drain, today's convex/analytics/drain.ts on the jobs table: it sends the outbox's due rows to
-// PostHog's batch endpoint, 100 to a request, through the app's one way out (the image's fetch honours HTTPS_PROXY).
+// PostHog's batch endpoint, 100 to a request. Sending is send.ts's, the one module here that reaches the network; the
+// outbox, which the flag module imports, wakes the drain through this one and so never reaches it.
 // - A request only inserts its rows and a drain job (`wakeDrain`), which wakes the worker once it commits. It never
 //   reads the drain's state: today's read a singleton and its job in the request's transaction, so a drain claiming
 //   rows ran concurrent requests out of retries.
@@ -21,26 +22,26 @@ import { actionJob, mutationJob } from "../jobs/define.ts";
 import type { ActionContext, MutationContext } from "../operations.ts";
 import { zv } from "../values.ts";
 import { captureSettings, type Capture } from "./capture.ts";
-import { postHogExceptionList } from "./exceptions.ts";
 import { failuresLogged } from "./failures.ts";
 import { followPeopleSentLate, forgetRecordedProfiles, markDeliveriesUncertain, personEventsIn, withoutStalePersonEvents } from "./person.ts";
 
 const batchSize = 100;
-const answerTimeoutMs = 10_000;
 const leaseMs = 2 * 60_000;
 const retryDelaysMs = [1, 5, 30, 120, 360].map((minutes) => minutes * 60_000);
-const rejectedStatuses = [400, 413];
 const givenUpKeptForMs = 7 * 24 * 60 * 60_000;
 const pendingKeptForMs = 7 * 24 * 60 * 60_000;
 const cleanUpBatchSize = 500;
 
-type OutboxRow = Doc<"analyticsOutbox">;
+export type OutboxRow = Doc<"analyticsOutbox">;
 type GiveUpReason = NonNullable<OutboxRow["reason"]>;
 type Claim = { token: string; rows: OutboxRow[] };
 
 const answerValidator = z.union([z.literal("delivered"), z.literal("rejected"), z.literal("failed")]);
 const sentPersonEventValidator = z.strictObject({ row: zv.id("analyticsOutbox"), distinctId: z.string() });
-type Answer = z.infer<typeof answerValidator>;
+export type Answer = z.infer<typeof answerValidator>;
+
+/** Sends one batch and answers how PostHog took it; send.ts's `sendBatch` in the app. */
+export type Send = (capture: Capture, batch: OutboxRow[]) => Promise<Answer>;
 
 /**
  * A drain job's args. Today's named the generation of the one drain its singleton allowed; a job loaded from Convex
@@ -48,25 +49,29 @@ type Answer = z.infer<typeof answerValidator>;
  */
 export const drainArgs = z.strictObject({ generation: z.optional(z.string()) });
 
-/** Claims, sends and settles batches until none is due; `answerTimeoutMs` is how long PostHog has to answer each. */
-export function createDrain({ answerTimeoutMs: timeoutMs = answerTimeoutMs }: { answerTimeoutMs?: number } = {}) {
-  return actionJob("analytics.drain.drain", drainArgs, (ctx) => drain(ctx, timeoutMs));
+/** The drain's job: claims, sends and settles batches until none is due. The registry's sends by send.ts's `sendBatch`. */
+export function createDrain(send: Send) {
+  return actionJob("analytics.drain.drain", drainArgs, (ctx) => drain(ctx, send));
 }
 
-async function drain(ctx: ActionContext, timeoutMs: number): Promise<void> {
+async function drain(ctx: ActionContext, send: Send): Promise<void> {
   await failuresLogged("analytics.drain_failed", async () => {
     for (;;) {
       const capture = captureSettings();
       const claimed = await ctx.run.mutation("analytics.drain.claim", claim);
       if (claimed === null || capture === null) return;
-      const answer = await send(capture, claimed.rows, timeoutMs);
+      const answer = await send(capture, claimed.rows);
       const people = personEventsIn(claimed.rows);
       await ctx.run.mutation("analytics.drain.settle", (mutation) => settle(mutation, { token: claimed.token, rows: claimed.rows.map((row) => row._id), people, answer }));
     }
   });
 }
 
-export const drainJob = createDrain();
+/**
+ * The drain's job as requests and the drain's own jobs schedule it: its name, kind and args. The worker runs the job
+ * registered under its name, send.ts's `drainJob`, so this one's sender never runs.
+ */
+const scheduledDrain = createDrain(() => Promise.reject(new Error("The drain sends from the registry's job, send.ts's drainJob")));
 
 /**
  * Leases the due rows to this drain, oldest due first, skipping rows another drain's claim holds. With none due, or
@@ -144,7 +149,7 @@ export const cleanUpJob = mutationJob("analytics.drain.cleanUp", cleanUpArgs, cl
  * nothing, so a request recording analytics never conflicts with a drain claiming the outbox.
  */
 export async function wakeDrain(ctx: MutationContext): Promise<void> {
-  await ctx.jobs.enqueue(drainJob, {});
+  await ctx.jobs.enqueue(scheduledDrain, {});
 }
 
 /**
@@ -159,9 +164,9 @@ async function scheduleDrain(ctx: MutationContext): Promise<void> {
   const [scheduled] = await ctx.tx
     .select({ _id: jobs._id })
     .from(jobs)
-    .where(and(eq(jobs.state, "pending"), lte(jobs.runAt, at), eq(jobs.name, drainJob.name)))
+    .where(and(eq(jobs.state, "pending"), lte(jobs.runAt, at), eq(jobs.name, scheduledDrain.name)))
     .limit(1);
-  if (scheduled === undefined) await ctx.jobs.enqueue(drainJob, {}, { at });
+  if (scheduled === undefined) await ctx.jobs.enqueue(scheduledDrain, {}, { at });
 }
 
 /** The due pending rows, locked, skipping those another drain's claim holds, in `by_due` order. */
@@ -222,48 +227,4 @@ async function giveUp(ctx: MutationContext, rows: OutboxRow[], reason: GiveUpRea
   for (const row of rows) await patch(ctx, row, { state: "exhausted", reason, lease: undefined, dueAt: ctx.now + givenUpKeptForMs });
   await forgetRecordedProfiles(ctx, rows);
   console.warn("analytics.events_given_up", { reason, events: rows.map((row) => row.event) });
-}
-
-async function send(capture: Capture, batch: OutboxRow[], timeoutMs: number): Promise<Answer> {
-  try {
-    const response = await fetch(`${capture.host}/batch/`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(batchBody(capture, batch)),
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-    await response.body?.cancel().catch(() => {});
-    return answerTo(response.status);
-  } catch {
-    return "failed";
-  }
-}
-
-function answerTo(status: number): Answer {
-  if (status >= 200 && status < 300) return "delivered";
-  return rejectedStatuses.includes(status) ? "rejected" : "failed";
-}
-
-function batchBody(capture: Capture, batch: OutboxRow[]) {
-  return {
-    api_key: capture.token,
-    batch: batch.map((row) => ({
-      event: row.event,
-      distinct_id: row.distinctId,
-      uuid: row.uuid,
-      timestamp: new Date(row.timestamp).toISOString(),
-      properties: {
-        ...withPostHogNames(row.properties),
-        ...(row.exception && { $exception_list: postHogExceptionList(row.exception) }),
-        ...(row.person && { $set: row.person.set }),
-        ...(row.person && row.person.unset.length > 0 && { $unset: row.person.unset }),
-      },
-    })),
-  };
-}
-
-const postHogNames: Record<string, string> = { feature_flag: "$feature_flag", feature_flag_response: "$feature_flag_response" };
-
-function withPostHogNames(properties: OutboxRow["properties"]) {
-  return Object.fromEntries(Object.entries(properties).map(([name, value]) => [postHogNames[name] ?? name, value]));
 }

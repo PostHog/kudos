@@ -13,15 +13,17 @@ import { jobRegistry } from "../jobs/define.ts";
 import { createWorker, type Worker } from "../jobs/worker.ts";
 import type { Log, LogFields } from "../log.ts";
 import { createOperations } from "../operations.ts";
-import { claim, cleanUp, cleanUpJob, createDrain, recover, recoverJob, settle } from "./drain.ts";
+import { serviceRegistry } from "../registry.ts";
+import { claim, cleanUp, cleanUpJob, createDrain, drainArgs, recover, recoverJob, settle } from "./drain.ts";
 import { record } from "./outbox.ts";
+import { drainJob, sendBatch } from "./send.ts";
 
 const database = useTestDatabase();
 const quiet: Log = { info() {}, error() {} };
 const clock = createClock({ real: () => Date.parse("2026-10-13T10:00:00Z") });
 const operations = createOperations({ pool: database.pool, clock, log: quiet, retryDelayMs: () => 1 });
 const seed = seeder(operations);
-const registry = jobRegistry([createDrain({ answerTimeoutMs: 50 }), recoverJob, cleanUpJob]);
+const registry = jobRegistry([createDrain(sendBatch({ timeoutMs: 50 })), recoverJob, cleanUpJob]);
 const minutes = (count: number) => count * 60_000;
 const days = (count: number) => count * 24 * 60 * minutes(1);
 const realFetch = globalThis.fetch;
@@ -84,11 +86,22 @@ describe("O13 O15: recording", () => {
 });
 
 describe("O16: the drain", () => {
+  test("the app registers the drain that sends, with the args a scheduled drain carries, and its recovery and clean-up", () => {
+    expect(serviceRegistry.jobs.get("analytics.drain.drain"), "the sending drain").toBe(drainJob);
+    expect(drainJob.args).toBe(drainArgs);
+    expect(drainArgs.safeParse({ generation: "a-loaded-drain" }).success, "a drain loaded from Convex").toBe(true);
+    expect(serviceRegistry.jobs.get("analytics.drain.recover")).toBe(recoverJob);
+    expect(serviceRegistry.jobs.get("analytics.drain.cleanUp")).toBe(cleanUpJob);
+  });
+
   test("sends at most 100 events per request, and delivered events leave the outbox", async () => {
     await recordKudosGiven(75);
     await settle_();
 
-    expect(postHog.requests.map((request) => request.events.length)).toEqual([100, 50]);
+    // Today's one drain sent 100 then 50; drains running at once may split the rest between them.
+    expect(postHog.requests.every((request) => request.events.length <= 100), "at most 100 to a request").toBe(true);
+    expect(new Set(postHog.events().map(({ uuid }) => uuid)).size, "each event once").toBe(150);
+    expect(postHog.events()).toHaveLength(150);
     expect(await outbox()).toEqual([]);
   });
 
@@ -400,26 +413,42 @@ describe("the drain and the requests that wake it", () => {
     const drains = createWorker({ operations: runner, log: quiet, registry, concurrency: 4 });
     onTestFinished(() => drains.stop(1_000));
     const attempts = recorders.map(() => 0);
+    let recorded = false;
+    const request = (member: Id<"members">, i: number) =>
+      runner.mutation("test.request", (ctx) => {
+        attempts[i]! += 1;
+        return record(ctx, "T1", [{ event: "kudos received", subject: { member }, at: clock.now(), properties: { request: i } }]);
+      });
 
-    const recording = Promise.allSettled(
-      recorders.map(async (member, i) => {
-        await new Promise((resolve) => setTimeout(resolve, i * 3));
-        return runner.mutation("test.request", (ctx) => {
-          attempts[i]! += 1;
-          return record(ctx, "T1", [{ event: "kudos received", subject: { member }, at: clock.now(), properties: { request: i } }]);
-        });
-      }),
-    );
+    // The drains claim, send and settle for as long as requests record, and stop only once the last one committed.
     const draining = (async () => {
-      for (let round = 0; round < 20; round += 1) await drains.settle(200);
+      while (!recorded) await drains.settle(50);
     })();
-    const outcomes = await recording;
+    // Six waves of ten requests; each wave starts once the drains sent a batch since the last began, so the drains
+    // claim and settle between and during the waves however loaded the machine is.
+    const waves = 6;
+    const perWave = requests / waves;
+    const outcomes: Array<PromiseSettledResult<void>> = [];
+    let sentWhileRecording = 0;
+    for (let wave = 0; wave < waves; wave += 1) {
+      const sentBefore = postHog.requests.length;
+      const recording = Promise.allSettled(
+        recorders.slice(wave * perWave, (wave + 1) * perWave).map(async (member, j) => {
+          await new Promise((resolve) => setTimeout(resolve, j * 2));
+          return request(member, wave * perWave + j);
+        }),
+      );
+      outcomes.push(...(await recording));
+      if (wave < waves - 1) await vi.waitFor(() => expect(postHog.requests.length).toBeGreaterThan(sentBefore), { timeout: 30_000, interval: 10 });
+      sentWhileRecording = postHog.requests.length;
+    }
+    recorded = true;
     await draining;
     await settleInTimeOrder();
 
     expect(outcomes.filter(({ status }) => status === "rejected"), "no request failed").toEqual([]);
     expect({ retried: attempts.filter((count) => count > 1).length, logged: lines.filter(({ message }) => message.includes("test.request")) }, "none was retried").toEqual({ retried: 0, logged: [] });
-    expect(postHog.requests.length, "the drains sent while requests recorded").toBeGreaterThan(1);
+    expect(sentWhileRecording, "the drains sent a batch after each wave but the last").toBeGreaterThanOrEqual(waves - 1);
     const sent = postHog.events().map(({ properties }) => properties.request);
     expect(sent.toSorted((a, b) => Number(a) - Number(b)), "each request's event, once").toEqual(recorders.map((_, i) => i));
     expect(await outbox()).toEqual([]);
