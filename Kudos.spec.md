@@ -80,5 +80,13 @@ Peer recognition for Slack on one Convex deployment per workspace; the product r
   handler: websiteFiles in service/src/website/hosting.ts
   trust: browser
   control: none — it answers only files of the build folder the image holds, looked up by name in a list read from that folder, never a path the request spells; it reads no row and no secret, and every HTML answer carries the policy of contentSecurityPolicy, which lets the page load only its own code
+- route POST /api/query/*: the website reads one of the route table's reads, named by its former Convex path, for the member the request signs in as
+  handler: apiTransport in service/src/website/api/transport.ts
+  trust: browser
+  control: none — a request without the x-hedgehug-api header, as anything but JSON, or marked cross-site by the browser gets 403, a body over 64 KiB gets 413, and arguments the route's shape refuses, an unknown field at any depth included, get 400, before anyone is looked up; only a member today's check verifies reaches the read, and anyone else gets the check's denial (service/src/website/api/transport.test.ts)
+- route POST /api/mutation/*: the website sends one of the route table's commands, named by its former Convex path, for the member the request signs in as
+  handler: apiTransport in service/src/website/api/transport.ts
+  trust: browser
+  control: none — the same guard as the reads: no cross-site form or link can send the header or the JSON, so no other site runs a command; only a member the website admits reaches the command, in one transaction that writes nothing on a denial (service/src/website/api/transport.test.ts)
 
 ## invariants

@@ -7,7 +7,8 @@ import { chunksOf, zip } from "../../testing/zip.ts";
 import { useTestDatabase, withSearchPath } from "../../testing/database.ts";
 import { decodeStored, encodeStored, printExport, type Value } from "../db/codec.ts";
 import { fromDocument, toDocument } from "../db/documents.ts";
-import { archive, files, hypeReactions, kudosMessages, members, wordDeletionRequests } from "../db/schema/index.ts";
+import { albumHistory, archive, files, hypeReactions, kudosMessages, members, wordDeletionRequests } from "../db/schema/index.ts";
+import { eq } from "drizzle-orm";
 import { createPool } from "../db/pool.ts";
 import { createApp, type Migrations } from "../http/app.ts";
 import { createClock } from "../clock.ts";
@@ -15,10 +16,33 @@ import { createOperations } from "../operations.ts";
 import type { Log } from "../log.ts";
 import { createLoadControl, type LoadControl } from "./control.ts";
 import { maxFileBytes } from "./loader.ts";
+import { z } from "zod";
+import { actionJob, jobRegistry, mutationJob, type JobRegistry } from "../jobs/define.ts";
+import { sweepJob as unlocksSweep } from "../unlocks/sweep.ts";
+import { sweepJob as newWeekSweep } from "../quests/newWeek.ts";
+import { recheckSomeoneNewJob } from "../quests/journey.ts";
+import { ensureMondayDmsJob } from "../mondayDm/mondayDm.ts";
+import { ensureMondayDmsOfHugWeeksJob } from "../mondayDm/hugWeeks.ts";
+import { republishAdminsInJob } from "../feedback/homes.ts";
+import { nudgeTheHuggedJob } from "../feedback/welcomeNudge.ts";
+import { payHugPeopleJob } from "../hugs/people.ts";
+import { catchUpJob } from "../analytics/person.map.ts";
+import { backfillWordsJob } from "../slack/backfill.ts";
+import { tellBatchSummariesJob } from "../feedback/tierNotices.ts";
+import { forgetWorkspaceWordsJob } from "../engine/kudosText.ts";
+import { recordMilestonesInWorkspaceJob } from "../album/milestones.ts";
+import { fillItemsJob } from "../album/items/fill.ts";
+import { listSlackMembersJob } from "../slack/directory.ts";
+import { argRestarts } from "./restarts.ts";
 
 const database = useTestDatabase();
 const db = drizzle({ client: database.pool });
 const token = "a-load-token";
+/** The jobs recovery maps scheduled functions to, as the registry hands them to the load. */
+const jobs = jobRegistry([
+  mutationJob("slack.delivery.sendReply", z.strictObject({ attempt: z.bigint() }), async () => {}),
+  actionJob("slack.delivery.send", z.strictObject({ text: z.string() }), async () => {}),
+]);
 
 type Doc = { [field: string]: Value };
 const printStored = (doc: Doc) => encodeStored(doc).replaceAll("'", "''");
@@ -35,13 +59,13 @@ afterEach(() => copies.splice(0).forEach((copy) => copy.load.stop()));
 
 /** One copy of the service: the app over the test database with the load's control, as boot wires them. */
 async function copy(
-  options: { adminToken?: string | undefined; rows?: number; bytes?: number; off?: boolean; migrations?: Migrations } = {},
+  options: { adminToken?: string | undefined; rows?: number; bytes?: number; off?: boolean; migrations?: Migrations; registry?: JobRegistry } = {},
 ): Promise<Copy> {
-  const { rows = 500, bytes = 1 << 20, off = false, migrations = "done" } = options;
+  const { rows = 500, bytes = 1 << 20, off = false, migrations = "done", registry = jobs } = options;
   const adminToken = "adminToken" in options ? options.adminToken : token;
   const logs: string[] = [];
   const log: Log = { info: (message) => logs.push(message), error: (message) => logs.push(message) };
-  const load = createLoadControl({ pool: database.pool, token: adminToken, log, limits: { rows, bytes }, pollMs: 50 });
+  const load = createLoadControl({ pool: database.pool, token: adminToken, log, jobs: registry, limits: { rows, bytes }, pollMs: 50 });
   await load.refresh();
   load.resume();
   const app = createApp({ commit: "test", readiness: { migrations: () => migrations }, off, log, clock: createClock(), load });
@@ -78,11 +102,11 @@ async function status(service: Copy): Promise<Status> {
   return (await (await service.request("/admin/load")).json()) as Status;
 }
 
-/** Waits until the load is written and round-tripped, or stops on an error. */
+/** Waits until the load is written, round-tripped and recovered, or stops on an error. */
 async function settled(service: Copy): Promise<Status> {
   for (let tries = 0; tries < 600; tries++) {
     const now = await status(service);
-    if ((now.phase !== "loading" && now.phase !== "verifying") || now.error !== null) return now;
+    if ((now.phase !== "loading" && now.phase !== "verifying" && now.phase !== "recovering") || now.error !== null) return now;
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
   throw new Error("The load didn't settle");
@@ -172,7 +196,7 @@ describe("loading a Convex snapshot", () => {
     expect(started.status, "finish starts the load").toBe(202);
     const done = await settled(service);
 
-    expect(done, "the load wrote every entry, its round trip is equal, and recovery is next").toMatchObject({ phase: "recovering", error: null });
+    expect(done, "the load wrote every entry, its round trip is equal, and recovery is next").toMatchObject({ phase: "done", error: null });
     expect(
       done.roundTrip?.tables.map(({ table, snapshot, copy, equal }) => [table, snapshot.rows, copy.rows, equal]),
       "every table and each namespace's files, counted on both sides",
@@ -219,7 +243,7 @@ describe("loading a Convex snapshot", () => {
       { _id: "st1", _creationTime: 10, sha256: base64(card), size: card.length, contentType: "image/png", bytes: card },
       { _id: "st2", _creationTime: 11, sha256: base64(asset), size: asset.length, bytes: asset },
     ]);
-    expect((await service.request("/anything", { token: null })).status, "the app holds until the load is done").toBe(503);
+    expect((await service.request("/anything", { token: null })).status, "recovered, the load is done and the app serves").toBe(404);
   });
 
   test("a row written after the load sorts after every loaded row, though its runner's clock is behind them", async () => {
@@ -241,7 +265,7 @@ describe("loading a Convex snapshot", () => {
     const service = await copy();
 
     expect((await finish(service, archive)).status).toBe(202);
-    expect(await settled(service), "loaded").toMatchObject({ phase: "recovering", error: null });
+    expect(await settled(service), "loaded").toMatchObject({ phase: "done", error: null });
 
     const behind = createOperations({ pool: database.pool, clock: createClock({ real: () => 1_700_000_000_000 }), log: { info: () => {}, error: () => {} } });
     const stamp = await behind.mutation("write after the load", async ({ newRow }) => newRow()._creationTime);
@@ -265,7 +289,7 @@ describe("loading a Convex snapshot", () => {
     );
     const done = await settled(second);
 
-    expect(done, "the load finishes").toMatchObject({ phase: "recovering", error: null });
+    expect(done, "the load finishes").toMatchObject({ phase: "done", error: null });
     const logs = [...first.logs, ...second.logs];
     expect(logs, "the owner's load was interrupted, not stopped").toContain("load interrupted");
     expect(logs.filter((line) => line === "load running").length, "a copy took it over").toBeGreaterThanOrEqual(2);
@@ -280,7 +304,7 @@ describe("loading a Convex snapshot", () => {
     await finish(first, zip({ "hypeReactions/documents.jsonl": jsonl(reactions) }));
     const done = await settled(first);
 
-    expect(done, "the load finishes").toMatchObject({ phase: "recovering", error: null });
+    expect(done, "the load finishes").toMatchObject({ phase: "done", error: null });
     expect([...first.logs, ...second.logs].filter((line) => line === "load running"), "one copy ran it, once").toStrictEqual(["load running"]);
     expect((await documents(hypeReactions)).length, "every row once").toBe(reactions.length);
   });
@@ -303,7 +327,7 @@ describe("the round trip", () => {
         "_components/c1/_storage/cs1": asset,
       }),
     );
-    expect(await settled(service), "the untouched copy is equal").toMatchObject({ phase: "recovering", roundTrip: { equal: true } });
+    expect(await settled(service), "the untouched copy is equal").toMatchObject({ phase: "done", roundTrip: { equal: true } });
 
     // The copy drifts from the snapshot, then the load is back at its round trip, as after a restart while verifying.
     await database.pool.query(`update "hypeReactions" set emoji = 'a-secret-emoji' where _id = 'h1'`);
@@ -332,8 +356,10 @@ describe("the round trip", () => {
   /** Sends the load back to its round trip, as after a restart while verifying, and waits for the answer. */
   const reverify = async (service: Copy): Promise<Status> => {
     await database.pool.query(`update "loadState" set phase = 'verifying', "roundTrip" = null, error = null`);
+    await service.load.refresh(); // a copy stops reading the state once the load is done
+    // Settled, not only answered: an equal round trip goes on into recovery, which must end before the test changes more.
     await waitFor(async () => (await status(service)).roundTrip !== null);
-    return status(service);
+    return settled(service);
   };
   const differing = (answer: Status) => answer.roundTrip?.tables.filter((table) => !table.equal).map((table) => table.table);
 
@@ -342,7 +368,7 @@ describe("the round trip", () => {
     const doc: Doc = { _id: "st1", _creationTime: 1, sha256: createHash("sha256").update(asset).digest("base64"), size: BigInt(asset.length), contentType: "image/svg+xml", internalId: "i1" };
     const service = await copy();
     await finish(service, zip({ "_storage/documents.jsonl": jsonl([doc]), "_storage/st1": asset }));
-    expect(await settled(service), "equal as loaded").toMatchObject({ phase: "recovering" });
+    expect(await settled(service), "equal as loaded").toMatchObject({ phase: "done" });
 
     for (const change of [`size = 7`, `"contentType" = 'text/plain'`, `"contentType" = null`, `sha256 = 'AAAA'`, `"_creationTime" = 2`]) {
       await database.pool.query(`update files set ${change}`);
@@ -390,7 +416,7 @@ describe("the round trip", () => {
     const at = printExport(reaction("h1")).replace(/"at":[^,}]+/, `"at":{"$float":"${nan}"}`);
     const service = await copy();
     await finish(service, zip({ "hypeReactions/documents.jsonl": `${at}\n`, "retired/documents.jsonl": `{"_id":"r1","_creationTime":1.0,"n":{"$float":"${nan}"}}\n` }));
-    expect(await settled(service), "both tables are equal").toMatchObject({ phase: "recovering", roundTrip: { equal: true } });
+    expect(await settled(service), "both tables are equal").toMatchObject({ phase: "done", roundTrip: { equal: true } });
   });
 
   test("a database migrated before the round trip's column still reads the load's state", async () => {
@@ -403,7 +429,7 @@ describe("the round trip", () => {
     await admin.end();
     const pool = createPool(withSearchPath(inject("databaseUrl"), schema));
     try {
-      const load = createLoadControl({ pool, token: undefined, log: { info: () => {}, error: () => {} } });
+      const load = createLoadControl({ pool, token: undefined, log: { info: () => {}, error: () => {} }, jobs });
       await load.refresh();
       expect(load.held(), "a load is under way, so the copy holds while it migrates").toBe(true);
     } finally {
@@ -425,7 +451,7 @@ describe("the round trip", () => {
         "_components/c1/_storage/cs1": asset,
       }),
     );
-    expect(await settled(service), "equal as loaded").toMatchObject({ phase: "recovering" });
+    expect(await settled(service), "equal as loaded").toMatchObject({ phase: "done" });
     const changes: Array<[string, string, string]> = [
       [`delete from "hypeReactions"; insert into archive select 'app', 'hypeReactions', a._id, a."_creationTime", a.document from (select '${reaction("h1")._id}' as _id, 1700000000001::float8 as "_creationTime", '${printStored(reaction("h1"))}'::jsonb as document) a`, "hypeReactions", "a live row moved into the archive"],
       [`update archive set "_id" = 'a2', "_creationTime" = 6 where "table" = 'authAccounts'`, "authAccounts", "keys changed to what a field of the document holds"],
@@ -480,7 +506,7 @@ describe("tables the data model doesn't own", () => {
       }),
     );
 
-    expect(await settled(service), "the load writes them").toMatchObject({ phase: "recovering", error: null });
+    expect(await settled(service), "the load writes them").toMatchObject({ phase: "done", error: null });
     expect(await documents(files), "no stored file").toStrictEqual([]);
     expect(await documents(archive), "both archived").toStrictEqual([
       { source: "app", table: "files", _id: "r1", _creationTime: 1, document: retired },
@@ -506,6 +532,209 @@ describe("tables the data model doesn't own", () => {
     const stopped = await settled(service);
     expect(stopped.error, "the second file stops the load").toBe("Stored file f2 doesn't match its size or sha256");
     expect(stopped.entries, "the first file committed before it").toStrictEqual([{ entry: "_components/c1/_storage/documents.jsonl", lines: 1, done: false }]);
+  });
+});
+
+describe("recovery", () => {
+  const scheduled = (_id: string, name: string, state: Doc, args: Doc = {}, extra: Doc = {}): Doc => ({ _id, _creationTime: 7, name, args: [args], scheduledTime: 1_000, state, ...extra });
+  const jobsNow = async () =>
+    (await database.pool.query(`select _id, "_creationTime", name, args, "runAt", kind, state, error, "completedAt" from jobs order by _id`)).rows.map((row) => ({
+      ...row,
+      args: decodeStored(row.args),
+    }));
+
+  test("every scheduled function becomes a job with its state, and done lifts the hold", async () => {
+    const service = await copy();
+    await finish(
+      service,
+      zip({
+        "_scheduled_functions/documents.jsonl": jsonl([
+          scheduled("j1", "slack/delivery:sendReply", { kind: "pending" }, { attempt: 3n }),
+          scheduled("j2", "slack/delivery.js:sendReply", { kind: "inProgress" }, { attempt: 1n }),
+          scheduled("j3", "slack/delivery:send", { kind: "inProgress" }, { text: "hi" }),
+          scheduled("j4", "slack/delivery:send", { kind: "success" }, { text: "hi" }, { completedTime: 2_000 }),
+          scheduled("j5", "slack/delivery:send", { kind: "failed", error: "Slack said no" }, { text: "hi" }, { completedTime: 2_000 }),
+          scheduled("j6", "slack/delivery:sendReply", { kind: "canceled" }, { attempt: 1n }, { completedTime: 2_000 }),
+        ]),
+        "_components/posthog/_scheduled_functions/documents.jsonl": jsonl([scheduled("j7", "lib:refreshLoop", { kind: "pending" })]),
+      }),
+    );
+    expect(await settled(service), "the load is done").toMatchObject({ phase: "done", error: null });
+
+    const jobs = await jobsNow();
+    const kept = { _creationTime: 7, runAt: 1_000 };
+    expect(jobs.map(({ completedAt, ...job }) => ({ ...job, completed: completedAt !== null }))).toStrictEqual([
+      { ...kept, _id: "j1", name: "slack.delivery.sendReply", args: { attempt: 3n }, kind: "mutation", state: "pending", error: null, completed: false },
+      { ...kept, _id: "j2", name: "slack.delivery.sendReply", args: { attempt: 1n }, kind: "mutation", state: "pending", error: null, completed: false },
+      { ...kept, _id: "j3", name: "slack.delivery.send", args: { text: "hi" }, kind: "action", state: "failed", error: "Running when Convex stopped: an action runs at most once", completed: true },
+      { ...kept, _id: "j4", name: "slack.delivery.send", args: { text: "hi" }, kind: "action", state: "success", error: null, completed: true },
+      { ...kept, _id: "j5", name: "slack.delivery.send", args: { text: "hi" }, kind: "action", state: "failed", error: "Slack said no", completed: true },
+      { ...kept, _id: "j6", name: "slack.delivery.sendReply", args: { attempt: 1n }, kind: "mutation", state: "canceled", error: null, completed: true },
+      { ...kept, _id: "j7", name: "_components/posthog/lib.refreshLoop", args: {}, kind: "mutation", state: "canceled", error: "Retired at the move", completed: true },
+    ]);
+    expect(jobs.find((job) => job._id === "j4")!.completedAt, "a finished job keeps when it finished").toBe(2_000);
+    expect((await service.request("/anything", { token: null })).status, "done releases the hold").toBe(404);
+  });
+
+  test("a scheduled function no job or retirement maps blocks recovery, named with its count", async () => {
+    const service = await copy();
+    await finish(
+      service,
+      zip({
+        "_scheduled_functions/documents.jsonl": jsonl([
+          scheduled("j1", "old/gone:fn", { kind: "success" }),
+          scheduled("j2", "old/gone:fn", { kind: "pending" }),
+          scheduled("j3", "slack/delivery:sendReply", { kind: "pending" }, { attempt: 1n }),
+        ]),
+        "_components/c1/_scheduled_functions/documents.jsonl": jsonl([scheduled("j4", "lib:tick", { kind: "pending" })]),
+      }),
+    );
+    expect(await settled(service), "recovery stops").toMatchObject({
+      phase: "recovering",
+      error: "Recovery found scheduled functions no job or retirement maps: _components/c1/lib.tick (1), old.gone.fn (2)",
+    });
+    expect(await jobsNow(), "nothing is written").toStrictEqual([]);
+    expect((await service.request("/anything", { token: null })).status, "the app still holds").toBe(503);
+  });
+
+  test("pending args that don't match their job's schema block recovery, by ID and field, never by value", async () => {
+    const service = await copy();
+    await finish(
+      service,
+      zip({
+        "_scheduled_functions/documents.jsonl": jsonl([
+          scheduled("j1", "slack/delivery:sendReply", { kind: "pending" }, { attempt: "a-secret" }),
+          scheduled("j2", "slack/delivery:sendReply", { kind: "success" }, { attempt: "finished, not checked" }),
+          { _id: "j3", _creationTime: 7, name: "slack/delivery:sendReply", args: [], scheduledTime: 1_000, state: { kind: "pending" } },
+        ]),
+      }),
+    );
+    const stopped = await settled(service);
+    expect(stopped, "recovery stops").toMatchObject({
+      phase: "recovering",
+      error: "Recovery found pending args their job refuses: j1 slack.delivery.sendReply (attempt: invalid_type), j3 slack.delivery.sendReply (args: not one object)",
+    });
+    expect(JSON.stringify(stopped)).not.toContain("a-secret");
+    expect(await jobsNow(), "nothing is written").toStrictEqual([]);
+  });
+
+  test("flag definitions are seeded from the PostHog component's own", async () => {
+    const definitions = { flags: [{ key: "a-flag", active: true, filters: { groups: [{ properties: [{ key: "$device_id", value: "x" }] }] } }], groupTypeMapping: {}, cohorts: {} };
+    const service = await copy();
+    await finish(
+      service,
+      zip({ "_components/posthog/flagDefinitions/documents.jsonl": jsonl([{ _id: "d1", _creationTime: 5, data: JSON.stringify(definitions), fetchedAt: 6_000, etag: "e1" }]) }),
+    );
+    expect(await settled(service), "the load is done").toMatchObject({ phase: "done", error: null });
+    const rows = (await database.pool.query(`select key, definitions, "fetchedAt" from "flagDefinitions"`)).rows;
+    expect(rows.map((row) => ({ ...row, definitions: JSON.parse(row.definitions) })), "the one row, as the component kept it").toStrictEqual([
+      { key: "posthog", definitions, fetchedAt: 6_000 },
+    ]);
+  });
+
+  test("each workflow carrying a Convex paging cursor starts over, in its args and in its row; other cursors stay", async () => {
+    const ref = { workspace: "T1", conversation: "C1", message: "1.0" };
+    const hug = { type: "hugGiven", workspace: "T1", giver: "m1", message: ref, onKudos: true, at: 5, day: "2026-11-09" };
+    // Each restarted workflow's args as Convex scheduled them, mid-run, and as the job runs them after the move.
+    const fixtures: Array<[string, Doc, Doc]> = [
+      ["unlocks.sweep.sweep", { cursor: "convex-c" }, {}],
+      ["quests.newWeek.sweep", { cursor: "convex-c" }, {}],
+      ["quests.journey.recheckSomeoneNew", { event: { type: "memberLeft", workspace: "T1", member: "m1", at: 5 }, cursor: "convex-c" }, { event: { type: "memberLeft", workspace: "T1", member: "m1", at: 5 } }],
+      ["mondayDm.mondayDm.ensureMondayDms", { cursor: "convex-c" }, {}],
+      ["mondayDm.hugWeeks.ensureMondayDmsOfHugWeeks", { cursor: "convex-c" }, {}],
+      ["feedback.homes.republishAdminsIn", { workspace: "T1", cursor: "convex-c" }, { workspace: "T1" }],
+      ["feedback.welcomeNudge.nudgeTheHugged", { event: hug, cursor: "convex-c" }, { event: hug }],
+      ["hugs.people.payHugPeople", { event: hug, cursor: "convex-c" }, { event: hug }],
+      ["analytics.person.catchUp", { cursor: "convex-c" }, {}],
+      ["slack.backfill.backfillWords", { cursor: "convex-c", queue: [ref] }, { queue: [ref] }],
+      ["feedback.tierNotices.tellBatchSummaries", { batch: "b1", cursor: "convex-c" }, { batch: "b1", cursor: null }],
+      ["engine.kudosText.forgetWorkspaceWords", { workspace: "T1", cursor: "convex-c" }, { workspace: "T1", cursor: null }],
+      ["album.milestones.recordMilestonesInWorkspace", { workspace: "T1", cursor: "convex-c" }, { workspace: "T1", cursor: null }],
+      ["album.items.fill.fillItems", { step: { member: "m1", kind: "packs", cursor: "convex-c" } }, { step: { member: "m1", kind: "packs" } }],
+    ];
+    expect(fixtures.map(([name]) => name).sort(), "a fixture for every restarted workflow").toStrictEqual([...argRestarts.keys()].sort());
+    const kept: Array<[string, Doc]> = [["slack.directory.listSlackMembers", { cursor: "a-slack-cursor" }]];
+    const path = (name: string) => `${name.split(".").slice(0, -1).join("/")}:${name.split(".").at(-1)}`;
+    const rows = [...fixtures.map(([name, args]) => [name, args] as const), ...kept].map(([name, args], at) => scheduled(`j${String(at).padStart(2, "0")}`, path(name), { kind: "pending" }, args));
+
+    // The jobs as their modules define them, schemas and all; not every domain registers its jobs yet.
+    const workflows = [unlocksSweep, newWeekSweep, recheckSomeoneNewJob, ensureMondayDmsJob, ensureMondayDmsOfHugWeeksJob, republishAdminsInJob, nudgeTheHuggedJob, payHugPeopleJob];
+    const more = [catchUpJob, backfillWordsJob, tellBatchSummariesJob, forgetWorkspaceWordsJob, recordMilestonesInWorkspaceJob, fillItemsJob, listSlackMembersJob];
+    const service = await copy({ registry: jobRegistry([...workflows, ...more]) });
+    await finish(
+      service,
+      zip({
+        "_scheduled_functions/documents.jsonl": jsonl(rows),
+        "effectsBackfill/documents.jsonl": jsonl([
+          { _id: "e1", _creationTime: 1, before: 100, cursor: "convex-c", isDone: false },
+          { _id: "e2", _creationTime: 2, before: 100, cursor: "convex-c", isDone: true },
+        ]),
+        "stickerBackfills/documents.jsonl": jsonl([{ _id: "s1", _creationTime: 1, workspace: "T1", cursor: "convex-c", isDone: false }]),
+        "albumHistory/documents.jsonl": jsonl([{ _id: "a1", _creationTime: 1, workspace: "T1", startedAt: 3, phase: "hugs", cursor: "convex-c", hug: "h1", hugPeopleAfter: "m2", done: false }]),
+        "bookReplays/documents.jsonl": jsonl([
+          { _id: "r1", _creationTime: 1, workspace: "T1", batch: "b1", ladder: "generosity", tiers: [], countsLadder: true, isDone: false },
+          { _id: "r2", _creationTime: 2, workspace: "T1", batch: "b1", ladder: "generosity", tiers: [], countsLadder: true, isDone: true },
+        ]),
+        "bookReplayCursors/documents.jsonl": jsonl([
+          { _id: "c1", _creationTime: 1, replay: "r1", cursor: "convex-c" },
+          { _id: "c2", _creationTime: 2, replay: "r2", cursor: "convex-c" },
+        ]),
+      }),
+    );
+    expect(await settled(service), "the load is done").toMatchObject({ phase: "done", error: null });
+
+    const recovered = new Map((await jobsNow()).map((job) => [job.name as string, job.args]));
+    for (const [name, , after] of fixtures) expect(recovered.get(name), name).toStrictEqual(after);
+    expect(recovered.get("slack.directory.listSlackMembers"), "a Slack cursor stays").toStrictEqual({ cursor: "a-slack-cursor" });
+
+    const cursorsOf = async (table: string) => (await database.pool.query(`select _id, cursor from "${table}" order by _id`)).rows.map((row) => [row._id, row.cursor]);
+    expect(await cursorsOf("effectsBackfill"), "an unfinished run starts over, a finished one stays").toStrictEqual([["e1", null], ["e2", "convex-c"]]);
+    expect(await cursorsOf("stickerBackfills")).toStrictEqual([["s1", null]]);
+    expect((await documents(albumHistory))[0], "the history keeps its phase and inner bookmark").toMatchObject({ phase: "hugs", hug: "h1", hugPeopleAfter: "m2", done: false });
+    expect(await cursorsOf("albumHistory")).toStrictEqual([["a1", null]]);
+    expect(await cursorsOf("bookReplayCursors"), "an unfinished replay starts with no cursor row").toStrictEqual([["c2", "convex-c"]]);
+    const archived = await db.select({ table: archive.table, document: archive.document }).from(archive).where(eq(archive.source, "recovery")).orderBy(archive.table, archive._id);
+    expect(
+      archived.map(({ table, document }) => [table, decodeStored(document)]),
+      "each row recovery changed, kept whole as loaded",
+    ).toStrictEqual([
+      ["albumHistory", { _id: "a1", _creationTime: 1, workspace: "T1", startedAt: 3, phase: "hugs", cursor: "convex-c", hug: "h1", hugPeopleAfter: "m2", done: false }],
+      ["bookReplayCursors", { _id: "c1", _creationTime: 1, replay: "r1", cursor: "convex-c" }],
+      ["effectsBackfill", { _id: "e1", _creationTime: 1, before: 100, cursor: "convex-c", isDone: false }],
+      ["stickerBackfills", { _id: "s1", _creationTime: 1, workspace: "T1", cursor: "convex-c", isDone: false }],
+    ]);
+  });
+
+  test("more unfinished runs than one statement's parameters take restart all the same", async () => {
+    const count = 13_200; // five archive columns a row: past Postgres's 65,535 parameters in one insert
+    const rows = Array.from({ length: count }, (_, at): Doc => ({ _id: `s${String(at).padStart(5, "0")}`, _creationTime: 1, workspace: "T1", cursor: "convex-c", isDone: false }));
+    const service = await copy();
+    await finish(service, zip({ "stickerBackfills/documents.jsonl": jsonl(rows) }));
+    expect(await settled(service), "the load is done").toMatchObject({ phase: "done", error: null });
+    const counts = await database.pool.query(`select (select count(*)::int from "stickerBackfills" where cursor is null) as reset, (select count(*)::int from archive where source = 'recovery') as kept`);
+    expect(counts.rows[0], "every run restarted, every one kept").toStrictEqual({ reset: count, kept: count });
+   }, 120_000);
+
+  test("flag definitions the evaluator can't read stop recovery, nested fields too", async () => {
+    const service = await copy();
+    const data = JSON.stringify({ flags: [null], groupTypeMapping: {}, cohorts: {} });
+    await finish(service, zip({ "_components/posthog/flagDefinitions/documents.jsonl": jsonl([{ _id: "d1", _creationTime: 5, data, fetchedAt: 6_000 }]) }));
+    expect(await settled(service), "recovery stops").toMatchObject({
+      phase: "recovering",
+      error: "Recovery found the PostHog component's flag definitions in a shape the evaluator doesn't take",
+    });
+  });
+
+  test("a copy that finds a load recovering, as after a restart, finishes it", async () => {
+    const service = await copy();
+    await finish(service, zip({ "_scheduled_functions/documents.jsonl": jsonl([scheduled("j1", "old/gone:fn", { kind: "pending" })]) }));
+    expect((await settled(service)).error, "stopped on the unmapped name").toMatch(/^Recovery found/);
+
+    await database.pool.query(`update archive set document = jsonb_set(document, '{name}', '"slack/delivery:sendReply"') where _id = 'j1'`);
+    await database.pool.query(`update archive set document = jsonb_set(document, '{args}', '[{"attempt": {"$integer": "AQAAAAAAAAA="}}]') where _id = 'j1'`);
+    await database.pool.query(`update "loadState" set error = null`);
+    await waitFor(async () => (await status(service)).phase === "done");
+    expect((await jobsNow()).map((job) => [job._id, job.name, job.state]), "recovered").toStrictEqual([["j1", "slack.delivery.sendReply", "pending"]]);
   });
 });
 
@@ -625,7 +854,7 @@ describe("the admin path and the hold", () => {
     expect(await status(service), "nothing left, back to staging").toMatchObject({ phase: "staging", error: null, stagedChunks: 0, entries: [] });
     expect((await copy({ adminToken: undefined })).load.held(), "a copy without the token still holds after the reset").toBe(true);
     await finish(service, zip({ "hypeReactions/documents.jsonl": jsonl([reaction("h1")]) }));
-    expect(await settled(service), "a new load").toMatchObject({ phase: "recovering", error: null });
+    expect(await settled(service), "a new load").toMatchObject({ phase: "done", error: null });
   });
 
   test("a stopped load resumes from its checkpoint when finished again, and only with its own snapshot", async () => {
@@ -679,10 +908,10 @@ describe("the admin path and the hold", () => {
     const pool = createPool(withSearchPath(inject("databaseUrl"), schema));
     try {
       const log: Log = { info: () => {}, error: () => {} };
-      const without = createLoadControl({ pool, token: undefined, log });
+      const without = createLoadControl({ pool, token: undefined, log, jobs });
       await without.refresh();
       expect(without.held(), "no token, no load table").toBe(false);
-      const withToken = createLoadControl({ pool, token, log });
+      const withToken = createLoadControl({ pool, token, log, jobs });
       await withToken.refresh();
       expect(withToken.held(), "the token, no load table").toBe(true);
     } finally {
@@ -692,8 +921,9 @@ describe("the admin path and the hold", () => {
 
   test("the hold outlives a restart, token or not, and a finished load refuses its token", async () => {
     const service = await copy();
-    await finish(service, zip({ "hypeReactions/documents.jsonl": jsonl([reaction("h1")]) }));
-    await settled(service);
+    // A scheduled function nothing maps stops recovery, so the load is not done.
+    await finish(service, zip({ "_scheduled_functions/documents.jsonl": jsonl([{ _id: "j1", _creationTime: 1, name: "old:gone", args: [{}], scheduledTime: 1, state: { kind: "pending" } }]) }));
+    expect(await settled(service), "stopped in recovery").toMatchObject({ phase: "recovering" });
     const restarted = await copy({ adminToken: undefined });
     expect(restarted.load.held(), "a copy without the token still holds while the load is not done").toBe(true);
 
