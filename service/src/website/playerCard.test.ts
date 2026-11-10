@@ -1,7 +1,7 @@
 // LP94 LP95 LP98 HH29: getPlayerCard and getPlayerCardEmojis. Today's convex/website/playerCard.test.ts, on the
 // service's test backend. The handlers are S17's; a card reads the album's flags and stores, the board and the clock,
-// which other stacks own, and getAlbum, openThoughtfulPack and putAllIn are S16's website handlers the service doesn't
-// have yet, so each read of them ends in S16's stub for it.
+// which other stacks own. getAlbum is S16's handler; its pack commands openThoughtfulPack and putAllIn are called by
+// route name and end in `notPorted` until S16 registers their routes.
 import { afterEach, beforeEach, describe, expect, vi } from "vitest";
 import { useTestBackend, type TestBackend } from "../../testing/backend.ts";
 import { flagsKey, postHogHost, projectToken } from "../../testing/fakePostHog.ts";
@@ -17,12 +17,12 @@ import { weekOf } from "../engine/allowance.ts";
 import { countHugGiven, countHugReceived } from "../leaderboard/hugs.ts";
 import { countKudosGiven } from "../leaderboard/totals.ts";
 import { setLeaderboardVisibility } from "../leaderboard/visibility.ts";
-import { notPorted } from "../notPorted.ts";
-import type { MutationContext, QueryContext } from "../operations.ts";
+import type { MutationContext } from "../operations.ts";
 import type { MemberId } from "../workspace/directory.ts";
-import type { AlbumRead, OpenAnswer, PutAllInAnswer } from "./album.ts";
+import { getAlbum, type OpenAnswer, type PutAllInAnswer } from "./album.ts";
 import type { VerifiedMember } from "./memberQuery.ts";
 import { getPlayerCard, getPlayerCardEmojis } from "./playerCard.ts";
+import { commandByRoute } from "./routesTesting.ts";
 
 const tuesday = new Date("2026-10-13T10:00:00Z");
 const today = "2026-10-13";
@@ -267,17 +267,13 @@ describe("LP94: getPlayerCardEmojis counts a person's emojis unlocked in a read 
   }, 120_000);
 });
 
-// S16's website handlers, which the service doesn't have yet.
-async function getAlbum(_ctx: QueryContext, _me: VerifiedMember): Promise<AlbumRead> {
-  throw notPorted("website.album.getAlbum");
+// S16's pack commands, by their route names: each ends in `notPorted` until S16 registers its route.
+function openThoughtfulPack(ctx: MutationContext, me: VerifiedMember, args: { pack: string }) {
+  return commandByRoute<OpenAnswer>("website.album.openThoughtfulPack", ctx, me, args);
 }
 
-async function openThoughtfulPack(_ctx: MutationContext, _me: VerifiedMember, _args: { pack: string }): Promise<OpenAnswer> {
-  throw notPorted("website.album.openThoughtfulPack");
-}
-
-async function putAllIn(_ctx: MutationContext, _me: VerifiedMember): Promise<PutAllInAnswer> {
-  throw notPorted("website.album.putAllIn");
+function putAllIn(ctx: MutationContext, me: VerifiedMember) {
+  return commandByRoute<PutAllInAnswer>("website.album.putAllIn", ctx, me);
 }
 
 // Today's `switchWebsite`: the website open, these flags on for everyone, and the workspace's key made.

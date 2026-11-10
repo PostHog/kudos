@@ -1,6 +1,5 @@
 // getLevelUp answers one level up's reveal. Today's convex/website/levelUp.test.ts, on the service's test backend.
-// getLevelUp is S16's website handler and has no service counterpart yet, so each read of it ends in S16's stub for it;
-// reaching a level runs S6's unlocks and S10's level-up hoggies, and the reveal reads album/levelUp.ts (S9).
+// getLevelUp is S16's website handler; reaching a level runs S6's unlocks and S10's level-up hoggies, and the reveal reads album/levelUp.ts (S9).
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { useTestBackend, type TestBackend } from "../../testing/backend.ts";
 import { flagsKey, postHogHost, projectToken } from "../../testing/fakePostHog.ts";
@@ -13,11 +12,9 @@ import { drawOf } from "../album/hoggies/draw.ts";
 import { earnLevelUpHoggies } from "../album/levelUpHoggies.ts";
 import type { LevelUpAnswer } from "../album/levelUp.ts";
 import type { LevelReachedEvent } from "../bus/events.ts";
-import { notPorted } from "../notPorted.ts";
-import type { QueryContext } from "../operations.ts";
 import { makeReady } from "../unlocks/unlocks.ts";
 import type { MemberId } from "../workspace/directory.ts";
-import type { LevelUpRead } from "./album.ts";
+import { getLevelUp } from "./album.ts";
 import type { VerifiedMember } from "./memberQuery.ts";
 
 const now = new Date("2026-10-20T10:00:00Z");
@@ -42,11 +39,6 @@ beforeEach(() => {
 });
 
 afterEach(() => void vi.unstubAllEnvs());
-
-// S16's website handler, which the service doesn't have yet.
-async function getLevelUp(_ctx: QueryContext, _me: VerifiedMember, _args: { level: number }): Promise<LevelUpRead> {
-  throw notPorted("website.album.getLevelUp");
-}
 
 // Today's `switchWebsite`: the website open, these flags on for everyone, and the workspace's key made.
 async function switchWebsite(...flags: string[]) {
