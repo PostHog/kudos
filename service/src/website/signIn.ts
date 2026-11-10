@@ -1,7 +1,7 @@
 // A member's first entry through SSO: today's sign-in effects, run once. The website platform's identity mapping calls
-// it, in one mutation, once it knows the Slack identity behind the SSO email and finds no `users` row for it. A member who
-// signed in before the move has that row already, so they get no second greeting. Today's convex/website/signIn.ts,
-// which Convex Auth called on every Slack sign-in.
+// it, in one mutation, once it knows the Slack identity behind the SSO email and finds no `users` row for it, or finds one
+// for a person the directory doesn't know. A member who signed in before the move has that row already, so they get no
+// second greeting. Today's convex/website/signIn.ts, which Convex Auth called on every Slack sign-in.
 import { and, eq } from "drizzle-orm";
 import type { Id } from "../db/columns.ts";
 import { fromDocument } from "../db/documents.ts";
@@ -19,7 +19,8 @@ import { websiteOpen, websiteShownTo } from "./flag.ts";
 /** Who entered: the Slack pair behind the SSO email, and the display fields the identity mapping found for them. */
 export type SignedIn = { workspace: string; user: string; name?: string; givenName?: string; familyName?: string; image?: string };
 
-/** Why a first entry records nothing. Thrown before any write, so the caller's mutation rolls back clean. */
+/** Why a first entry records nothing. Thrown before the member's row is written; reading the website flag may have
+ * written analytics state by then, and the throw rolls the caller's whole mutation back, that included. */
 export class SignInRefused extends Error {
   readonly reason: "closed" | "another-workspace";
   constructor(reason: "closed" | "another-workspace") {
@@ -32,12 +33,20 @@ export class SignInRefused extends Error {
 /** The member's `users` row, recorded with today's sign-in effects on their first entry. */
 export async function rememberSignedInMember(ctx: MutationContext, signedIn: SignedIn): Promise<Id<"users">> {
   if (signedIn.workspace !== signInWorkspace()) throw new SignInRefused("another-workspace");
+  if (signedIn.user.trim() === "") throw new Error("a sign-in without a Slack user_id is not allowed");
   const known = await userOf(ctx, signedIn.workspace, signedIn.user);
-  if (known !== null) return known;
   const person = await lookup(ctx, signedIn.workspace, signedIn.user);
+  if (known !== null) return enteredAgain(ctx, signedIn, known, person);
   if (!(await admitted(ctx, person))) throw new SignInRefused("closed");
   if (person === undefined) await verifyLater(ctx, signedIn.workspace, signedIn.user, { firstSignIn: true });
   return firstSignIn(ctx, signedIn, person);
+}
+
+// A later entry writes nothing for a person the directory knows. For one it doesn't, it starts a fresh check after a
+// failed one, as today's sign-in did; `verifyLater` leaves a pending check alone.
+async function enteredAgain(ctx: MutationContext, { workspace, user }: SignedIn, known: Id<"users">, person: MemberFacts | undefined) {
+  if (person === undefined && (await admitted(ctx, person))) await verifyLater(ctx, workspace, user, { firstSignIn: false });
+  return known;
 }
 
 const byChatIdentity = indexOrder(users, ["chatIdentity$workspace", "chatIdentity$user"]);
