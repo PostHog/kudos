@@ -98,6 +98,7 @@ const leftOut: Record<string, string> = {
   "convex/bus/publish.ts:subscribers": "Convex's subscriber table; S1's registry holds each domain's subscriptions",
   "convex/schema.ts:default": "Convex's schema, which never lands; the service's tables are service/src/db/schema/index.ts",
   "convex/slack/commands.ts:slackCommands": "an HTTP action of Convex's router; S1's front door routes Slack's commands",
+  "convex/slack/events.ts:slackEvents": "an HTTP action of Convex's router; S1's front door routes Slack's events, and S4's message handler takes a message in",
   "convex/slack/interactivity.ts:slackInteractivity": "an HTTP action of Convex's router; S1's front door routes Slack's interactions",
   "convex/website/hosting.ts:registerWebsite": "it registers routes on Convex's router; the website platform serves the website",
   "convex/website/memberMutation.ts:memberMutation": "a builder of Convex mutations: the website's routes port onto the service's operations",

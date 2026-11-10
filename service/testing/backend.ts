@@ -152,7 +152,7 @@ export function useTestBackend(defaults: BackendOptions = {}): (options?: Backen
     const routes = registry.routes.map((domainRoutes) => domainRoutes({ operations, clock, log }));
     const app = createApp({ commit: "test", readiness: { migrations: () => "done" }, off: false, log, clock, worker, slack: frontDoor, routes });
 
-    const slack = new FakeSlack();
+    const slack = new FakeSlack(() => clock.now());
     const postHog = new FakePostHog();
     vi.stubGlobal("fetch", routedFetch(postHog, slack.fetch));
 

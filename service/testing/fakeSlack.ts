@@ -68,6 +68,13 @@ export class FakeSlack {
   private workspaceUrl = "https://t1.slack.com/";
   private channelsPerPage = 200;
 
+  /** When a call lands and whether a person has joined: the wall clock unless a backend gives its app's clock. */
+  private readonly now: () => number;
+
+  constructor(now: () => number = () => Date.now()) {
+    this.now = now;
+  }
+
   withWorkspaceUrl(url: string) {
     this.workspaceUrl = url;
     return this;
@@ -199,7 +206,7 @@ export class FakeSlack {
     await this.releaseHold(method, args);
     const call = { method, args };
     this.calls.push(call);
-    this.callTimes.set(call, Date.now());
+    this.callTimes.set(call, this.now());
     const answerAsSlackWould = () => Response.json(this.answer(method, args));
     const scripted = this.scripted.get(`${method} ${String(args.channel ?? "")}`)?.shift() ?? this.scripted.get(method)?.shift();
     return scripted ? scripted(answerAsSlackWould) : answerAsSlackWould();
@@ -216,7 +223,7 @@ export class FakeSlack {
     const field = (name: string) => String(args[name] ?? "");
     if (method === "users.info") {
       const user = this.users.get(field("user"));
-      const hasJoined = Date.now() >= (this.joinTimes.get(field("user")) ?? 0);
+      const hasJoined = this.now() >= (this.joinTimes.get(field("user")) ?? 0);
       return user && hasJoined ? { ok: true, user } : { ok: false, error: "user_not_found" };
     }
     if (method === "users.list") return { ok: true, members: [...this.users.values()], response_metadata: { next_cursor: "" } };

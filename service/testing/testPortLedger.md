@@ -84,7 +84,7 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/companyProfiles/storedFaces.test.ts | S12 | | |
 | convex/companyProfiles/sync.test.ts | S12 | service/src/companyProfiles/sync.test.ts | |
 | convex/engine/awardsInsertOnly.test.ts | S4 | service/src/engine/awardsInsertOnly.test.ts | |
-| convex/engine/engine.test.ts | S4 | | |
+| convex/engine/engine.test.ts | S4 | service/src/engine/engine.test.ts | S5 S7 S9 S11 |
 | convex/engine/home.test.ts | S4 | service/src/engine/home.test.ts | |
 | convex/feedback/albumMoments.test.ts | S5 | | |
 | convex/feedback/albumReplies.test.ts | S5 | | |
@@ -160,11 +160,11 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/slack/customKudosEmoji.test.ts | S13 | | |
 | convex/slack/customKudosEmojiGate.test.ts | S13 | | |
 | convex/slack/deepLinks.test.ts | S5 | | |
-| convex/slack/defaultKudosEmoji.test.ts | S4 | | |
+| convex/slack/defaultKudosEmoji.test.ts | S4 | service/src/slack/defaultKudosEmoji.test.ts | S3 S5 S7 S9 S11 S17 |
 | convex/slack/delivery.test.ts | S5 | | |
 | convex/slack/earnedEmojiKudos.test.ts | S9 | | |
-| convex/slack/edits.test.ts | S4 | | |
-| convex/slack/events.test.ts | S4 | | |
+| convex/slack/edits.test.ts | S4 | service/src/slack/edits.test.ts | S3 S5 S7 S9 S11 |
+| convex/slack/events.test.ts | S4 | service/src/slack/events.test.ts | S3 S5 S7 S9 S11 |
 | convex/slack/everyoneBoardFlag.test.ts | S11 | | |
 | convex/slack/failedDirectoryCheck.test.ts | S3 | | |
 | convex/slack/firstHugReply.test.ts | S13 | | |
@@ -182,9 +182,9 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/slack/hugs.test.ts | S13 | | |
 | convex/slack/hugsGate.test.ts | S13 | | |
 | convex/slack/inventory.test.ts | S8 | | |
-| convex/slack/kudosGivenScale.test.ts | S4 | | |
-| convex/slack/kudosMessages.test.ts | S4 | | |
-| convex/slack/kudosText.test.ts | S4 | | |
+| convex/slack/kudosGivenScale.test.ts | S4 | service/src/slack/kudosGivenScale.test.ts | S3 S5 S6 S7 S9 S11 |
+| convex/slack/kudosMessages.test.ts | S4 | service/src/slack/kudosMessages.test.ts | S3 S5 S7 S9 S11 |
+| convex/slack/kudosText.test.ts | S4 | service/src/slack/kudosText.test.ts | S3 S4 S5 S7 S9 S11 S14 |
 | convex/slack/leaderboard.test.ts | S11 | | |
 | convex/slack/leaderboardTab.test.ts | S11 | | |
 | convex/slack/levelUpDm.test.ts | S6 | | |
@@ -218,7 +218,7 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/slack/thankYouNudge.test.ts | S4 | | |
 | convex/slack/tierNotices.test.ts | S6 | | |
 | convex/slack/tierSummaries.test.ts | S6 | | |
-| convex/slack/unknownPeople.test.ts | S4 | | |
+| convex/slack/unknownPeople.test.ts | S4 | service/src/slack/unknownPeople.test.ts | S3 S5 S7 S9 S11 |
 | convex/slack/unlockFilter.test.ts | S6 | | |
 | convex/slack/unlockOrder.test.ts | S6 | | |
 | convex/slack/unlocksDm.test.ts | S6 | | |
