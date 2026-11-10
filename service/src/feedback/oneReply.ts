@@ -18,6 +18,7 @@ import { z } from "zod";
 import { zv } from "../values.ts";
 import type { Id } from "../db/columns.ts";
 import type { Doc } from "../db/schema/index.ts";
+import { unique } from "../db/unique.ts";
 import type { MutationContext, QueryContext } from "../operations.ts";
 
 export const oneReplyFlag = { key: "one-reply", safeDefault: false, values: [false, true] } as const satisfies Flag<boolean>;
@@ -59,9 +60,8 @@ export async function oneReplyShownTo(ctx: MutationContext, member: MemberId): P
 
 /** The one reply's row for a private reply; one at most, as Convex's `unique()` asked. */
 export async function oneReplyRowOf({ tx }: QueryContext, reply: Id<"privateReplies">): Promise<Doc<"oneReplies"> | null> {
-  const rows = await tx.select().from(oneReplies).where(eq(oneReplies.reply, reply)).limit(2);
-  if (rows.length > 1) throw new Error("More than one one-reply row is stored for a private reply");
-  return rows[0] === undefined ? null : toDocument<Doc<"oneReplies">>(oneReplies, rows[0]);
+  const row = unique("oneReplies", await tx.select().from(oneReplies).where(eq(oneReplies.reply, reply)).limit(2));
+  return row === null ? null : toDocument<Doc<"oneReplies">>(oneReplies, row);
 }
 
 export async function itemsAwaitedBy(ctx: QueryContext, member: MemberId): Promise<boolean> {
