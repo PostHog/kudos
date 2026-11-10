@@ -266,7 +266,7 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/website/leaderboard.test.ts | S16 | | |
 | convex/website/leaderboardHugs.test.ts | S16 | | |
 | convex/website/levelUp.test.ts | S17 | service/src/website/levelUp.test.ts | S6 S9 S10 S16 |
-| convex/website/link.test.ts | S17 | service/src/website/link.test.ts | S15 |
+| convex/website/link.test.ts | S17 | service/src/website/link.test.ts | |
 | convex/website/mondayQuests.test.ts | S17 | | |
 | convex/website/onboarding.test.ts | S17 | | |
 | convex/website/petHoggie.test.ts | S16 | | |
