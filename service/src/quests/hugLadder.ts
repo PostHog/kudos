@@ -12,6 +12,7 @@ import type { MemberId } from "../workspace/directory.ts";
 import type { Reward } from "./journey.ts";
 import type { JourneyStep } from "./step.ts";
 import type { MutationContext, QueryContext } from "../operations.ts";
+import { unique } from "../db/unique.ts";
 
 export const hugLadderSteps = ["hugs-3", "hugs-5", "hugs-10"] as const satisfies readonly JourneyStep[];
 
@@ -69,8 +70,7 @@ const byGiverSourceAt = indexOrder(questRecognitions, ["giver", "source", "at"])
 /** The member's ladder, or `null`; two fail, as `.unique()` did. */
 async function hugLadderOf(ctx: QueryContext, member: MemberId) {
   const rows = await ctx.tx.select({ _id: hugLadders._id, at: hugLadders.at }).from(hugLadders).where(eq(hugLadders.member, member)).orderBy(...byMember.orderBy()).limit(2);
-  if (rows.length > 1) throw new Error("The member has more than one hug ladder");
-  return rows[0] ?? null;
+  return unique("hugLadders", rows);
 }
 
 /**
