@@ -83,7 +83,7 @@ describe("the album's item jobs run on their events", () => {
   test("a rewarding hug earns its giver the day's hug find once when its draw finds one, and nothing when it doesn't", async () => {
     const t = backend();
     const alice = await t.member("U_ALICE");
-    const hugOn = (message: string): DomainEvent => ({ ...hug(alice, true), message: { ...ref, message } });
+    const hugOn = (message: string): DomainEvent => ({ type: "hugGiven", workspace: "T1", giver: alice, message: { ...ref, message }, onKudos: false, at, day: "2026-10-13", rewards: true });
     const draws: Record<"finds" | "misses", string[]> = { finds: [], misses: [] };
     for (let n = 0; n < 500 && (draws.finds.length < 2 || draws.misses.length < 1); n++) {
       const message = `1760000000.${String(n).padStart(6, "0")}`;

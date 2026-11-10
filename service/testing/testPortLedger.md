@@ -36,27 +36,27 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/album/hoggies/crests.test.ts | S10 | | |
 | convex/album/hoggies/draw.test.ts | S10 | | |
 | convex/album/hoggies/drops.test.ts | S10 | | |
-| convex/album/hoggies/packs.test.ts | S8 | | |
+| convex/album/hoggies/packs.test.ts | S8 | service/src/album/hoggies/packs.test.ts | S4 S6 S10 S15 |
 | convex/album/hoggies/rarityCaps.test.ts | S10 | | |
-| convex/album/hoggies/waitingPacks.test.ts | S8 | | |
+| convex/album/hoggies/waitingPacks.test.ts | S8 | service/src/album/hoggies/waitingPacks.test.ts | S4 S6 S10 S15 S16 |
 | convex/album/hypeByReactions.test.ts | S9 | | |
 | convex/album/hypeReactions.test.ts | S9 | | |
-| convex/album/items/achievementItems.test.ts | S8 | | |
-| convex/album/items/hugFinds.test.ts | S8 | | |
-| convex/album/items/itemBoard.test.ts | S8 | | |
-| convex/album/items/levelUpItems.test.ts | S8 | | |
-| convex/album/items/milestoneUnlocks.test.ts | S8 | | |
-| convex/album/items/questHoggies.test.ts | S8 | | |
-| convex/album/items/stickerItems.test.ts | S8 | | |
-| convex/album/items/trayItems.test.ts | S8 | | |
-| convex/album/items/welcomeItem.test.ts | S8 | | |
+| convex/album/items/achievementItems.test.ts | S8 | service/src/album/items/achievementItems.test.ts | S3 S4 S9 S10 S12 S15 S16 |
+| convex/album/items/hugFinds.test.ts | S8 | service/src/album/items/hugFinds.test.ts | S4 S13 S15 S16 |
+| convex/album/items/itemBoard.test.ts | S8 | service/src/album/items/itemBoard.test.ts | S3 S4 S9 S10 S15 S16 |
+| convex/album/items/levelUpItems.test.ts | S8 | service/src/album/items/levelUpItems.test.ts | S4 S6 S10 S11 S15 S16 |
+| convex/album/items/milestoneUnlocks.test.ts | S8 | service/src/album/items/milestoneUnlocks.test.ts | S3 S4 S9 S10 S13 S15 S16 |
+| convex/album/items/questHoggies.test.ts | S8 | service/src/album/items/questHoggies.test.ts |  |
+| convex/album/items/stickerItems.test.ts | S8 | service/src/album/items/stickerItems.test.ts | S3 S4 S9 S10 S12 S15 S16 |
+| convex/album/items/trayItems.test.ts | S8 | service/src/album/items/trayItems.test.ts | S3 S4 S9 S10 S11 S15 S16 |
+| convex/album/items/welcomeItem.test.ts | S8 | service/src/album/items/welcomeItem.test.ts | S4 S5 S10 S15 S16 |
 | convex/album/kudosEmojis.test.ts | S9 | | |
 | convex/album/levelUpHoggies.test.ts | S10 | | |
 | convex/album/milestones.test.ts | S9 | | |
-| convex/album/opening.test.ts | S8 | | |
+| convex/album/opening.test.ts | S8 | service/src/album/opening.test.ts | S4 S6 S15 S16 |
 | convex/album/ownHypePick.test.ts | S9 | | |
-| convex/album/packs.test.ts | S8 | | |
-| convex/album/putIn.test.ts | S8 | | |
+| convex/album/packs.test.ts | S8 | service/src/album/packs.test.ts | S4 S15 S16 |
+| convex/album/putIn.test.ts | S8 | service/src/album/putIn.test.ts | S3 S4 S5 S6 S9 S10 S12 S15 S16 |
 | convex/album/teamStickers.test.ts | S10 | | |
 | convex/analytics/boundary.test.ts | S14 | | |
 | convex/analytics/coreLoopFacts.test.ts | S14 | | |
