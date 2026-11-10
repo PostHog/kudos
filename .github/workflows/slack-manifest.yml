@@ -1,0 +1,88 @@
+# Moves a Slack app to the manifest this repository renders for its app's URL, through Slack's manifest API, so
+# nobody pastes it by hand. The sandbox app follows main on its own: a push that changes the manifest sends it. The
+# production app changes only by a run started by hand that names it.
+#
+# Off until the repository variable HEDGEHUG_MANIFEST_UPDATES turns it on: `sandbox` lets the sandbox app's job run,
+# `production` lets the production app's too. Unset or anything else, every job is skipped. A run started by hand only
+# plans (reads, compares, validates) unless its `apply` box is ticked.
+#
+# Not yet to be switched on: nothing reports whether Slack's first event reaches an app after its events URL moves,
+# which the release route needs before an app follows this workflow. A run that moves the URL says so in its summary.
+name: Slack manifest
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - slack-app/**
+      - convex/feedback/naming.ts
+      - tools/release/manifestUpdate.ts
+      - tools/release/slackManifest.ts
+  workflow_dispatch:
+    inputs:
+      app:
+        description: The Slack app to change
+        type: choice
+        options: [sandbox, production]
+        default: sandbox
+      apply:
+        description: Send the manifest to Slack; unticked, the run only plans
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# One change to the apps at a time; a newer run waits rather than cutting a running one off.
+concurrency:
+  group: slack-manifest
+  cancel-in-progress: false
+
+jobs:
+  sandbox:
+    if: ${{ github.ref == 'refs/heads/main' && (vars.HEDGEHUG_MANIFEST_UPDATES == 'sandbox' || vars.HEDGEHUG_MANIFEST_UPDATES == 'production') && (github.event_name == 'push' || inputs.app == 'sandbox') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+
+      - name: Move the sandbox Slack app to this commit's manifest
+        run: node tools/release/slackManifest.ts
+        env:
+          APP: sandbox
+          APP_URL: ${{ vars.HEDGEHUG_SANDBOX_URL }}
+          APP_ID: ${{ vars.HEDGEHUG_SANDBOX_APP_ID }}
+          APPLY: ${{ github.event_name == 'push' || inputs.apply }}
+          SLACK_SERVICE_TOKEN: ${{ secrets.HEDGEHUG_SANDBOX_SLACK_SERVICE_TOKEN }}
+          SIGNING_SECRET: ${{ secrets.HEDGEHUG_SANDBOX_SIGNING_SECRET }}
+
+  production:
+    if: ${{ github.ref == 'refs/heads/main' && vars.HEDGEHUG_MANIFEST_UPDATES == 'production' && github.event_name == 'workflow_dispatch' && inputs.app == 'production' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+
+      - name: Move the production Slack app to this commit's manifest
+        run: node tools/release/slackManifest.ts
+        env:
+          APP: production
+          APP_URL: ${{ vars.HEDGEHUG_PRODUCTION_URL }}
+          APP_ID: ${{ vars.HEDGEHUG_PRODUCTION_APP_ID }}
+          APPLY: ${{ inputs.apply }}
+          SLACK_SERVICE_TOKEN: ${{ secrets.HEDGEHUG_PRODUCTION_SLACK_SERVICE_TOKEN }}
+          SIGNING_SECRET: ${{ secrets.HEDGEHUG_PRODUCTION_SIGNING_SECRET }}
