@@ -1,5 +1,5 @@
 // The cursor of `paginate`, over a real index: a cursor read again later finds what came after it, an empty first
-// page starts over, and only a cursor a read gave is taken. The order itself is proved in ./indexOrder.test.ts.
+// page starts over, and only a cursor that is a place in this read's order is taken. The order itself is proved in ./indexOrder.test.ts.
 import { drizzle } from "drizzle-orm/node-postgres";
 import { eq } from "drizzle-orm";
 import { expect, test } from "vitest";
@@ -8,9 +8,10 @@ import { seeder } from "../../testing/seed.ts";
 import { createClock } from "../clock.ts";
 import type { Log } from "../log.ts";
 import { createOperations } from "../operations.ts";
+import { decodeStored, encodeStored, type Value } from "./codec.ts";
 import { indexOrder } from "./indexOrder.ts";
 import { paginate, type Page, type PagedQuery } from "./page.ts";
-import { primaryGroupHistory, type Doc } from "./schema/index.ts";
+import { flagExposures, primaryGroupHistory, type Doc } from "./schema/index.ts";
 
 const database = useTestDatabase();
 const db = drizzle({ client: database.pool });
@@ -70,6 +71,34 @@ test.each([0, -1, 1.5, Number.NaN])("a page of %s documents is refused", async (
   await expect(paginate(db, annsHistory, { cursor: null, numItems })).rejects.toThrow(RangeError);
 });
 
-test.each(["", "after:", "after:not json", 'after:"a string"', "after:[1]", "elsewhere"])("a cursor no read gave, %j, is refused", async (cursor) => {
+test.each(["", "after:", "after:not json", 'after:"a string"', "after:[1]", "after:{}", "elsewhere"])("a cursor no read gave, %j, is refused", async (cursor) => {
   await expect(paginate(db, annsHistory, { cursor, numItems: 1 })).rejects.toThrow("The cursor isn't one this read gave");
+});
+
+test("a cursor whose place is cut short, padded, of the wrong kind or from another order is refused", async () => {
+  for (const at of [1, 2]) await entry("m-ann", at);
+  const { continueCursor } = await paginate<Doc<"primaryGroupHistory">>(db, annsHistory, { cursor: null, numItems: 1 });
+  const place = decodeStored(continueCursor.slice("after:".length)) as { index: string; place: Record<string, Value> };
+  const forged = (change: (copy: typeof place) => unknown) => "after:" + encodeStored(change(structuredClone(place)) as Value);
+  const byMember = indexOrder(primaryGroupHistory, ["member"]);
+
+  for (const cursor of [
+    forged(({ index }) => ({ index })),
+    forged((copy) => ({ ...copy, place: { ...copy.place, at: undefined } })),
+    forged((copy) => ({ ...copy, place: { ...copy.place, extra: 1 } })),
+    forged((copy) => ({ ...copy, place: { ...copy.place, at: "1" } })),
+    forged((copy) => ({ ...copy, place: { ...copy.place, _id: null } })),
+    forged((copy) => ({ ...copy, extra: true })),
+  ]) {
+    await expect(paginate(db, annsHistory, { cursor, numItems: 1 }), cursor).rejects.toThrow("The cursor isn't one this read gave");
+  }
+  await expect(paginate(db, { ...annsHistory, order: byMember }, { cursor: continueCursor, numItems: 1 })).rejects.toThrow("The cursor isn't one this read gave");
+});
+
+test("an index over a jsonb field isn't paged: Postgres orders jsonb unlike Convex, and a missing field and null would share a place", async () => {
+  const byMemberFlagValue = indexOrder(flagExposures, ["member", "flag", "value"]);
+  const exposures: PagedQuery = { table: flagExposures, order: byMemberFlagValue };
+
+  await expect(paginate(db, exposures, { cursor: null, numItems: 1 })).rejects.toThrow("flagExposures(member, flag, value) can't be paged: value is stored as jsonb");
+  expect(() => byMemberFlagValue.after({ member: "m", flag: "f", value: "abc", _creationTime: 1, _id: "x" })).toThrow("can't be paged");
 });

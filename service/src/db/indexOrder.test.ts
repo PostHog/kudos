@@ -176,9 +176,10 @@ describe.each(cases)("$index", ({ table, name, fields, documents }) => {
         const { page, isDone, continueCursor }: Page<Document> = await paginate<Document>(db, { table, order, direction }, { cursor, numItems: size });
         seen.push(...page);
         cursor = continueCursor;
+        // Done exactly on the page that holds the last document, a full one included, never on an extra empty page.
+        expect(isDone, `page ${pages} of ${size} done`).toBe(pages === Math.ceil(documents.length / size));
         if (isDone) break;
         expect(page, `a page of ${size} before the last is full`).toHaveLength(size);
-        expect(pages, `pages of ${size} end`).toBeLessThanOrEqual(documents.length);
       }
       expect(seen, `pages of ${size}`).toEqual(ordered(direction).map((document) => expect.objectContaining({ _id: document._id })));
       expect((await paginate<Document>(db, { table, order, direction }, { cursor, numItems: size })).page, `after the last page of ${size}`).toEqual([]);

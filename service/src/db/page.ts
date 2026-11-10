@@ -1,6 +1,8 @@
 // One page of a paged read and where the next one starts: the shape the app's paging loops read, today from Convex's
-// paginate. The cursor is the service's own keyset over the index (./indexOrder.ts), opaque to the caller: the place of
-// the page's last document in the index's order, in the value codec's stored form, so -0, NaN and int64 keep their place.
+// paginate. The cursor is the service's own keyset over the index (./indexOrder.ts), opaque to the caller: the index's
+// name and the place of the page's last document in its order, in the value codec's stored form, so -0, NaN and int64
+// keep their place. A cursor that isn't a place in this read's order is refused. It isn't signed: cursors travel only
+// in the service's own job arguments, as Convex's did, and a forged place is still a place, so a walk from it stays in order.
 import { and, type SQL } from "drizzle-orm";
 import type { PgTable } from "drizzle-orm/pg-core";
 import type { Transaction } from "../operations.ts";
@@ -39,7 +41,8 @@ const placed = "after:";
  */
 export async function paginate<Doc>(tx: Transaction, { table, order, where, direction = "asc" }: PagedQuery, { cursor, numItems }: PageOptions): Promise<Page<Doc>> {
   if (!Number.isInteger(numItems) || numItems < 1) throw new RangeError(`A page holds a whole number of documents from 1, not ${numItems}`);
-  const after = cursor === null || cursor === atTheStart ? undefined : order.after(placeOf(cursor), direction);
+  order.refuseUnpageable();
+  const after = cursor === null || cursor === atTheStart ? undefined : order.after(placeOf(cursor, order), direction);
   const rows = await tx
     .select()
     .from(table)
@@ -48,13 +51,14 @@ export async function paginate<Doc>(tx: Transaction, { table, order, where, dire
     .limit(numItems + 1);
   const page = rows.slice(0, numItems).map((row) => toDocument<Doc>(table, row));
   const last = page.at(-1);
-  const continueCursor = last === undefined ? (cursor ?? atTheStart) : placed + encodeStored(order.keyOf(last as Record<string, unknown>) as Value);
+  const continueCursor = last === undefined ? (cursor ?? atTheStart) : placed + encodeStored({ index: order.name, place: order.keyOf(last as Record<string, unknown>) } as Value);
   return { page, isDone: rows.length <= numItems, continueCursor };
 }
 
-function placeOf(cursor: string): Record<string, unknown> {
-  const place = cursor.startsWith(placed) ? safely(() => decodeStored(cursor.slice(placed.length))) : undefined;
-  if (typeof place !== "object" || place === null || Array.isArray(place) || place instanceof ArrayBuffer) throw new Error("The cursor isn't one this read gave");
+function placeOf(cursor: string, order: IndexOrder): Record<string, unknown> {
+  const decoded = cursor.startsWith(placed) ? safely(() => decodeStored(cursor.slice(placed.length))) : undefined;
+  const { index, place, ...rest } = typeof decoded === "object" && decoded !== null && !Array.isArray(decoded) && !(decoded instanceof ArrayBuffer) ? decoded : {};
+  if (index !== order.name || Object.keys(rest).length > 0 || !order.isPlace(place)) throw new Error("The cursor isn't one this read gave");
   return place;
 }
 
