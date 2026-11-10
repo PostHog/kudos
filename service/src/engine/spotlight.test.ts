@@ -70,7 +70,7 @@ describe("drawable kudos", () => {
     expect(await drawn(t), "the draws").toEqual([]);
   });
 
-  waitsOn(["S11"], "a message to more than fifty people is checked by a job, and a member's messages are rechecked when the boards change", async () => {
+  waitsOn(["S11"], "a message to more than fifty people is placed by a job, not at once", async () => {
     const t = backend();
     const alice = await member(t, "U_ALICE");
     const crowd: MemberId[] = [];
@@ -80,10 +80,31 @@ describe("drawable kudos", () => {
     await t.run((ctx) => keepSpotlightUpToDate(ctx, ref("m1")));
     const placedAtOnce = await drawn(t);
     await t.settle();
-    await t.run((ctx) => ctx.jobs.enqueue(recomputeSpotlightOfJob, { member: alice, side: "given", before: null }));
-    await t.settle();
 
     expect(placedAtOnce, "placed at once").toEqual([]);
     expect(await drawn(t), "placed by the job").toEqual(["m1"]);
+  });
+
+  waitsOn(["S11"], "a member who leaves the boards takes every message they gave or received out of the spotlight, a page at a time", async () => {
+    const t = backend();
+    const [alice, bob, carol] = [await member(t, "U_ALICE"), await member(t, "U_BOB"), await member(t, "U_CAROL")];
+    const given = Array.from({ length: 12 }, (_, i) => `given${i}`);
+    for (const message of given) {
+      t.time.advance(1_000);
+      await givePublicly(t, message, alice, [bob]);
+      await t.run((ctx) => keepSpotlightUpToDate(ctx, ref(message)));
+    }
+    await givePublicly(t, "received", carol, [alice]);
+    await t.run((ctx) => keepSpotlightUpToDate(ctx, ref("received")));
+    await givePublicly(t, "others", carol, [bob]);
+    await t.run((ctx) => keepSpotlightUpToDate(ctx, ref("others")));
+    const before = (await drawn(t)).sort();
+
+    await t.seed.insert("leaderboardSettings", { member: alice, visible: false });
+    await t.run((ctx) => ctx.jobs.enqueue(recomputeSpotlightOfJob, { member: alice, side: "given", before: null }));
+    await t.settle();
+
+    expect(before, "drawn before").toEqual([...given, "others", "received"].sort());
+    expect(await drawn(t), "drawn after Alice left the boards").toEqual(["others"]);
   });
 });

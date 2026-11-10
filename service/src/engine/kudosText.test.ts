@@ -142,11 +142,11 @@ describe("forgetting on request", () => {
 
     await t.run((ctx) => forgetWordsAuthoredBy(ctx, { workspace: "T1", author: "U_ALICE" }));
     const afterOnePage = await t.query(({ tx }) => tx.select().from(kudosTexts));
-    const settled = await t.settle();
+    await t.settle();
     const kinds = (await t.query(({ tx }) => tx.select().from(kudosTexts))).map(({ author, kind, why }) => [author ?? "", kind, why ?? ""].join(" "));
 
     expect(afterOnePage.filter(({ kind }) => kind === "tombstone"), "after one page").toHaveLength(10);
-    expect(settled.ran, "the next page, then a last empty one").toEqual(["engine.kudosText.forgetAuthoredWords"]);
+    expect(afterOnePage.filter(({ author }) => author === "U_BOB"), "Bob's words after one page").toHaveLength(1);
     expect(kinds.filter((kind) => kind === " tombstone removed"), "Alice's words").toHaveLength(12);
     expect(kinds.filter((kind) => kind === "U_BOB words "), "Bob's words").toHaveLength(1);
   });
@@ -157,10 +157,11 @@ describe("forgetting on request", () => {
     await t.run((ctx) => keepWords(ctx, said(ref("x", "T2"), "thanks", 1n), {}));
 
     await t.run((ctx) => forgetWordsInWorkspace(ctx, { workspace: "T1", cursor: null }));
-    const settled = await t.settle();
+    const afterOnePage = await t.query(({ tx }) => tx.select().from(kudosTexts));
+    await t.settle();
     const rows = await t.query(({ tx }) => tx.select().from(kudosTexts));
 
-    expect(settled.ran, "the next page").toEqual(["engine.kudosText.forgetWorkspaceWords"]);
+    expect(afterOnePage.filter(({ workspace, kind }) => workspace === "T1" && kind === "words"), "T1's words after one page").toHaveLength(2);
     expect(rows.filter(({ workspace, kind }) => workspace === "T1" && kind === "words"), "T1's words").toEqual([]);
     expect(rows.filter(({ workspace, kind }) => workspace === "T2" && kind === "words"), "T2's words").toHaveLength(1);
   });
