@@ -53,17 +53,28 @@ async function directoryAnswer(ctx: QueryContext, signedIn: SignedIn): Promise<V
   return { me: { member: person.member, ...signedIn }, person };
 }
 
-// The name and picture of the person's users row, the first by the index's order when there are several.
-async function displayFieldsOf(ctx: QueryContext, { workspace, user }: SignedIn): Promise<Partial<Pick<VerifiedMember, "name" | "givenName" | "familyName" | "image">>> {
+/** The person's users row, the first by the index's order when there are several; null before their first entry. */
+export async function usersRowOf(ctx: QueryContext, { workspace, user }: Pick<SignedIn, "workspace" | "user">): Promise<Doc<"users"> | null> {
   const [row] = await ctx.tx
     .select()
     .from(users)
     .where(and(eq(users.chatIdentity$workspace, workspace), eq(users.chatIdentity$user, user)))
     .orderBy(asc(users._creationTime), asc(users._id))
     .limit(1);
-  if (row === undefined) return {};
-  const { name, givenName, familyName, image } = toDocument<Doc<"users">>(users, row);
+  return row === undefined ? null : toDocument<Doc<"users">>(users, row);
+}
+
+/** The name and picture fields a users row holds, only those it has. */
+export function displayFieldsIn(row: Doc<"users"> | null): DisplayFields {
+  if (row === null) return {};
+  const { name, givenName, familyName, image } = row;
   return present({ name, givenName, familyName, image });
+}
+
+type DisplayFields = Partial<Pick<VerifiedMember, "name" | "givenName" | "familyName" | "image">>;
+
+async function displayFieldsOf(ctx: QueryContext, signedIn: SignedIn): Promise<DisplayFields> {
+  return displayFieldsIn(await usersRowOf(ctx, signedIn));
 }
 
 function present<Fields extends Record<string, string | undefined>>(fields: Fields): Partial<Record<keyof Fields, string>> {

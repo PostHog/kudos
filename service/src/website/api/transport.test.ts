@@ -80,7 +80,7 @@ function apiWith({ read = "admit", command = "admit", routes = allRoutes }: { re
     off: false,
     log,
     clock,
-    routes: [apiTransport({ operations, log, routes, identify, check: checkOf({ read, command }) })],
+    routes: [apiTransport({ operations, log, routes, identify, check: checkOf({ read, command }), enter: async (_ctx, identity) => ("kind" in identity ? identity : { kind: "entered" }) })],
   });
   const ticked = async () => (await (await app.request("/api/query/website.test.ticks", sent({}))).json()) as number[];
   return { app, lines, ticked };
