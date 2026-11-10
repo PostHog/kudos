@@ -51,6 +51,8 @@ async function onPostHogCom(...people: TeamPageProfile[]) {
   await operations.action("companyProfiles.sync.syncCompanyProfiles", (ctx) => syncCompanyProfiles(ctx, {}));
 }
 
+// Sam's user sorts after every other teammate's, so a link that holds a profile by being earlier never also holds it by
+// coming first in the index.
 /** A member row as the directory keeps it; leaving and rejoining flip its kind, as Slack's member events do. */
 function aTeammate(user: string, name: string) {
   const row = { _id: `member-${user}`, _creationTime: realNow, workspace: "T1", user, kind: "member", asOf: 0, name, realName: name, admin: false } as unknown as MemberRows[number];
@@ -112,14 +114,14 @@ describe("CV17: a profile is matched to at most one member, links first", () => 
   });
 
   test("a self link matches an unmatched member", async () => {
-    const sam = aTeammate("U_SAM", "Sam Okafor");
+    const sam = aTeammate("U_ZSAM", "Sam Okafor");
     await sam.link(3);
 
     expect(await companyProfileOf(sam)).toEqual({ profile: 3, by: "self" });
   });
 
   test("an admin link beats a self link and a name match", async () => {
-    const sam = aTeammate("U_SAM", "Sam Okafor");
+    const sam = aTeammate("U_ZSAM", "Sam Okafor");
     await sam.link(2);
     const oriel = aTeammate("U_ORIEL", "Oriel Pemberton");
     const admin = aTeammate("U_ADMIN", "Ada Admin");
@@ -149,7 +151,7 @@ describe("CV17: a profile is matched to at most one member, links first", () => 
   });
 
   test("a name match never takes a profile another member's self link holds", async () => {
-    const sam = aTeammate("U_SAM", "Sam Okafor");
+    const sam = aTeammate("U_ZSAM", "Sam Okafor");
     await sam.link(1);
     const wren = aTeammate("U_WREN", "Wren Halloway");
 
@@ -158,7 +160,7 @@ describe("CV17: a profile is matched to at most one member, links first", () => 
   });
 
   test("where two self links name one profile, the earlier holds it and the later member is unmatched", async () => {
-    const sam = aTeammate("U_SAM", "Sam Okafor");
+    const sam = aTeammate("U_ZSAM", "Sam Okafor");
     const sammy = aTeammate("U_SAMMY", "Sammy Okafor");
     await sam.link(3);
     sam.leave();
@@ -171,8 +173,17 @@ describe("CV17: a profile is matched to at most one member, links first", () => 
     expect(await matches()).toEqual([{ member: sam.member, profile: 3, by: "self" }]);
   });
 
+  test("where two self links to one profile carry one instant, the one written first holds it", async () => {
+    const sam = aTeammate("U_ZSAM", "Sam Okafor");
+    const sammy = aTeammate("U_SAMMY", "Sammy Okafor");
+    await sam.link(3);
+    await sammy.link(3);
+
+    expect(await matches()).toEqual([{ member: sam.member, profile: 3, by: "self" }]);
+  });
+
   test("a returning member's old self link doesn't take a profile an admin link now gives to someone else", async () => {
-    const sam = aTeammate("U_SAM", "Sam Okafor");
+    const sam = aTeammate("U_ZSAM", "Sam Okafor");
     const sammy = aTeammate("U_SAMMY", "Sammy Okafor");
     await sam.link(3);
     sam.leave();
@@ -185,7 +196,7 @@ describe("CV17: a profile is matched to at most one member, links first", () => 
   });
 
   test("the links of a member who left hold nothing while they are away", async () => {
-    const sam = aTeammate("U_SAM", "Sam Okafor");
+    const sam = aTeammate("U_ZSAM", "Sam Okafor");
     await sam.link(1);
     sam.leave();
     const wren = aTeammate("U_WREN", "Wren Halloway");
@@ -195,7 +206,7 @@ describe("CV17: a profile is matched to at most one member, links first", () => 
   });
 
   test("a self link to a profile gone from posthog.com holds nothing until the profile returns", async () => {
-    const sam = aTeammate("U_SAM", "Sam Okafor");
+    const sam = aTeammate("U_ZSAM", "Sam Okafor");
     await sam.link(3);
     later();
     await onPostHogCom(wrenProfile, orielProfile, tamsinProfile);
@@ -209,7 +220,7 @@ describe("CV17: a profile is matched to at most one member, links first", () => 
   });
 
   test("a later own link that an earlier one holds leaves its member unmatched, even where their name would match", async () => {
-    const sam = aTeammate("U_SAM", "Sam Okafor");
+    const sam = aTeammate("U_ZSAM", "Sam Okafor");
     await sam.link(3);
     const wren = aTeammate("U_WREN", "Wren Halloway");
     later();
@@ -229,7 +240,7 @@ describe("CV17: a profile is matched to at most one member, links first", () => 
   });
 
   test("a member's admin link beats their own link, to another profile or to none", async () => {
-    const sam = aTeammate("U_SAM", "Sam Okafor");
+    const sam = aTeammate("U_ZSAM", "Sam Okafor");
     await sam.link(3);
     await anAdminLink(sam.member, 4, sam.member);
 
