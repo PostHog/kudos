@@ -1,0 +1,1 @@
+ALTER TABLE "loadState" ADD COLUMN "roundTrip" jsonb;

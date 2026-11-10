@@ -11,6 +11,7 @@ import type pg from "pg";
 import { decodeStored, encodeStored, parseExport, type Value } from "../db/codec.ts";
 import { fromDocument } from "../db/documents.ts";
 import * as schema from "../db/schema/index.ts";
+import * as service from "../db/schema/service.ts";
 import { openSnapshot, type Snapshot } from "./snapshot.ts";
 
 type Doc = { [field: string]: Value };
@@ -30,9 +31,13 @@ const loadTables = new Set<unknown>([schema.loadState, schema.loadChunks, schema
 export const appTables: PgTable[] = (Object.values(schema) as unknown[]).filter(
   (table): table is PgTable => is(table, PgTable) && !loadTables.has(table),
 );
-/** The data model's tables by name: a root table loads into one of these; `archive` and `files` are the service's own. */
-const serviceTables = new Set<unknown>([schema.archive, schema.files]);
-const tablesByName = new Map(appTables.filter((table) => !serviceTables.has(table)).map((table) => [getTableName(table), table]));
+/**
+ * The data model: the tables generated from convex/schema.ts, every app table but the service's own (`archive`, `files`,
+ * jobs, crons, flag state). A root table loads into one of these by name; any other goes to the archive.
+ */
+const serviceTables = new Set<unknown>(Object.values(service));
+export const dataModelTables: PgTable[] = appTables.filter((table) => !serviceTables.has(table));
+const tablesByName = new Map(dataModelTables.map((table) => [getTableName(table), table]));
 
 /** A stored file is read whole into one row; one larger than this stops the load rather than the process. */
 export const maxFileBytes = 32 * 1024 * 1024;
@@ -53,7 +58,7 @@ export async function loadSnapshot(pool: pg.Pool, client: pg.PoolClient, chunks:
   }
 }
 
-interface Step {
+export interface Step {
   path: string;
   /** Where the entry's namespace starts: empty for the root, such as `_components/posthog/` for a component. */
   prefix: string;
@@ -65,7 +70,8 @@ interface Step {
   files?: Map<string, string>;
 }
 
-function planEntries(snapshot: Snapshot): Step[] {
+/** The snapshot's entries in load order, `_tables` last; an entry the loader doesn't know stops it. */
+export function planEntries(snapshot: Snapshot): Step[] {
   const steps: Step[] = [];
   const inventories: Step[] = [];
   for (const path of [...snapshot.entries.keys()].sort()) {
@@ -83,7 +89,11 @@ function planEntries(snapshot: Snapshot): Step[] {
     const [table, file, ...deeper] = rest.split("/");
     if (rest === "README.md" || (deeper.length === 0 && file === "generated_schema.jsonl")) continue;
     if (deeper.length > 0 || file === undefined) throw new LoadError(`The snapshot has an entry the loader doesn't know: ${path}`);
-    if (table === "_storage" && file !== "documents.jsonl") continue;
+    if (table === "_storage" && file !== "documents.jsonl") {
+      // Stored bytes are loaded through their `_storage` documents; bytes in a namespace without any would be dropped.
+      if (!snapshot.entries.has(`${prefix}_storage/documents.jsonl`)) throw new LoadError(`The snapshot has stored bytes without a _storage document: ${path}`);
+      continue;
+    }
     if (file !== "documents.jsonl") throw new LoadError(`The snapshot has an entry the loader doesn't know: ${path}`);
     const step: Step = { path, prefix, source, root, table: table! };
     if (table === "_storage") step.files = storedFiles(snapshot, prefix);
@@ -96,7 +106,12 @@ function storedFiles(snapshot: Snapshot, prefix: string): Map<string, string> {
   const files = new Map<string, string>();
   for (const path of snapshot.entries.keys()) {
     const name = path.startsWith(`${prefix}_storage/`) ? path.slice(prefix.length + "_storage/".length) : undefined;
-    if (name && name !== "documents.jsonl" && !name.includes("/")) files.set(name.split(".")[0]!, path);
+    if (!name || name === "documents.jsonl" || name.includes("/")) continue;
+    const _id = name.split(".")[0]!;
+    // Two entries for one file would leave one unread, its bytes lost without a trace.
+    const other = files.get(_id);
+    if (other) throw new LoadError(`The snapshot has two stored bytes entries for file ${_id}: ${[other, path].sort().join(" and ")}`);
+    files.set(_id, path);
   }
   return files;
 }
@@ -156,10 +171,15 @@ async function loadEntry(client: pg.PoolClient, snapshot: Snapshot, step: Step, 
   await commit(true);
 }
 
+/** The data-model table a step's rows load into; without one, they go to the archive under the step's source and table. */
+export function dataModelTable(step: Pick<Step, "root" | "table">): PgTable | undefined {
+  return step.root ? tablesByName.get(step.table) : undefined;
+}
+
 function documentInsert(step: Step, doc: Doc, reports: Report[]): Insert {
   const _id = doc._id;
   if (typeof _id !== "string" || typeof doc._creationTime !== "number") throw new LoadError(`A document of ${step.path} has no _id or _creationTime`);
-  const table = step.root ? tablesByName.get(step.table) : undefined;
+  const table = dataModelTable(step);
   if (!table) return archiveInsert(step.source, step.table, doc);
   checkKinds(table, doc);
   reports.push(...indexedSpecials(table, doc));

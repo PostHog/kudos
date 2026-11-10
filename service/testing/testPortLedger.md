@@ -62,7 +62,7 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/analytics/coreLoopFacts.test.ts | S14 | | |
 | convex/analytics/darkFeatures.test.ts | S14 | | |
 | convex/analytics/deliveredTwice.test.ts | S14 | | |
-| convex/analytics/drain.test.ts | S14 | | |
+| convex/analytics/drain.test.ts | S14 | service/src/analytics/drain.test.ts | |
 | convex/analytics/errors.test.ts | S14 | | |
 | convex/analytics/flags.test.ts | S14 | service/src/analytics/flags.test.ts | |
 | convex/analytics/hoggieDropped.test.ts | S14 | | |
@@ -134,8 +134,8 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/quests/mondayPath.test.ts | S7 | | |
 | convex/quests/newWeek.test.ts | S7 | | |
 | convex/quests/next.test.ts | S7 | | |
-| convex/quests/pool.test.ts | S7 | | |
-| convex/quests/progress.test.ts | S7 | | |
+| convex/quests/pool.test.ts | S7 | service/src/quests/pool.test.ts | |
+| convex/quests/progress.test.ts | S7 | service/src/quests/progress.test.ts | |
 | convex/quests/recognitions.test.ts | S7 | | |
 | convex/quests/sides.test.ts | S7 | | |
 | convex/slack/achievementsFlag.test.ts | S6 | | |
