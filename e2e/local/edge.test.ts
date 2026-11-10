@@ -65,7 +65,7 @@ describe("the edge stand-in in front of the rewrite", () => {
     expect(seen.headers.x_auth_request_email).toBeUndefined();
   });
 
-  test.each(["/healthz", "/slack/events", "/slack/interactivity", "/slack/commands", "/cards/abc", "/admin/load", "/testing/time"])("passes no email on the public path %s, even for a signed-in member", async (path) => {
+  test.each(["/healthz", "/slack/events", "/slack/interactivity", "/slack/commands", "/cards/abc", "/share/wizard.png", "/emoji/team-kettle-works.png", "/admin/load", "/testing/time"])("passes no email on the public path %s, even for a signed-in member", async (path) => {
     const cookie = await signIn("member@example.com");
 
     const { seen } = await through(path, { headers: { ...forged, cookie } });
@@ -97,7 +97,7 @@ describe("the edge stand-in in front of the rewrite", () => {
     },
   );
 
-  test.each(["/cards/../me", "/cards/%2e%2e/me", "/slack%2fevents"])("passes the email on %s, which the service routes to a gated path", async (path) => {
+  test.each(["/cards/../me", "/cards/%2e%2e/me", "/share/../me", "/emoji/%2e%2e/me", "/slack%2fevents"])("passes the email on %s, which the service routes to a gated path", async (path) => {
     const cookie = await signIn("member@example.com");
 
     const { seen } = await raw(path, cookie);

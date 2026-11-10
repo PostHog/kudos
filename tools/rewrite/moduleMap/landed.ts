@@ -235,8 +235,6 @@ export const landed = [
   "convex/slack/appHomeLinks.ts",
   "convex/slack/backfill.ts",
   "convex/slack/blocks.ts",
-  "convex/slack/cardDrawing.ts",
-  "convex/slack/cardPictures.ts",
   "convex/slack/channelJoins.ts",
   "convex/slack/channelLeaves.ts",
   "convex/slack/checklist.ts",
