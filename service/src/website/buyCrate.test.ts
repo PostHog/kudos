@@ -134,7 +134,9 @@ async function opens(member: MemberId, feature: Feature) {
   expect(await t.run((ctx) => openUnlock(ctx, member, feature, "slack"))).toBe("done");
 }
 
-// The website handlers the service doesn't have yet: S16's collection read and S15's crate opening.
+// The website handlers the service doesn't have yet, S16's collection read and S15's crate opening: website handlers
+// get no module-map stubs, so until their stacks register `website.collection.getCollection` and
+// `website.commands.openCrate` each ends here, as at its stub.
 async function getCollection(_ctx: QueryContext, _me: VerifiedMember): Promise<CollectionAnswer> {
   throw notPorted("website.collection.getCollection");
 }

@@ -1,8 +1,8 @@
 // The quests panel on the Monday path: the Getting started journey, then the week's drawn quests, and the view report.
 // Today's convex/website/mondayQuests.test.ts, on the service's test backend: each read runs quests.ts's `getQuests`, and
 // each view its `viewQuests`, for a `me` made from the member's directory row, as S15's member check answers it. Kudos
-// and hugs go through the front door as Slack sends them; getAlbum and turnItem are S16's website handlers, which the
-// service doesn't have yet, so a turn ends in S16's stub for it.
+// and hugs go through the front door as Slack sends them; getAlbum is S16's handler and runs as itself, and turnItem is
+// S16's command, which has no route yet, so a turn ends at a stand-in for its stub.
 import { and, asc, eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, vi } from "vitest";
 import { useTestBackend, type TestBackend } from "../../testing/backend.ts";
@@ -21,7 +21,7 @@ import type { MutationContext, QueryContext } from "../operations.ts";
 import { sweep } from "../quests/newWeek.ts";
 import { serviceRegistry } from "../registry.ts";
 import { lookup, type MemberId } from "../workspace/directory.ts";
-import type { AlbumAnswer, AlbumRead, TurnAnswer } from "./album.ts";
+import { getAlbum, type AlbumAnswer, type AlbumRead, type TurnAnswer } from "./album.ts";
 import type { VerifiedMember } from "./memberQuery.ts";
 import { getQuests, viewQuests, type GettingStartedStep, type MondayQuests } from "./quests.ts";
 
@@ -259,11 +259,8 @@ describe("MQ41: viewing the quests records quests viewed", () => {
   }, 60_000);
 });
 
-// S16's website handlers, which the service doesn't have yet.
-async function getAlbum(_ctx: QueryContext, _me: VerifiedMember): Promise<AlbumRead> {
-  throw notPorted("website.album.getAlbum");
-}
-
+// S16's turn command, which has no route yet: website commands get no module-map stubs, so until S16 registers
+// `website.album.turnItem` a turn ends here, as at its stub.
 async function turnItem(_ctx: MutationContext, _me: VerifiedMember, _args: { item: string }): Promise<TurnAnswer> {
   throw notPorted("website.album.turnItem");
 }
@@ -287,7 +284,7 @@ async function settleInTimeOrder() {
 async function aTeammateNotThankedYet(person: Person) {
   handledByTheFrontDoor("memberChanged");
   t.slack.withMember(person.user, { real_name: person.name });
-  await t.send("/events", memberEvent("team_join", { id: person.user, profile: { real_name: person.name } }));
+  await delivered(t.send("/events", memberEvent("team_join", { id: person.user, profile: { real_name: person.name } })));
 }
 
 async function finishOnboarding() {
@@ -307,14 +304,14 @@ async function thanks(giver: Person, words: string, ...recipients: Person[]) {
   messages += 1;
   t.time.advance(minuteMs);
   const ts = `${t.clock.now() / 1000}.${String(messages).padStart(6, "0")}`;
-  await t.send("/events", messageEvent([section(text(`${words} `), ...recipients.flatMap(({ user }) => [mention(user), text(" ")]), emoji("taco"))], { user: giver.user, ts }));
+  await delivered(t.send("/events", messageEvent([section(text(`${words} `), ...recipients.flatMap(({ user }) => [mention(user), text(" ")]), emoji("taco"))], { user: giver.user, ts })));
   await settleInTimeOrder();
   return ts;
 }
 
 async function react(giver: Person, author: Person, ts: string) {
   handledByTheFrontDoor("reactionAdded");
-  await t.send("/events", reactionEvent({ user: giver.user, itemUser: author.user, ts }));
+  await delivered(t.send("/events", reactionEvent({ user: giver.user, itemUser: author.user, ts })));
 }
 
 // A reader signed in as today's `aSignedInSession` left them: the analytics ID the flags decide them by, and the member
@@ -379,4 +376,14 @@ async function memberOf(person: Person): Promise<MemberId> {
     return memberOf(person);
   }
   return row._id as MemberId;
+}
+
+// The front door answers 500 when a registered handler fails, and the test would go on as if the event did nothing. A
+// failure that reached a stub still waits, as at the stub; any other answer but 200 fails the test as itself.
+async function delivered(response: Response | Promise<Response>): Promise<void> {
+  const { status } = await response;
+  if (status === 200) return;
+  const failure = t.logs.findLast(({ message }) => message === "slack request failed");
+  if (failure?.fields.error === "NotPortedError") throw notPorted("slack.frontDoor.handler");
+  throw new Error(`The front door answered ${status}`);
 }
