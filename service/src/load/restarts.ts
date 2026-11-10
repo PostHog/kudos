@@ -61,17 +61,29 @@ export async function restartTables(db: NodePgDatabase): Promise<number> {
     [stickerBackfills, stickerBackfills.cursor, eq(stickerBackfills.isDone, false)],
     [albumHistory, albumHistory.cursor, eq(albumHistory.done, false)],
   ] as const) {
-    const rows = await db.select().from(table).where(and(unfinished, isNotNull(cursor)));
-    await keep(db, table, rows);
-    if (rows.length > 0) await db.update(table).set({ cursor: null }).where(inArray(idOf(table), rows.map((row) => row._id)));
-    reset += rows.length;
+    // A page at a time, each written in a few statements: a reset row leaves the page's condition, so the next read
+    // finds the rest.
+    for (;;) {
+      const rows = await db.select().from(table).where(and(unfinished, isNotNull(cursor))).orderBy(idOf(table)).limit(pageRows);
+      if (rows.length === 0) break;
+      await keep(db, table, rows);
+      await db.update(table).set({ cursor: null }).where(inArray(idOf(table), rows.map((row) => row._id)));
+      reset += rows.length;
+    }
   }
   const replays = db.select({ _id: bookReplays._id }).from(bookReplays).where(eq(bookReplays.isDone, false));
-  const cursors = await db.select().from(bookReplayCursors).where(inArray(bookReplayCursors.replay, replays));
-  await keep(db, bookReplayCursors, cursors);
-  if (cursors.length > 0) await db.delete(bookReplayCursors).where(inArray(bookReplayCursors._id, cursors.map((row) => row._id)));
-  return reset + cursors.length;
+  for (;;) {
+    const cursors = await db.select().from(bookReplayCursors).where(inArray(bookReplayCursors.replay, replays)).orderBy(bookReplayCursors._id).limit(pageRows);
+    if (cursors.length === 0) break;
+    await keep(db, bookReplayCursors, cursors);
+    await db.delete(bookReplayCursors).where(inArray(bookReplayCursors._id, cursors.map((row) => row._id)));
+    reset += cursors.length;
+  }
+  return reset;
 }
+
+/** Rows a page: well inside Postgres's 65,535 parameters a statement, five archive columns a row. */
+const pageRows = 1_000;
 
 const idOf = (table: PgTable) => (table as unknown as { _id: PgColumn })._id;
 

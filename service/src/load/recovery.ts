@@ -15,6 +15,7 @@ import type pg from "pg";
 import { decodeStored, encodeStored, type Value } from "../db/codec.ts";
 import { archive, flagDefinitions, jobs } from "../db/schema/index.ts";
 import type { JobRegistry } from "../jobs/define.ts";
+import { parseDefinitions } from "../analytics/definitions.ts";
 import { LoadError } from "./loader.ts";
 import { restartArgs, restartTables } from "./restarts.ts";
 import { retiredJobs } from "./retired.ts";
@@ -127,14 +128,12 @@ async function seedFlagDefinitions(db: NodePgDatabase): Promise<void> {
   if (rows.length === 0) return;
   if (rows.length > 1) throw new LoadError(`Recovery found ${rows.length} flag definitions rows in the PostHog component, where it keeps one`);
   const { data, fetchedAt } = decodeStored(rows[0]!.document) as { data: string; fetchedAt: number };
-  const definitions = JSON.parse(data) as unknown;
-  if (!isDefinitions(definitions)) throw new LoadError("Recovery found the PostHog component's flag definitions in a shape the evaluator doesn't take");
+  // Checked as the refresh checks PostHog's answer, every field the evaluator reads; the component keeps it camelCased.
+  const parsed = JSON.parse(data) as { flags?: unknown; groupTypeMapping?: unknown; cohorts?: unknown; propertyMatchingVersion?: unknown } | null;
+  const definitions =
+    parsed !== null && typeof parsed === "object"
+      ? parseDefinitions({ flags: parsed.flags, group_type_mapping: parsed.groupTypeMapping, cohorts: parsed.cohorts, property_matching_version: parsed.propertyMatchingVersion })
+      : null;
+  if (definitions === null) throw new LoadError("Recovery found the PostHog component's flag definitions in a shape the evaluator doesn't take");
   await db.insert(flagDefinitions).values({ key: "posthog", definitions, fetchedAt });
-}
-
-function isDefinitions(value: unknown): value is typeof flagDefinitions.$inferInsert.definitions {
-  if (value === null || typeof value !== "object") return false;
-  const { flags, groupTypeMapping, cohorts } = value as Record<string, unknown>;
-  const record = (inner: unknown) => inner !== null && typeof inner === "object" && !Array.isArray(inner);
-  return Array.isArray(flags) && record(groupTypeMapping) && record(cohorts);
 }

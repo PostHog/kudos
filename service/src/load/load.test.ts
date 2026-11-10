@@ -693,13 +693,36 @@ describe("recovery", () => {
     expect((await documents(albumHistory))[0], "the history keeps its phase and inner bookmark").toMatchObject({ phase: "hugs", hug: "h1", hugPeopleAfter: "m2", done: false });
     expect(await cursorsOf("albumHistory")).toStrictEqual([["a1", null]]);
     expect(await cursorsOf("bookReplayCursors"), "an unfinished replay starts with no cursor row").toStrictEqual([["c2", "convex-c"]]);
-    const archived = await db.select({ table: archive.table, _id: archive._id }).from(archive).where(eq(archive.source, "recovery"));
-    expect(archived.sort((a, b) => `${a.table}${a._id}`.localeCompare(`${b.table}${b._id}`)), "each row recovery changed, kept as loaded").toStrictEqual([
-      { table: "albumHistory", _id: "a1" },
-      { table: "bookReplayCursors", _id: "c1" },
-      { table: "effectsBackfill", _id: "e1" },
-      { table: "stickerBackfills", _id: "s1" },
+    const archived = await db.select({ table: archive.table, document: archive.document }).from(archive).where(eq(archive.source, "recovery")).orderBy(archive.table, archive._id);
+    expect(
+      archived.map(({ table, document }) => [table, decodeStored(document)]),
+      "each row recovery changed, kept whole as loaded",
+    ).toStrictEqual([
+      ["albumHistory", { _id: "a1", _creationTime: 1, workspace: "T1", startedAt: 3, phase: "hugs", cursor: "convex-c", hug: "h1", hugPeopleAfter: "m2", done: false }],
+      ["bookReplayCursors", { _id: "c1", _creationTime: 1, replay: "r1", cursor: "convex-c" }],
+      ["effectsBackfill", { _id: "e1", _creationTime: 1, before: 100, cursor: "convex-c", isDone: false }],
+      ["stickerBackfills", { _id: "s1", _creationTime: 1, workspace: "T1", cursor: "convex-c", isDone: false }],
     ]);
+  });
+
+  test("more unfinished runs than one statement's parameters take restart all the same", async () => {
+    const count = 13_200; // five archive columns a row: past Postgres's 65,535 parameters in one insert
+    const rows = Array.from({ length: count }, (_, at): Doc => ({ _id: `s${String(at).padStart(5, "0")}`, _creationTime: 1, workspace: "T1", cursor: "convex-c", isDone: false }));
+    const service = await copy();
+    await finish(service, zip({ "stickerBackfills/documents.jsonl": jsonl(rows) }));
+    expect(await settled(service), "the load is done").toMatchObject({ phase: "done", error: null });
+    const counts = await database.pool.query(`select (select count(*)::int from "stickerBackfills" where cursor is null) as reset, (select count(*)::int from archive where source = 'recovery') as kept`);
+    expect(counts.rows[0], "every run restarted, every one kept").toStrictEqual({ reset: count, kept: count });
+   }, 120_000);
+
+  test("flag definitions the evaluator can't read stop recovery, nested fields too", async () => {
+    const service = await copy();
+    const data = JSON.stringify({ flags: [null], groupTypeMapping: {}, cohorts: {} });
+    await finish(service, zip({ "_components/posthog/flagDefinitions/documents.jsonl": jsonl([{ _id: "d1", _creationTime: 5, data, fetchedAt: 6_000 }]) }));
+    expect(await settled(service), "recovery stops").toMatchObject({
+      phase: "recovering",
+      error: "Recovery found the PostHog component's flag definitions in a shape the evaluator doesn't take",
+    });
   });
 
   test("a copy that finds a load recovering, as after a restart, finishes it", async () => {
