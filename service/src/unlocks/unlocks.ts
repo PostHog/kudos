@@ -2,10 +2,10 @@
 // notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
 import { levelReachedEventValidator } from "../bus/events.ts";
 import type { Surface } from "../commands/surface.ts";
-import { type DecidedBelow } from "../engine/awards.ts";
-import { type MemberId } from "../workspace/directory.ts";
-import { type Feature } from "./feature.ts";
-import { type ScheduledFeature } from "./schedule.ts";
+import type { DecidedBelow } from "../engine/awards.ts";
+import type { MemberId } from "../workspace/directory.ts";
+import type { Feature } from "./feature.ts";
+import type { ScheduledFeature } from "./schedule.ts";
 import { z } from "zod";
 import type { MutationContext, QueryContext } from "../operations.ts";
 import { notPorted } from "../notPorted.ts";

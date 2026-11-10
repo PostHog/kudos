@@ -1,6 +1,6 @@
 // The module map's skeleton of what S1 left of convex/analytics/person.ts, written by tools/rewrite/moduleMap/skeleton.ts. S1's
 // service/src/analytics/person.ts re-exports it; its stubs throw notPorted until the stack that owns the module ports their bodies.
-import { type Environment } from "./capture.ts";
+import type { Environment } from "./capture.ts";
 import { z } from "zod";
 import { zv } from "../values.ts";
 import type { Id } from "../db/columns.ts";

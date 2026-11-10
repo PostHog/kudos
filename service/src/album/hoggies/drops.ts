@@ -1,13 +1,13 @@
 // The module map's skeleton of convex/album/hoggies/drops.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
 // notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
 import type { Surface } from "../../commands/surface.ts";
-import { type DecidedBelow } from "../../engine/awards.ts";
-import { type MemberId } from "../../workspace/directory.ts";
+import type { DecidedBelow } from "../../engine/awards.ts";
+import type { MemberId } from "../../workspace/directory.ts";
 import type { AppliedReward } from "../../progression/rewards.ts";
 import { crestNamed, type Rarity } from "./catalogue.ts";
-import { type Drawn } from "./draw.ts";
-import { type CrateKey } from "./crateKey.ts";
-import { type RarityRange, type SourceRarities } from "./rarityCaps.ts";
+import type { Drawn } from "./draw.ts";
+import type { CrateKey } from "./crateKey.ts";
+import type { RarityRange, SourceRarities } from "./rarityCaps.ts";
 import type { Doc } from "../../db/schema/index.ts";
 import type { MutationContext, QueryContext } from "../../operations.ts";
 import { notPorted } from "../../notPorted.ts";

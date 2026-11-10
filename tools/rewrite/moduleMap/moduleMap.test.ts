@@ -17,6 +17,7 @@ import { copyModule, importOnlyDiff } from "./copy.ts";
 import { convexAccepts, disagreements } from "./equivalence.ts";
 import { exportedNames, reachedByName, skeletonModule, type Contracts } from "./skeleton.ts";
 import { parse } from "./imports.ts";
+import { importTypesAsTypes, typeOnlyImports } from "./typeImports.ts";
 
 const repo = fileURLToPath(new URL("../../..", import.meta.url));
 const fixtures = fileURLToPath(new URL("./fixtures", import.meta.url));
@@ -305,7 +306,7 @@ test("S1's module is what S1 wrote, less only the last line a landing gave it", 
 });
 
 describe("the skeleton generator", () => {
-  const modules = ["convex/skeleton/awards.ts", "convex/skeleton/caller.ts", "convex/skeleton/tangled.ts", "convex/skeleton/edges.ts", "convex/skeleton/refused.ts", "convex/skeleton/inline.ts", "convex/skeleton/shadowed.ts", "convex/skeleton/appTypes.ts", "convex/skeleton/helpers.ts", "convex/skeleton/wrapped.ts", "convex/skeleton/printed.ts", "convex/wrapping/builder.ts", "convex/skeleton/follows.ts"];
+  const modules = ["convex/skeleton/awards.ts", "convex/skeleton/caller.ts", "convex/skeleton/tangled.ts", "convex/skeleton/edges.ts", "convex/skeleton/refused.ts", "convex/skeleton/inline.ts", "convex/skeleton/shadowed.ts", "convex/skeleton/appTypes.ts", "convex/skeleton/helpers.ts", "convex/skeleton/wrapped.ts", "convex/skeleton/printed.ts", "convex/wrapping/builder.ts", "convex/skeleton/follows.ts", "convex/skeleton/typeImports.ts"];
   const program = ts.createProgram(modules.map(onDisk), compilerOptions);
   const sourceFiles = modules.map((module) => program.getSourceFile(onDisk(module))!);
   const reached = reachedByName(sourceFiles);
@@ -317,6 +318,7 @@ describe("the skeleton generator", () => {
   const wrapped = landed(skeleton(9));
   const printed = landed(skeleton(10));
   const builder = landed(skeleton(11));
+  const typeImports = landed(skeleton(13));
 
   test("prints an ID that lost its alias as the service's Id, parenthesizes a union of objects in an array, and leaves out a type the checker can't resolve", () => {
     expect(printed.text).toContain('export async function tagged(ctx: QueryContext): Promise<Id<"members">> {');
@@ -715,6 +717,73 @@ export function notPorted() {
 `);
   });
 
+  test("imports what only types use as types, so a skeleton loads no module for a type: under verbatimModuleSyntax an `import { type X }` still loads it", () => {
+    expect(typeImports.text).toBe(`// The module map's skeleton of convex/skeleton/typeImports.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
+// notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
+import type { Note } from "./typeSource.ts";
+import { shapes, type Shape } from "./typeSource.ts";
+import type { defaultNote } from "./typeSource.ts";
+import type * as source from "./typeSource.ts";
+import type Board from "./typeSource.ts";
+import type { Note as Named } from "./typeSource.ts";
+import type { QueryContext } from "../operations.ts";
+import { notPorted } from "../notPorted.ts";
+
+export const firstShape: Shape = shapes[0]!;
+
+export async function latest(ctx: QueryContext, board: Board): Promise<typeof defaultNote> {
+  throw notPorted("skeleton.typeImports.latest");
+}
+
+export async function named(ctx: QueryContext): Promise<source.Note | Named | Note> {
+  throw notPorted("skeleton.typeImports.named");
+}
+`);
+    expect(typeOnlyImports(parse(typeImports.servicePath, typeImports.text))).toEqual([]);
+  });
+
+  test("finds each runtime import that only types use, in each form, and leaves type imports, values and side effects alone", () => {
+    const text = `import { type A } from "./a.ts";
+import { b, type B } from "./b.ts";
+import { c } from "./c.ts";
+import * as d from "./d.ts";
+import E, { e } from "./e.ts";
+import type { F } from "./f.ts";
+import "./g.ts";
+import { h } from "./h.ts";
+import data from "./data.json" with { type: "json" };
+import shown, { picked } from "./i.json" with { type: "json" };
+export const kept = b;
+export const used = e;
+export const read = shown;
+export type T = A | B | typeof c | d.D | E | F | typeof data | typeof picked;
+export { h };
+`;
+    expect(typeOnlyImports(parse("x.ts", text))).toEqual([
+      'line 1: import { type A } from "./a.ts" loads ./a.ts for A, which only types use',
+      'line 3: import { c } from "./c.ts" loads ./c.ts for c, which only types use',
+      'line 4: import * as d from "./d.ts" loads ./d.ts for d, which only types use',
+      'line 5: import E, { e } from "./e.ts" loads ./e.ts for E, which only types use',
+      'line 9: import data from "./data.json" with { type: "json" } loads ./data.json for data, which only types use',
+      'line 10: import shown, { picked } from "./i.json" with { type: "json" } loads ./i.json for picked, which only types use',
+    ]);
+    // Rewritten, a value keeps its attributes and a type drops them, which a type-only import may not carry.
+    expect(importTypesAsTypes("x.ts", text).split("\n").slice(0, 12)).toEqual([
+      'import type { A } from "./a.ts";',
+      'import { b, type B } from "./b.ts";',
+      'import type { c } from "./c.ts";',
+      'import type * as d from "./d.ts";',
+      'import { e } from "./e.ts";',
+      'import type E from "./e.ts";',
+      'import type { F } from "./f.ts";',
+      'import "./g.ts";',
+      'import { h } from "./h.ts";',
+      'import type data from "./data.json";',
+      'import shown from "./i.json" with { type: "json" };',
+      'import type { picked } from "./i.json";',
+    ]);
+  });
+
   test("refuses what it can't stub without changing what other modules see, and any way of reaching Convex in what it writes", () => {
     expect(skeleton(4)).toEqual({
       refusals: [
@@ -748,7 +817,7 @@ export function notPorted() {
 
   describe("its output in the service", () => {
     const serviceModules = ["values.ts", "notPorted.ts", "operations.ts", "jobs/define.ts", "db/columns.ts", "db/schema/index.ts", "db/page.ts"];
-    const scratch = scratchService(serviceModules, [awards, edges, appTypes, helpers, wrapped]);
+    const scratch = scratchService(serviceModules, [awards, edges, appTypes, helpers, wrapped, typeImports, landed(copyModule("convex/skeleton/typeSource.ts", read("convex/skeleton/typeSource.ts"), exists))]);
 
     test("typechecks under the service's compiler options", () => {
       expect(scratch.diagnostics()).toEqual([]);
