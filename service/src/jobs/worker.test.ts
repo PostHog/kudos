@@ -453,11 +453,14 @@ describe("action jobs", () => {
   });
 
   test("one whose mutation loses its connection before COMMIT completes once, and its next booking lands", async () => {
+    let sent = 0;
     let runs = 0;
-    const post = actionJob("leaderboard.weeklyPost.post", z.object({}), async ({ run }) => {
+    const week = 7 * 24 * 3_600_000;
+    const post: Job = actionJob("leaderboard.weeklyPost.post", z.object({}), async ({ run }) => {
+      sent += 1; // what the action did outside the database before it booked: the post went out
       await run.mutation("book next", async (ctx) => {
         runs += 1;
-        await effect(ctx, "booked");
+        await ctx.jobs.enqueue(post, {}, { after: week });
         if (runs === 1) {
           // The server ends the session, as a restart or a failover does, before the booking commits.
           const { rows } = await ctx.tx.execute<{ pid: number }>(sql`select pg_backend_pid() as pid`);
@@ -470,8 +473,11 @@ describe("action jobs", () => {
     await enqueue(post, {});
 
     expect(await worker().settle(5_000)).toEqual({ ran: ["leaderboard.weeklyPost.post"], done: true });
-    expect(await jobRows()).toEqual([{ name: "leaderboard.weeklyPost.post", state: "success", error: null }]);
-    expect(await effects("booked"), "booked once").toBe(1);
+    expect(await jobRows(), "this week's post done, and next week's booked once").toEqual([
+      { name: "leaderboard.weeklyPost.post", state: "success", error: null },
+      { name: "leaderboard.weeklyPost.post", state: "pending", error: null },
+    ]);
+    expect(sent, "the action itself ran once: only its mutation ran again").toBe(1);
     expect(runs, "the mutation ran again on a new connection").toBe(2);
   });
 

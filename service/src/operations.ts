@@ -258,8 +258,12 @@ export function createOperations({ pool, clock, log, maxAttempts = 10, retryDela
             return result;
           },
           (error: unknown) => {
-            // The server may answer that it ends the session before the socket closes.
-            if (endsSession(error)) (lost ??= error), (broken ??= error);
+            // The server may answer that it ends the session before the socket closes. An answer that lands after
+            // COMMIT was sent proves nothing about it: the COMMIT may have run, so it is no loss before COMMIT.
+            if (endsSession(error)) {
+              broken ??= error;
+              if (!committing) lost ??= error;
+            }
             if (!hasSqlState(error)) throw error;
             // Every statement after a failed one answers 25P02; the failure the handler went on after is the answer.
             if (error.code === "25P02" && aborted !== undefined) throw wentOnAfter(aborted);

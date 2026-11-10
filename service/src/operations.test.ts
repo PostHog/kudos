@@ -375,6 +375,39 @@ describe("the transaction", () => {
     expect((await pool.query("select id from counters")).rows).toEqual([{ id: "attempt-2" }]);
   });
 
+  test("a session-ending answer that lands after COMMIT was sent never makes that COMMIT run again", async () => {
+    // COMMIT succeeds on the server, and its answer is lost on the way back: the outcome is unknown to the runner.
+    const answerLost = {
+      connect: async () => {
+        const client = await pool.connect();
+        const query = client.query.bind(client) as (text: unknown, ...rest: unknown[]) => Promise<unknown>;
+        (client as unknown as { query: typeof query }).query = (text, ...rest) =>
+          typeof text === "string" && text.endsWith("COMMIT")
+            ? query(text, ...rest).then(() => {
+                (client as unknown as { connection: { stream: { destroy(): void } } }).connection.stream.destroy();
+                throw new Error("Connection terminated unexpectedly");
+              })
+            : query(text, ...rest);
+        return client;
+      },
+    } as Pick<pg.Pool, "connect">;
+    const { operations } = setUp({ pool: answerLost });
+    let runs = 0;
+
+    const once = operations.mutation("book next", async ({ tx }) => {
+      runs += 1;
+      await tx.insert(counters).values({ id: `attempt-${runs}`, n: runs });
+      await tx.execute(sql`savepoint late`);
+      // Not awaited: an answer of a session-ending class, and the rollback that recovers from it, land after COMMIT is sent.
+      void tx.execute(sql.raw(`do $$ begin raise exception 'gone' using errcode = '08006'; end $$`)).catch(() => {});
+      void tx.execute(sql`rollback to savepoint late`).catch(() => {});
+    });
+
+    await expect(once, "lost during COMMIT, whose outcome is unknown").rejects.toThrow("Connection terminated unexpectedly");
+    expect(runs, "never run again blindly").toBe(1);
+    expect((await pool.query("select id from counters")).rows, "the one committed write").toEqual([{ id: "attempt-1" }]);
+  });
+
   test("a query whose connection drops runs again on a new connection", async () => {
     const { operations } = watched();
     let runs = 0;
