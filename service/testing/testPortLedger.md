@@ -300,4 +300,5 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | tools/release/promotion.test.ts | S20 | | |
 | tools/release/slackManifest.test.ts | S20 | | |
 | tools/rewrite/drizzle/generate.test.ts | S20 | | |
+| tools/rewrite/moduleMap/moduleMap.test.ts | S20 | | |
 | tools/rewrite/schemaParity.test.ts | S20 | | |
