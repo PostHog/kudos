@@ -5,6 +5,7 @@ Every test file of the root `convex` Vitest project (`vitest.config.ts`), one ro
 - **Stack**: S1 to S20. A file outside `convex/`, or at its root, is S20's, which moves it off the `convex` project.
 - **Ported to**: the port's path from the repository's root, such as `service/src/engine/engine.test.ts`; empty until it is ported.
 - **Waits on**: space-separated stacks, such as `S5 S6`; only a ported row waits. Whichever of them merges last empties it.
+  A waiting test is declared with `waitsOn` from `service/testing/waiting.ts`: it runs, passes while it ends in a stub's `NotPortedError`, and fails on any other error or once it passes, so that stack turns it into a plain `test`. A stub a job reaches counts too: `useTestBackend`'s `settle` throws the `NotPortedError` the worker recorded for it.
 
 Edit only your own rows, in place, and keep both sides on a conflict.
 
@@ -61,7 +62,7 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/analytics/coreLoopFacts.test.ts | S14 | | |
 | convex/analytics/darkFeatures.test.ts | S14 | | |
 | convex/analytics/deliveredTwice.test.ts | S14 | | |
-| convex/analytics/drain.test.ts | S14 | | |
+| convex/analytics/drain.test.ts | S14 | service/src/analytics/drain.test.ts | |
 | convex/analytics/errors.test.ts | S14 | | |
 | convex/analytics/flags.test.ts | S14 | service/src/analytics/flags.test.ts | |
 | convex/analytics/hoggieDropped.test.ts | S14 | | |

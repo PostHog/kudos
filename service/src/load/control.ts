@@ -8,6 +8,10 @@
 //
 // Every change of phase happens in a transaction that locks the state row, so staging, finish and reset never
 // interleave; the load itself runs under an advisory lock, which reset takes too.
+//
+// The phases: `staging` takes chunks; `loading` writes every row; `verifying` runs the round trip on the untouched
+// copy; `recovering` turns what Convex had pending into jobs; `done` releases the hold. A round trip that differs stops
+// the load in `verifying`, and only a reset starts it over.
 import { createHash, timingSafeEqual } from "node:crypto";
 import { getTableName } from "drizzle-orm";
 import { Hono } from "hono";
@@ -15,7 +19,9 @@ import { bodyLimit } from "hono/body-limit";
 import type pg from "pg";
 import { errorFields, type Log } from "../log.ts";
 import type { LoadPhase } from "../db/schema/load.ts";
+import { decodeStored, encodeStored, type Value } from "../db/codec.ts";
 import { appTables, LoadError, loadSnapshot, type BatchLimits } from "./loader.ts";
+import { roundTrip, type RoundTrip } from "./roundTrip.ts";
 
 export interface LoadControl {
   held(): boolean;
@@ -49,7 +55,13 @@ type Queryable = Pick<pg.Pool, "query"> | pg.PoolClient;
 
 const maxChunkBytes = 16 * 1024 * 1024;
 const sha256 = (data: string | Buffer) => createHash("sha256").update(data).digest();
+// Only 0001's columns: boot reads the state before it migrates, so a later column would fail on an older database.
 const selectState = `select phase, "tokenHash", chunks, sha256, error from "loadState" where key = 'load'`;
+
+/** A load this copy can take on: written or verifying, and not stopped. */
+function runnable(current: State | undefined): boolean {
+  return (current?.phase === "loading" || current?.phase === "verifying") && current.error === null;
+}
 
 async function readState(db: Queryable, forUpdate = false): Promise<State | undefined> {
   const { rows } = await db.query<State>(forUpdate ? `${selectState} for update` : selectState);
@@ -92,17 +104,28 @@ export function createLoadControl({ pool, token, log, limits = { rows: 500, byte
       if (!rows[0]?.ok) return false;
       lock = key;
       const current = await readState(client);
-      if (current?.phase !== "loading" || current.error !== null) return false;
+      if (!runnable(current)) return false;
       started = true;
       running = (async () => {
         try {
           log.info("load running");
-          if ((await stagedHash(client, current.chunks!)) !== current.sha256) {
-            throw new LoadError("The staged chunks don't match the sha256 sent with finish");
+          if (current!.phase === "loading") {
+            if ((await stagedHash(client, current!.chunks!)) !== current!.sha256) {
+              throw new LoadError("The staged chunks don't match the sha256 sent with finish");
+            }
+            await loadSnapshot(pool, client, current!.chunks!, limits);
+            await client.query(`update "loadState" set phase = 'verifying' where key = 'load'`);
+            log.info("load written");
           }
-          await loadSnapshot(pool, client, current.chunks!, limits);
-          await client.query(`update "loadState" set phase = 'verifying' where key = 'load'`);
-          log.info("load written");
+          // The round trip runs on the untouched copy: only when it is equal does recovery (`recovering`) start.
+          const answer = await roundTrip(pool, client, current!.chunks!);
+          const differs = answer.tables.filter((table) => !table.equal).map((table) => table.table);
+          await client.query(`update "loadState" set "roundTrip" = $1, phase = $2, error = $3 where key = 'load'`, [
+            encodeStored(answer as unknown as Value),
+            answer.equal ? "recovering" : "verifying",
+            answer.equal ? null : `The round trip differs on ${differs.join(", ")}`,
+          ]);
+          log.info(answer.equal ? "round trip equal" : "round trip differs", { tables: answer.tables.length, differs: differs.length });
         } catch (error) {
           // A lost connection is this copy's trouble, not the snapshot's: the load resumes from its checkpoints, here
           // or on another copy. Anything else stops it until `finish` is sent again or the load is reset.
@@ -130,7 +153,7 @@ export function createLoadControl({ pool, token, log, limits = { rows: 500, byte
   const tick = async () => {
     try {
       await refresh();
-      if (typeof state === "object" && state.phase === "loading" && state.error === null) await run();
+      if (typeof state === "object" && runnable(state)) await run();
     } catch (error) {
       log.error("load check failed", errorFields(error));
     }
@@ -189,12 +212,14 @@ export function createLoadControl({ pool, token, log, limits = { rows: 500, byte
       const chunks = await pool.query<{ count: number }>('select count(*)::int as count from "loadChunks"');
       const entries = await pool.query('select entry, lines, done from "loadCheckpoints" order by entry');
       const reports = await pool.query<{ reports: string }>('select reports from "loadCheckpoints" where reports <> \'[]\'::jsonb');
+      const answer = await pool.query<{ roundTrip: string | null }>(`select "roundTrip" from "loadState" where key = 'load'`);
       return c.json({
         phase: current?.phase ?? "none",
         error: current?.error ?? null,
         stagedChunks: chunks.rows[0]!.count,
         entries: entries.rows,
         reports: reports.rows.flatMap((row) => JSON.parse(row.reports) as unknown[]),
+        roundTrip: answer.rows[0]?.roundTrip ? (decodeStored(answer.rows[0].roundTrip) as unknown as RoundTrip) : null,
       });
     });
 
@@ -265,7 +290,7 @@ export function createLoadControl({ pool, token, log, limits = { rows: 500, byte
         }
         const names = [...appTables.map(getTableName), "loadChunks", "loadCheckpoints"];
         await client.query(`truncate ${names.map((name) => `"${name}"`).join(", ")}`);
-        await client.query(`update "loadState" set phase = 'staging', chunks = null, sha256 = null, error = null where key = 'load'`);
+        await client.query(`update "loadState" set phase = 'staging', chunks = null, sha256 = null, error = null, "roundTrip" = null where key = 'load'`);
         await client.query("commit");
       } catch (error) {
         await client.query("rollback").catch(() => {});
