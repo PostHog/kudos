@@ -17,3 +17,8 @@ export const one = async (ctx: QueryCtx) => ctx.db.query("members").first(), two
 
 const readers: Array<(ctx: QueryCtx) => unknown> = [];
 readers.push(async (ctx: QueryCtx) => ctx.db.query("members").first());
+
+// The service compiles with erasableSyntaxOnly, which has no enums.
+export enum Mode {
+  On,
+}

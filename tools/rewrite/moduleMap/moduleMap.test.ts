@@ -252,7 +252,7 @@ describe("the equivalence check", () => {
 });
 
 describe("the skeleton generator", () => {
-  const modules = ["convex/skeleton/awards.ts", "convex/skeleton/caller.ts", "convex/skeleton/tangled.ts", "convex/skeleton/edges.ts", "convex/skeleton/refused.ts", "convex/skeleton/inline.ts", "convex/skeleton/shadowed.ts", "convex/skeleton/appTypes.ts"];
+  const modules = ["convex/skeleton/awards.ts", "convex/skeleton/caller.ts", "convex/skeleton/tangled.ts", "convex/skeleton/edges.ts", "convex/skeleton/refused.ts", "convex/skeleton/inline.ts", "convex/skeleton/shadowed.ts", "convex/skeleton/appTypes.ts", "convex/skeleton/helpers.ts"];
   const program = ts.createProgram(modules.map(onDisk), compilerOptions);
   const sourceFiles = modules.map((module) => program.getSourceFile(onDisk(module))!);
   const reached = reachedByName(sourceFiles);
@@ -260,6 +260,7 @@ describe("the skeleton generator", () => {
   const awards = landed(skeleton(0));
   const edges = landed(skeleton(3));
   const appTypes = landed(skeleton(7));
+  const helpers = landed(skeleton(8));
 
   test("finds every function reached by name: run in place by an action, or later by the scheduler, a cron or the bus", () => {
     expect(Object.fromEntries([...reached].map(([path, how]) => [path, [...how]]))).toEqual({
@@ -434,6 +435,7 @@ export async function viaAlias(ctx: QueryContext, args: z.infer<typeof viaAliasA
   test("tells the app's own types from Convex's, and keeps overloads, tuples, body-local types and a handler's own args", () => {
     expect(appTypes.text).toBe(`// The module map's skeleton of convex/skeleton/appTypes.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
 // notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
+import { query } from "./helpers.ts";
 import { z } from "zod";
 import type { MutationContext, QueryContext } from "../operations.ts";
 import { notPorted } from "../notPorted.ts";
@@ -472,8 +474,34 @@ export async function noArgs(ctx: MutationContext, args: z.infer<typeof noArgsAr
   throw notPorted("skeleton.appTypes.noArgs");
 }
 export const noArgsJob = mutationJob("skeleton.appTypes.noArgs", noArgsArgs, noArgs);
+
+// ReviewHog's second round: a built-in generic over a private type, an imported helper named like a builder, a
+// parameter named like a private helper over a context, and an enum a printed type would name.
+type Row = { n: number };
+export function rows(ctx: QueryContext): Map<string, Row> {
+  throw notPorted("skeleton.appTypes.rows");
+}
+
+export const answer = query(() => 42);
+export function keyed(ctx: QueryContext, key: string): string {
+  throw notPorted("skeleton.appTypes.keyed");
+}
 `);
-    expect(appTypes.omitted).toEqual([]);
+    expect(appTypes.omitted).toEqual(["kind: names the enum Kind, which the service's erasableSyntaxOnly has no counterpart for"]);
+  });
+
+  test("imports a service helper only where a stub writes it, not for a module's own of the same name", () => {
+    expect(helpers.text).toBe(`// The module map's skeleton of convex/skeleton/helpers.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
+// notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
+// A module of plain helpers that share names with Convex's builder and the service's stub helper: no context anywhere.
+export function query<T>(make: () => T): T {
+  return make();
+}
+
+export function notPorted() {
+  return 42;
+}
+`);
   });
 
   test("refuses what it can't stub without changing what other modules see, and any way of reaching Convex in what it writes", () => {
@@ -482,6 +510,7 @@ export const noArgsJob = mutationJob("skeleton.appTypes.noArgs", noArgsArgs, noA
         "convex/skeleton/refused.ts:14: exports viaList by a list; export the declaration itself",
         "convex/skeleton/refused.ts:16: declares one, two in one statement over a context; declare each on its own",
         "convex/skeleton/refused.ts:19: a top-level statement over a context or Convex's machinery",
+        "convex/skeleton/refused.ts:22: declares the enum Mode, which the service's erasableSyntaxOnly forbids; port it as a union of literals",
         "convex/skeleton/refused.ts: declares or imports QueryContext, a name the skeleton writes for the service's own",
       ],
     });
@@ -502,7 +531,7 @@ export const noArgsJob = mutationJob("skeleton.appTypes.noArgs", noArgsArgs, noA
 
   describe("its output in the service", () => {
     const serviceModules = ["values.ts", "notPorted.ts", "operations.ts", "jobs/define.ts", "db/columns.ts", "db/schema/index.ts", "db/page.ts"];
-    const scratch = scratchService(serviceModules, [awards, edges, appTypes]);
+    const scratch = scratchService(serviceModules, [awards, edges, appTypes, helpers]);
 
     test("typechecks under the service's compiler options", () => {
       expect(scratch.diagnostics()).toEqual([]);
@@ -542,6 +571,7 @@ export const noArgsJob = mutationJob("skeleton.appTypes.noArgs", noArgsArgs, noA
       expect(appModule.plainRead({ value: "x" })).toBe("x"); // an app type named QueryCtx is no context
       expect(appModule.settings).toEqual({ ready: true }); // Object.assign on a module value still ran
       expect(appModule.noArgsJob.args.safeParse({ note: "x", more: 1 }).success).toBe(true); // Convex checks no args it wasn't given
+      expect(appModule.answer).toBe(42); // an imported helper named like a builder is no builder
     });
   });
 });

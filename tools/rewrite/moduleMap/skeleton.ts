@@ -24,13 +24,10 @@ export type Reached = ReadonlyMap<string, ReadonlySet<Reach>>;
 const builders: Record<string, "query" | "mutation" | "action"> = {
   query: "query",
   internalQuery: "query",
-  memberQuery: "query",
   mutation: "mutation",
   internalMutation: "mutation",
-  memberMutation: "mutation",
   action: "action",
   internalAction: "action",
-  observedAction: "action",
 };
 const contexts = { query: "QueryContext", mutation: "MutationContext", action: "ActionContext" } as const;
 
@@ -136,7 +133,8 @@ export function skeletonModule(program: ts.Program, sourceFile: ts.SourceFile, c
   };
   /**
    * The builder a registration calls, by the name Convex exports it under: through a local alias (`const q =
-   * internalQuery`) too, and the app's own wrappers (`memberQuery`) by the name another module exports them under.
+   * internalQuery`) too. The app's own wrappers (`memberQuery`) count by what their call returns, Convex's registered
+   * query, mutation or action, so an imported helper that only shares a builder's name is none.
    */
   const builderOf = (node: ts.Identifier): string | undefined => {
     let symbol = checker.getSymbolAtLocation(node);
@@ -144,7 +142,7 @@ export function skeletonModule(program: ts.Program, sourceFile: ts.SourceFile, c
       const convex = machinerySymbols.get(symbol);
       if (convex) return convex;
       const declaration = symbol.declarations?.[0];
-      if (declaration && ts.isImportSpecifier(declaration)) return (declaration.propertyName ?? declaration.name).text;
+      if (declaration && ts.isImportSpecifier(declaration)) return ts.isCallExpression(node.parent) ? registeredKind(checker.getTypeAtLocation(node.parent)) : undefined;
       if (!declaration || !ts.isVariableDeclaration(declaration) || !declaration.initializer || !ts.isIdentifier(declaration.initializer)) return undefined;
       if (!(ts.getCombinedNodeFlags(declaration) & ts.NodeFlags.Const)) return undefined;
       symbol = checker.getSymbolAtLocation(declaration.initializer);
@@ -248,9 +246,10 @@ export function skeletonModule(program: ts.Program, sourceFile: ts.SourceFile, c
       }
     }
   };
+  /** The module's own declarations a signature refers to: a parameter named like one (`key`) is no use of it. */
   const usesIn = (node: ts.Node | undefined) => {
     const found = new Set<string>();
-    if (node) walk(node, (child) => ts.isIdentifier(child) && !isPropertyName(child) && found.add(child.text));
+    if (node) walk(node, (child) => ts.isIdentifier(child) && !isPropertyName(child) && topLevel(child) && found.add(child.text));
     return found;
   };
   for (const declaration of declarations) {
@@ -359,8 +358,11 @@ export function skeletonModule(program: ts.Program, sourceFile: ts.SourceFile, c
   const missing = [...needed].filter((declaration) => declaration.convex && !pieces.has(declaration) && !declaration.exported);
   for (const declaration of missing) refusals.push(`${line(declaration.statement)}: ${declaration.names.join(", ")} is over a context or Convex's machinery, and an export that lands needs it`);
 
-  const body = declarations
-    .filter((declaration) => pieces.has(declaration) || (needed.has(declaration) && !declaration.convex))
+  const landing = declarations.filter((declaration) => pieces.has(declaration) || (needed.has(declaration) && !declaration.convex));
+  for (const { statement } of landing) {
+    if (ts.isEnumDeclaration(statement)) refusals.push(`${line(statement)}: declares the enum ${statement.name.text}, which the service's erasableSyntaxOnly forbids; port it as a union of literals`);
+  }
+  const body = landing
     .map((declaration) => pieces.get(declaration) ?? textOf(declaration.statement.getFullStart(), declaration.statement.getEnd()))
     .join("")
     .replace(/^\s*\n/, "");
@@ -430,7 +432,7 @@ export function skeletonModule(program: ts.Program, sourceFile: ts.SourceFile, c
       const second = checker.getTypeAtLocation(handler).getCallSignatures()[0]?.parameters[1];
       schema = `z.custom<${second ? printed.print(checker.getTypeOfSymbolAtLocation(second, handler)) : "Record<string, unknown>"}>()`;
     }
-    generated.add("notPorted").add(contexts[kind]);
+    generated.add("notPorted").add("z").add(contexts[kind]);
     if (reach.has("job") && kind !== "query") generated.add(`${kind}Job`);
     const lines = [
       `\n\nexport const ${argsName} = ${schema};`,
@@ -467,8 +469,9 @@ export function skeletonModule(program: ts.Program, sourceFile: ts.SourceFile, c
       }
       lines.push(importLine(statement, kept, target));
     }
-    if (used.has("z")) lines.push(`import { z } from "zod";`);
-    if (used.has("zv")) lines.push(`import { zv } from "${specifierFrom(servicePath, `${serviceRoot}/values.ts`)}";`);
+    // What the skeleton writes is imported where it writes it; a module's own `notPorted` or `z` keeps its own.
+    if (written.has("z")) lines.push(`import { z } from "zod";`);
+    if (written.has("zv")) lines.push(`import { zv } from "${specifierFrom(servicePath, `${serviceRoot}/values.ts`)}";`);
     const service = new Map<string, Set<string>>();
     const add = (module: string, name: string) => service.set(module, (service.get(module) ?? new Set()).add(name));
     for (const [name, module] of Object.entries(serviceTypes)) if (used.has(name) && !taken.has(name)) add(module, name);
@@ -483,7 +486,7 @@ export function skeletonModule(program: ts.Program, sourceFile: ts.SourceFile, c
       ["actionJob", "jobs/define.ts"],
     ];
     const valueImports = new Map<string, string[]>();
-    for (const [name, module] of values) if (used.has(name)) valueImports.set(module, [...(valueImports.get(module) ?? []), name]);
+    for (const [name, module] of values) if (generated.has(name)) valueImports.set(module, [...(valueImports.get(module) ?? []), name]);
     for (const [module, names] of valueImports) lines.push(`import { ${names.join(", ")} } from "${specifierFrom(servicePath, `${serviceRoot}/${module}`)}";`);
     return refused.length > 0 ? { refusals: refused } : lines.join("\n");
   }
@@ -516,6 +519,14 @@ function registrationOf(statement: ts.Statement, builderOf: (node: ts.Identifier
   const handler = property("handler") ?? definition.properties.find((p) => ts.isMethodDeclaration(p) && p.name.getText() === "handler");
   if (!handler) return undefined;
   return { kind, args: property("args"), handler: handler as ts.Expression };
+}
+
+/** What a call returns when it registers a function: Convex's `RegisteredQuery<…>` and its kin, not a name alone. */
+function registeredKind(type: ts.Type): Registration["kind"] | undefined {
+  const alias = type.aliasSymbol;
+  const match = alias && /^Registered(Query|Mutation|Action)$/.exec(alias.name);
+  if (!match || !alias!.declarations?.some((declaration) => /\/node_modules\/convex\//.test(declaration.getSourceFile().fileName))) return undefined;
+  return match[1]!.toLowerCase() as Registration["kind"];
 }
 
 /** Convex's query, mutation or action context, however a module names it. */
@@ -612,6 +623,13 @@ function typePrinter(checker: ts.TypeChecker, servicePath: string, localNames: R
     if (flags & ts.TypeFlags.Void) return "void";
     if (flags & ts.TypeFlags.Undefined) return "undefined";
     if (flags & ts.TypeFlags.Null) return "null";
+    // The service compiles with erasableSyntaxOnly, which has no enums: a type that names one can't be written there.
+    const declared = type.getSymbol();
+    const enumName = declared && declared.flags & ts.SymbolFlags.EnumMember ? declared.declarations?.[0]?.parent : declared?.declarations?.find(ts.isEnumDeclaration);
+    if (flags & ts.TypeFlags.EnumLike || (enumName && ts.isEnumDeclaration(enumName))) {
+      const name = enumName && ts.isEnumDeclaration(enumName) ? enumName.name.text : checker.typeToString(type);
+      throw new Error(`names the enum ${name}, which the service's erasableSyntaxOnly has no counterpart for`);
+    }
     if (flags & (ts.TypeFlags.String | ts.TypeFlags.Number | ts.TypeFlags.BigInt | ts.TypeFlags.Boolean | ts.TypeFlags.Literal | ts.TypeFlags.TypeParameter)) {
       return checker.typeToString(type);
     }
@@ -646,7 +664,12 @@ function typePrinter(checker: ts.TypeChecker, servicePath: string, localNames: R
       }
       const module = fromConvexModule(symbol.declarations?.[0]);
       if (module) return `${want(module, symbol.name)}${typeArguments((type as ts.TypeReference).typeArguments)}`;
-      if (symbol.declarations?.every((declaration) => /\/typescript5?\/lib\/lib\./.test(declaration.getSourceFile().fileName))) return checker.typeToString(type);
+      if (symbol.declarations?.every((declaration) => /\/typescript5?\/lib\/lib\./.test(declaration.getSourceFile().fileName))) {
+        // A built-in's arguments are printed like any type, so a module's own type inside one (`Map<string, Row>`) lands.
+        const reference = ((type as ts.ObjectType).objectFlags & ts.ObjectFlags.Reference) !== 0 ? (type as ts.TypeReference) : undefined;
+        const parameters = reference?.target.typeParameters?.length ?? 0;
+        return `${symbol.name}${typeArguments(reference ? checker.getTypeArguments(reference).slice(0, parameters) : undefined)}`;
+      }
       throw new Error(`returns ${checker.typeToString(type)}, which the service has no counterpart for`);
     }
     if (flags & ts.TypeFlags.Object) {
