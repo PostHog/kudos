@@ -1,9 +1,9 @@
 // Generated once from convex/schema.ts by tools/rewrite/drizzle; owned by hand from here on.
 import { sql } from "drizzle-orm";
-import { index, pgTable } from "drizzle-orm/pg-core";
-import { bool, creationTime, f64, i64, id, str, value, type Id } from "../columns.ts";
+import { index } from "drizzle-orm/pg-core";
+import { bool, creationTime, documentTable, f64, i64, id, type Id, str, value } from "../columns.ts";
 
-export const users = pgTable(
+export const users = documentTable(
   "users",
   {
     _id: id(),
@@ -21,7 +21,7 @@ export const users = pgTable(
   ],
 );
 
-export const websiteClock = pgTable(
+export const websiteClock = documentTable(
   "websiteClock",
   {
     _id: id(),
@@ -33,7 +33,7 @@ export const websiteClock = pgTable(
   ],
 );
 
-export const lastVisits = pgTable(
+export const lastVisits = documentTable(
   "lastVisits",
   {
     _id: id(),
@@ -46,7 +46,7 @@ export const lastVisits = pgTable(
   ],
 );
 
-export const howItWorksCloses = pgTable(
+export const howItWorksCloses = documentTable(
   "howItWorksCloses",
   {
     _id: id(),
