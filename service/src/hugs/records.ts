@@ -5,13 +5,12 @@ import type { DayKey, Week } from "../engine/allowance.ts";
 import { awardsOfMessage, recipientsAfter, recipientsPageOf, type DecidedBelow } from "../engine/awards.ts";
 import type { MessageRef } from "../engine/messageEvent.ts";
 import type { MemberId } from "../workspace/directory.ts";
-import type { Page, PageOptions } from "../db/page.ts";
+import { paginate, type Page, type PageOptions } from "../db/page.ts";
 import { fromDocument, toDocument } from "../db/documents.ts";
 import { indexOrder, type IndexOrder } from "../db/indexOrder.ts";
 import { hugPeople, hugs, hugsReceived, type Doc } from "../db/schema/index.ts";
 import { unique } from "../db/unique.ts";
 import type { MutationContext, QueryContext } from "../operations.ts";
-import { notPorted } from "../notPorted.ts";
 
 export type Hug = Doc<"hugs">;
 
@@ -28,6 +27,8 @@ const paidByHugMember = indexOrder(hugPeople, ["hug", "member"]);
 const paidByMemberAt = indexOrder(hugPeople, ["member", "at"]);
 const receivedByMember = indexOrder(hugsReceived, ["member"]);
 const receivedByMemberMessage = indexOrder(hugsReceived, ["member", "workspace", "conversation", "message"]);
+const hugsCreated = indexOrder(hugs, []);
+const paidCreated = indexOrder(hugPeople, []);
 
 const hugOfRow = (row: Record<string, unknown>) => toDocument<Hug>(hugs, row);
 const receivedOfRow = (row: Record<string, unknown>) => toDocument<HugsReceivedRow>(hugsReceived, row);
@@ -49,19 +50,26 @@ export async function hugWithId(ctx: QueryContext, hug: HugId): Promise<null | D
   return row === undefined ? null : hugOfRow(row);
 }
 
-// The paged reads below wait on the shared keyset paging S11 lands in service/src/db/ (no stack builds its own).
+// Paged through the shared keyset `paginate` (S11), on the index today's read named or in creation order.
 export function hugsInWorkspace(ctx: QueryContext, workspace: string, page: PageOptions): Promise<Page<Hug>> {
-  throw notPorted("hugs.records.hugsInWorkspace");
+  return paginate<Hug>(ctx.tx, { table: hugs, order: byMessageGiver, where: eq(hugs.workspace, workspace) }, page);
 }
 
 export function hugsInCreationOrder(ctx: QueryContext, page: PageOptions): Promise<Page<Hug>> {
-  throw notPorted("hugs.records.hugsInCreationOrder");
+  return paginate<Hug>(ctx.tx, { table: hugs, order: hugsCreated }, page);
 }
 
 export type PaidHug = { hug: Hug; person: MemberId };
 
+/** A page of the people hugs paid, in creation order; a hug that is gone leaves its row out, as `db.get` did. */
 export async function paidHugsInCreationOrder(ctx: QueryContext, page: PageOptions): Promise<Page<PaidHug>> {
-  throw notPorted("hugs.records.paidHugsInCreationOrder");
+  const result = await paginate<Doc<"hugPeople">>(ctx.tx, { table: hugPeople, order: paidCreated }, page);
+  const paid: PaidHug[] = [];
+  for (const { hug, member } of result.page) {
+    const found = await hugWithId(ctx, hug);
+    if (found !== null) paid.push({ hug: found, person: member });
+  }
+  return { ...result, page: paid };
 }
 
 export type HugPeoplePage = { people: MemberId[]; next: string | null };

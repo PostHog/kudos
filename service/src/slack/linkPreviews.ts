@@ -1,32 +1,63 @@
-// The module map's skeleton of convex/slack/linkPreviews.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
-// notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
+// A link to an album page shared in Slack unfolds into its card: the person's or team's preview, as a picture where the
+// card image is on and drawn in time, as blocks otherwise. Today's convex/slack/linkPreviews.ts.
 import { medalText } from "../feedback/profileCard.ts";
 import { productName } from "../feedback/naming.ts";
 import { rarityWord } from "../album/hoggies/catalogue.ts";
 import type { BoardPlace } from "../leaderboard/boards.ts";
 import type { CardHoggie, CardTeam, LevelWay, PersonStats, TeamStats } from "../website/linkCardStats.ts";
-import type { LinkPreview, PersonPreview, TeamPreview } from "../website/linkPreviews.ts";
+import { emojisUnlockedOf, linkPreviewsOf, type LinkPreview, type PersonPreview, type TeamPreview } from "../website/linkPreviews.ts";
+import type { MemberId } from "../workspace/directory.ts";
+import { cardImageShownIn, drawnCardOf, drawnEmojisOf, pictureAt } from "./cardPictures.ts";
+import { drawn } from "./cardDrawing.ts";
+import { cardKeyOf, pictureBlocksOf, type DrawnCard } from "./playerCard.ts";
+import { callSlack, nextRateLimitedAttempt, readSlack, retryDelayOf, slackErrorCodeOf } from "./webApi.ts";
 import { escaped, mrkdwn, slackDayOf } from "./blocks.ts";
 import { textOf } from "./directory.ts";
 import { z } from "zod";
 import { zv } from "../values.ts";
-import type { ActionContext } from "../operations.ts";
-import { notPorted } from "../notPorted.ts";
+import type { ActionContext, MutationContext } from "../operations.ts";
+import type { EventCallback, Handled } from "./frontDoor.ts";
 import { actionJob } from "../jobs/define.ts";
 
 type LinkShared = { type: "link_shared"; channel?: unknown; user?: unknown; message_ts?: unknown; source?: unknown; links?: unknown };
 
 type LinkSharedCallback = { team_id?: unknown; event_id?: unknown; is_ext_shared_channel?: unknown; event: LinkShared };
 
+type ChannelInfo = { channel: { is_ext_shared?: boolean; is_pending_ext_shared?: boolean } };
+
 export const linkSharingValidator = { workspace: z.string(), sharer: z.string(), links: z.array(z.string()), channel: z.string(), ts: z.string(), sharedOutside: z.union([z.literal("no"), z.literal("unsaid")]) };
 
 const unfoldArgs = { ...linkSharingValidator, attempt: z.optional(zv.number()) };
 
 export const unfoldLinksArgs = z.strictObject(unfoldArgs);
-export async function unfoldLinks(ctx: ActionContext, args: z.infer<typeof unfoldLinksArgs>): Promise<void> {
-  throw notPorted("slack.linkPreviews.unfoldLinks");
+export async function unfoldLinks(ctx: ActionContext, { workspace, sharer, links, channel, ts, sharedOutside, attempt = 1 }: z.infer<typeof unfoldLinksArgs>): Promise<void> {
+  const previews = await ctx.run.query("website.linkPreviews.linkPreviewsOf", (query) => linkPreviewsOf(query, { workspace, sharer, links }));
+  if (previews.length === 0 || (sharedOutside === "unsaid" && !(await isUnshared(channel)))) return;
+  const pictured = await ctx.run.query("slack.cardPictures.cardImageShownIn", (query) => cardImageShownIn(query, { workspace }));
+  const stillDrawing: Promise<unknown>[] = [];
+  const unfolded = await Promise.all(previews.map(async (preview) => [preview.url, { blocks: await unfoldedCardOf(ctx, workspace, preview, pictured, stillDrawing) }] as const));
+  const unfurls = Object.fromEntries(unfolded);
+  const answer = await callSlack("chat.unfurl", { channel, ts, unfurls });
+  await Promise.all(stillDrawing);
+  if (answer.ok) return;
+  if (answer.error === "ratelimited") {
+    const next = nextRateLimitedAttempt(attempt, "chat.unfurl");
+    await ctx.run.mutation(`${unfoldLinksJob.name}.retry`, ({ jobs }) =>
+      jobs.enqueue(unfoldLinksJob, { workspace, sharer, links, channel, ts, sharedOutside, attempt: next }, { after: retryDelayOf(answer) }),
+    );
+    return;
+  }
+  console.warn(`link previews: chat.unfurl failed: ${slackErrorCodeOf(answer.error)}`);
 }
 export const unfoldLinksJob = actionJob("slack.linkPreviews.unfoldLinks", unfoldLinksArgs, unfoldLinks);
+
+/** The front door's `linkShared` event: a sharing it can unfold is taken in and unfolded by a job, any other ignored. */
+export async function linkShared(ctx: MutationContext, envelope: EventCallback): Promise<Handled> {
+  const sharing = linkSharingOf({ ...envelope, event: envelope.event as LinkShared });
+  if (sharing === null) return "ignored";
+  const { eventId: _, ...unfold } = sharing;
+  await ctx.jobs.enqueue(unfoldLinksJob, unfold, { after: 0 });
+}
 
 export function isLinkShared(event: { type: string }): event is LinkShared {
   return event.type === "link_shared";
@@ -41,6 +72,12 @@ export function linkSharingOf({ team_id, event_id, is_ext_shared_channel, event 
   return { workspace, eventId, sharer, links, channel, ts, sharedOutside } as const;
 }
 
+async function isUnshared(channel: string) {
+  const answer = await readSlack<ChannelInfo>("conversations.info", { channel });
+  if (!answer.ok) console.warn(`link previews: conversations.info failed: ${slackErrorCodeOf(answer.error)}`);
+  return answer.ok && answer.channel.is_ext_shared === false && answer.channel.is_pending_ext_shared !== true;
+}
+
 function linksOf(links: unknown): string[] {
   if (!Array.isArray(links)) return [];
   return links.flatMap((link) => {
@@ -51,8 +88,63 @@ function linksOf(links: unknown): string[] {
 
 const barSegments = 10;
 
+const drawingDeadlineMs = 5000;
+
+async function unfoldedCardOf(ctx: ActionContext, workspace: string, preview: LinkPreview, pictured: boolean, stillDrawing: Promise<unknown>[]) {
+  const picture = pictured && preview.kind === "person" ? await pictureUnfoldOf(ctx, workspace, preview, stillDrawing) : null;
+  return picture ?? cardBlocksOf(preview, await emojisUnlockedOn(ctx, workspace, preview));
+}
+
+async function pictureUnfoldOf(ctx: ActionContext, workspace: string, preview: PersonPreview, stillDrawing: Promise<unknown>[]) {
+  if (preview.stats === undefined) return null;
+  try {
+    const card = await drawnCardIn(ctx, workspace, preview.stats.person);
+    const picture = card === null ? null : await cardPictureOf(ctx, card, stillDrawing);
+    return card === null || picture === null ? null : pictureBlocksOf(preview, card, picture, preview.stats.asOf);
+  } catch (error) {
+    return notDrawn(error);
+  }
+}
+
+async function drawnCardIn(ctx: ActionContext, workspace: string, person: MemberId): Promise<DrawnCard | null> {
+  const [card, emojis] = await Promise.all([
+    ctx.run.query("slack.cardPictures.drawnCardOf", (query) => drawnCardOf(query, { workspace, person })),
+    ctx.run.query("slack.cardPictures.drawnEmojisOf", (query) => drawnEmojisOf(query, { workspace, person })),
+  ]);
+  return card === null || emojis === null ? null : { ...card, emojis };
+}
+
+function notDrawn(error: unknown): null {
+  console.warn(`link previews: card picture not drawn: ${error instanceof Error ? error.message : String(error)}`);
+  return null;
+}
+
+async function cardPictureOf(ctx: ActionContext, card: DrawnCard, stillDrawing: Promise<unknown>[]): Promise<string | null> {
+  const key = await cardKeyOf(card);
+  const kept = await ctx.run.query("slack.cardPictures.pictureAt", (query) => pictureAt(query, { key }));
+  return kept ?? withinDeadline(drawn(ctx, { card, key }), stillDrawing);
+}
+
+// Slack waits a few seconds for an unfurl: a picture not drawn by the deadline unfolds as blocks, and its drawing still
+// finishes, so the next share finds it kept.
+async function withinDeadline(drawing: Promise<string | null>, stillDrawing: Promise<unknown>[]): Promise<string | null> {
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<null>((resolve) => {
+    deadline = setTimeout(() => resolve(null), drawingDeadlineMs);
+  });
+  const drawnInTime = drawing.catch(notDrawn);
+  stillDrawing.push(drawnInTime);
+  try {
+    return await Promise.race([drawnInTime, late]);
+  } finally {
+    clearTimeout(deadline);
+  }
+}
+
 export async function emojisUnlockedOn(ctx: ActionContext, workspace: string, preview: LinkPreview): Promise<number> {
-  throw notPorted("slack.linkPreviews.emojisUnlockedOn");
+  if (preview.kind !== "person" || preview.stats === undefined) return 0;
+  const person = preview.stats.person;
+  return ctx.run.query("website.linkPreviews.emojisUnlockedOf", (query) => emojisUnlockedOf(query, { workspace, person }));
 }
 
 export function cardBlocksOf(preview: LinkPreview, emojis: number) {

@@ -189,7 +189,7 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/slack/leaderboardTab.test.ts | S11 | | |
 | convex/slack/levelUpDm.test.ts | S6 | | |
 | convex/slack/levelUpDmPerks.test.ts | S6 | | |
-| convex/slack/linkPreviews.test.ts | S13 | | |
+| convex/slack/linkPreviews.test.ts | S13 | service/src/slack/linkPreviews.test.ts | S3 S6 S10 S11 S17 |
 | convex/slack/memberProfiles.test.ts | S3 | | |
 | convex/slack/messagePlaces.test.ts | S5 | | |
 | convex/slack/messageSettings.test.ts | S5 | | |
@@ -203,7 +203,7 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/slack/previewUnlocks.test.ts | S6 | | |
 | convex/slack/previewXpAndBoard.test.ts | S6 | | |
 | convex/slack/primaryGroupPick.test.ts | S11 | | |
-| convex/slack/profileCard.test.ts | S13 | | |
+| convex/slack/profileCard.test.ts | S13 | service/src/slack/profileCard.test.ts | S3 S4 S6 S10 S11 S14 |
 | convex/slack/progressionHome.test.ts | S6 | | |
 | convex/slack/publicNotices.test.ts | S5 | | |
 | convex/slack/receiptCleanup.test.ts | S1 | | |

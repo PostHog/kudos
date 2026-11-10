@@ -1,19 +1,18 @@
 // Each member's hugs by week: given and received, their XP, and the message hugged most; and each message's hug count.
 // Today's convex/hugs/weeks.ts over the service's transaction.
-import { and, eq } from "drizzle-orm";
+import { and, eq, gte } from "drizzle-orm";
 import { allowanceDay, weekOf, type DayKey } from "../engine/allowance.ts";
 import type { MessageRef } from "../engine/messageEvent.ts";
 import { timeZoneOf, type MemberId } from "../workspace/directory.ts";
 import type { Hug } from "./records.ts";
 import { hugXp } from "./xp.ts";
-import type { PageOptions } from "../db/page.ts";
+import { paginate, type PageOptions } from "../db/page.ts";
 import { fromDocument, toDocument } from "../db/documents.ts";
 import { indexOrder } from "../db/indexOrder.ts";
 import { encodeStored } from "../db/codec.ts";
 import { hugCounts, hugWeekMessages, hugWeeks, type Doc } from "../db/schema/index.ts";
 import { unique } from "../db/unique.ts";
 import type { MutationContext, QueryContext } from "../operations.ts";
-import { notPorted } from "../notPorted.ts";
 
 export type HugWeek = Doc<"hugWeeks">;
 
@@ -22,6 +21,7 @@ export type MostHugged = NonNullable<HugWeek["mostHugged"]>;
 type CountedHug = MessageRef & { giver: MemberId; day: DayKey };
 
 const weekByMemberWeek = indexOrder(hugWeeks, ["member", "week"]);
+const weekByWeek = indexOrder(hugWeeks, ["week"]);
 const weekMessageByMemberWeekMessage = indexOrder(hugWeekMessages, ["member", "week", "conversation", "message"]);
 const countByMessage = indexOrder(hugCounts, ["workspace", "conversation", "message"]);
 
@@ -33,9 +33,9 @@ export async function countHugGiven(ctx: MutationContext, hug: CountedHug): Prom
 
 export type HugWeeksPage = { weeks: HugWeek[]; next: string | null };
 
-// Waits on the shared keyset paging S11 lands in service/src/db/ (no stack builds its own).
 export async function hugWeeksSince(ctx: QueryContext, since: DayKey, page: PageOptions): Promise<HugWeeksPage> {
-  throw notPorted("hugs.weeks.hugWeeksSince");
+  const { page: weeks, isDone, continueCursor } = await paginate<HugWeek>(ctx.tx, { table: hugWeeks, order: weekByWeek, where: gte(hugWeeks.week, since) }, page);
+  return { weeks, next: isDone ? null : continueCursor };
 }
 
 export async function weekOfPersonAt(ctx: QueryContext, person: MemberId, at: number): Promise<DayKey> {
