@@ -1,6 +1,7 @@
 // The website entry: the page load that signs a person in, `POST /api/entry`, which runs today's sign-in effects when
 // they're due and writes nothing otherwise. Every case asks the real app, behind the real identity and member check.
-// The effects themselves are S17's `rememberSignedInMember` and S3's verification, so the cases that reach them wait.
+// The effects themselves are S17's `rememberSignedInMember`, which reads S6's unlock launch and S8's welcome item, and
+// S3's verification, so the cases that reach them wait.
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { useTestBackend, type TestBackend } from "../../testing/backend.ts";
 import { slackError } from "../../testing/fakeSlack.ts";
@@ -118,7 +119,7 @@ describe("an entry that writes nothing", () => {
 });
 
 describe("an entry that signs someone in", () => {
-  waitsOn(["S17"], "a member's first entry makes their users row with the directory's name and picture, and greets them once", async () => {
+  waitsOn(["S6", "S8"], "a member's first entry makes their users row with the directory's name and picture, and greets them once", async () => {
     const t = backend();
     await websiteOpenIn(t);
     const member = await juno(t);
@@ -130,7 +131,7 @@ describe("an entry that signs someone in", () => {
     expect(await greetings(t)).toEqual([expect.objectContaining({ workspace: "T1", member })]);
   });
 
-  waitsOn(["S17"], "two first entries at once make one users row and one greeting", async () => {
+  waitsOn(["S6", "S8"], "two first entries at once make one users row and one greeting", async () => {
     const t = backend();
     await websiteOpenIn(t);
     await juno(t);
@@ -144,7 +145,7 @@ describe("an entry that signs someone in", () => {
     expect(await greetings(t)).toHaveLength(1);
   });
 
-  waitsOn(["S3", "S17"], "a person only Slack knows is verified once, however often they load a page while it runs", async () => {
+  waitsOn(["S3"], "a person only Slack knows is verified once, however often they load a page while it runs", async () => {
     const t = backend();
     await websiteOpenIn(t);
     t.slack.withMember("U_NEW", { profile: { email: "new.joiner@example.com" } });
