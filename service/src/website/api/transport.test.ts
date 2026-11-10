@@ -268,6 +268,24 @@ describe("arguments pass the route's shape or nothing runs", () => {
   test("a route whose arguments hold an object that keeps unknown fields stops the service at boot", () => {
     expect(() => memberRead("website.test.loose", { filter: z.object({ week: z.number() }) }, async () => null)).toThrow("website.test.loose(filter) is an object that keeps unknown fields");
     expect(() => memberRead("website.test.loose", { filters: z.array(z.object({ week: z.number() })).optional() }, async () => null)).toThrow("website.test.loose(filters)[] is an object");
+ 
+  });
+
+  test("a route whose arguments hold a kind of value Convex couldn't describe stops the service at boot, whatever wraps a loose object", () => {
+    const loose = z.object({ week: z.number() });
+    const refused: Array<[string, z.ZodType]> = [
+      ["pipe", z.string().transform((value) => value.length)],
+      ["intersection", z.intersection(z.strictObject({ week: z.number() }), loose)],
+      ["lazy", z.lazy(() => loose)],
+      ["catch", loose.catch({ week: 0 })],
+      ["any", z.any()],
+      ["unknown", z.unknown()],
+      ["date", z.date()],
+    ];
+    for (const [kind, schema] of refused) {
+      expect(() => memberRead("website.test.odd", { value: schema }, async () => null), kind).toThrow(/website\.test\.odd\(value\)/);
+    }
+    expect(() => memberRead("website.test.plain", { name: z.string(), week: z.number().int().optional(), kind: z.enum(["a", "b"]), tags: z.record(z.string(), z.boolean()), pair: z.tuple([z.string(), z.number()]), either: z.union([z.literal("x"), z.null()]) }, async () => null)).not.toThrow();
   });
 
   test("a body over the limit answers 413 before it is read whole, with or without its length", async () => {

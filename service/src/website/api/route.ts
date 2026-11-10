@@ -56,12 +56,16 @@ export function memberCommand<const Name extends string, Shape extends ArgsShape
 }
 
 /**
- * Convex refused a field its validator didn't name, at any depth. A nested `z.object` would drop one silently, so every
- * object inside a route's arguments must be `z.strictObject`; the service refuses to start otherwise.
+ * Convex refused a field its validator didn't name, at any depth, and had no transforms. A nested `z.object` would drop
+ * an unknown field silently, so every object inside a route's arguments must be `z.strictObject`, and only the kinds of
+ * value a Convex validator could describe may appear; the service refuses to start otherwise. Unknown kinds fail closed.
  */
+const plainValues: ReadonlySet<string> = new Set(["string", "number", "boolean", "bigint", "null", "undefined", "literal", "enum", "nan", "template_literal"]);
+
 function refuseLooseObjects(schema: z.ZodType, at: string): void {
   const def = schema._zod.def as unknown as Record<string, unknown> & { type: string };
   const inner = (value: unknown, where = at) => refuseLooseObjects(value as z.ZodType, where);
+  if (plainValues.has(def.type)) return;
   switch (def.type) {
     case "object": {
       const catchall = def.catchall as { _zod: { def: { type: string } } } | undefined;
@@ -81,11 +85,13 @@ function refuseLooseObjects(schema: z.ZodType, at: string): void {
       for (const option of def.options as unknown[]) inner(option);
       return;
     case "record":
+      inner(def.keyType, `${at}[key]`);
       return inner(def.valueType, `${at}[*]`);
     case "tuple":
       for (const item of def.items as unknown[]) inner(item);
+      if (def.rest) inner(def.rest, `${at}[...]`);
       return;
     default:
-      return;
+      throw new Error(`${at} is a zod ${def.type}, which a route's arguments can't hold: use the plain values, objects, arrays, records, tuples and unions a Convex validator could describe`);
   }
 }
