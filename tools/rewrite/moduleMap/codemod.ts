@@ -208,6 +208,11 @@ export function validatorEdits(checker: ts.TypeChecker, sourceFile: ts.SourceFil
  * several classes (`GenericValidator`), whose members the codemod renames none of.
  */
 export function validatorClassOf(type: ts.Type): string | undefined {
+  // A type parameter bound to a validator (`T extends typeof x`) reads as one.
+  if (type.flags & ts.TypeFlags.TypeParameter) {
+    const constraint = type.getConstraint();
+    return constraint ? validatorClassOf(constraint) : undefined;
+  }
   const name = convexClass(type);
   if (name) return name;
   if (!type.isUnion()) return undefined;
@@ -216,7 +221,6 @@ export function validatorClassOf(type: ts.Type): string | undefined {
   if (classes.has(undefined)) return undefined;
   if (classes.size === 1) return [...classes][0];
   return "Validator";
-  return undefined;
 }
 
 /** A validator class's name, when Convex's own package declares it; an app's class of the same name isn't one. */
