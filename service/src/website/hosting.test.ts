@@ -1,7 +1,7 @@
 // Ports convex/website/hosting.test.ts: the website's files as the service serves them, through the whole app.
 // Today's policy names the Convex deployment in connect-src; the service answers the website's API from its own origin,
 // so the rewrite's policy names none, and `'self'` covers the API.
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
@@ -17,14 +17,18 @@ const deploymentUrl = "https://happy-hog-123.convex.cloud";
 const indexHtml = "<!doctype html><title>HedgeHug</title>";
 const script = "console.log('hedgehug');";
 
+// The build is a folder inside a folder of the test's own, so a file beside the build is one a request must never reach.
+let root: string;
 let site: string;
 
 beforeEach(() => {
-  site = mkdtempSync(join(tmpdir(), "hedgehug-website-"));
+  root = mkdtempSync(join(tmpdir(), "hedgehug-website-"));
+  site = join(root, "site");
+  mkdirSync(site);
 });
 
 afterEach(() => {
-  rmSync(site, { recursive: true, force: true });
+  rmSync(root, { recursive: true, force: true });
   vi.unstubAllEnvs();
 });
 
@@ -119,11 +123,27 @@ describe("WS25: every HTML response carries the strict Content Security Policy h
     expect(deepPath.headers.get("Content-Security-Policy")).toBe(root.headers.get("Content-Security-Policy"));
   });
 
-  test("a response that isn't HTML gets no policy", async () => {
+  test("a file that isn't HTML is served without the policy", async () => {
+    aBuiltSite();
+
     const response = await appServing().request("/assets/index-abc12345.js", { method: "GET" });
 
-    expect(response.status).toBe(404);
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe(script);
     expect(response.headers.get("Content-Security-Policy")).toBeNull();
+  });
+
+  test("a page the browser already holds answers 304 with the policy of now, so a changed POSTHOG_HOST reaches it", async () => {
+    aBuiltSite();
+    const app = appServing();
+    const first = await app.request("/");
+    vi.stubEnv("POSTHOG_HOST", "https://eu.i.posthog.com");
+
+    const again = await app.request("/", { headers: { "If-None-Match": first.headers.get("ETag")! } });
+
+    expect(again.status).toBe(304);
+    expect(again.headers.get("Content-Security-Policy")).toBe(contentSecurityPolicy(undefined, "https://eu.i.posthog.com"));
+    expect(again.headers.get("Cache-Control")).toBe("public, max-age=0, must-revalidate");
   });
 });
 
@@ -210,6 +230,32 @@ describe("the website's files keep today's cache headers", () => {
     }
   });
 
+  test("an address under /assets that names no built file gets the page, checked again, never cached for good", async () => {
+    aBuiltSite();
+    const app = appServing();
+
+    for (const path of ["/assets/.missing.html", "/assets/missing"]) {
+      const response = await app.request(path);
+      expect(response.status, path).toBe(200);
+      expect(response.headers.get("Content-Type"), path).toMatch(/^text\/html/);
+      expect(response.headers.get("Cache-Control"), path).toBe("public, max-age=0, must-revalidate");
+    }
+  });
+
+  test("only a file the build named by its content's hash is cached for good; HTML and other files under /assets are checked again", async () => {
+    aBuiltSite();
+    writeFileSync(join(site, "assets", "config.json"), "{}");
+    writeFileSync(join(site, "assets", "frame.html"), indexHtml);
+    const app = appServing();
+
+    expect((await app.request("/assets/index-abc12345.js.map")).headers.get("Cache-Control")).toBe("public, max-age=31536000, immutable");
+    for (const path of ["/assets/config.json", "/assets/frame.html"]) {
+      const response = await app.request(path);
+      expect(response.status, path).toBe(200);
+      expect(response.headers.get("Cache-Control"), path).toBe("public, max-age=0, must-revalidate");
+    }
+  });
+
   test("a file the browser already holds answers 304 with its ETag, and no body", async () => {
     aBuiltSite();
     const app = appServing();
@@ -249,24 +295,40 @@ describe("only the website's own files answer", () => {
     aBuiltSite();
     const app = appServing();
 
-    for (const path of ["/api", "/api/", "/api/query/nothing", "/api/live"]) {
+    for (const path of ["/api", "/api/", "/api/query/nothing", "/api/live", "/api%2Flive", "/%61pi/live", "/%61pi"]) {
       const response = await app.request(path);
       expect(response.status, path).toBe(404);
       expect(response.headers.get("Content-Type") ?? "", path).not.toMatch(/^text\/html/);
     }
   });
 
-  test("a path that climbs out of the build or names a file by an escape reaches nothing outside it", async () => {
+  test("a path that climbs out of the build, by any spelling, reaches nothing outside it", async () => {
     aBuiltSite();
-    writeFileSync(join(site, "..", `${site.split("/").pop()}-secret.txt`), "secret");
+    writeFileSync(join(root, "secret.txt"), "secret beside the build");
     const app = appServing();
 
-    for (const path of ["/%2e%2e/secret.txt", "/assets/%2e%2e%2f%2e%2e%2fsecret.txt", "/..%2fsecret.txt"]) {
+    const climbs = ["/../secret.txt", "/%2e%2e/secret.txt", "/assets/%2e%2e%2f%2e%2e%2fsecret.txt", "/..%2fsecret.txt", "/%252e%252e%252fsecret.txt", "/..%5csecret.txt", "/..\\secret.txt", "/%2e%2e/secret.txt%00", "/%2e%2e/secret.txt%00.png"];
+    for (const path of climbs) {
+      const response = await app.request(path);
+      const body = await response.text();
+      // A name the build doesn't hold is a 404, or the page when it has no extension (`..\\secret.txt` is a dot file's).
+      expect(response.status === 404 || (response.status === 200 && body === indexHtml), `${path}: ${response.status}`).toBe(true);
+      expect(body, path).not.toContain("secret beside the build");
+    }
+  });
+
+  test("a link in the build, to a file or a folder, serves nothing", async () => {
+    aBuiltSite();
+    writeFileSync(join(root, "secret.txt"), "secret beside the build");
+    symlinkSync(join(root, "secret.txt"), join(site, "linked.txt"));
+    symlinkSync(root, join(site, "outside"), "dir");
+    const app = appServing();
+
+    for (const path of ["/linked.txt", "/outside/secret.txt", "/outside/site/index.html"]) {
       const response = await app.request(path);
       expect(response.status, path).toBe(404);
-      expect(await response.text(), path).not.toContain("secret");
+      expect(await response.text(), path).not.toContain("secret beside the build");
     }
-    rmSync(join(site, "..", `${site.split("/").pop()}-secret.txt`));
   });
 
   test("a malformed escape is a bad request", async () => {
