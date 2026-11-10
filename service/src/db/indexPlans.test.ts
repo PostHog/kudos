@@ -59,13 +59,16 @@ test("a later page starts at the cursor in the index, not at the start of it", a
 });
 
 // `indexOrder` orders a key that can be NULL `asc nulls first` and one that can't plain `asc`; an index walks a read
-// only where it holds each key that way, as the migrations build it from this schema (migrations.test.ts).
-test("every index holds each key as indexOrder orders it: ascending, nulls first where the key can be NULL", () => {
+// only where it holds each key that way, as the migrations build it from this schema (migrations.test.ts). The indexes
+// it orders are Convex's, which end in `_creationTime`, then `_id`; an index of the service's own, read by its own SQL
+// (the failed-job sweep's), keeps the order that SQL gives.
+test("every index in Convex's shape holds each key as indexOrder orders it: ascending, nulls first where the key can be NULL", () => {
   const mismatched = (Object.values(schema) as unknown[])
     .filter((table): table is PgTable => is(table, PgTable))
     .flatMap((table) => {
       const { name, columns, indexes } = getTableConfig(table);
-      return indexes.flatMap(({ config }) =>
+      const convexShaped = indexes.filter(({ config }) => config.columns.slice(-2).map((column) => ("name" in column ? column.name : undefined)).join() === "_creationTime,_id");
+      return convexShaped.flatMap(({ config }) =>
         config.columns.flatMap((column) => {
           if (!is(column, IndexedColumn)) return [`${name}.${config.name} indexes an expression`];
           const nullable = !columns.find((stored) => stored.name === column.name)!.notNull;
