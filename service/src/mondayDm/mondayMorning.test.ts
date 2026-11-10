@@ -2,7 +2,7 @@
 // own time zone, the worker starts it by the app's clock, Slack gets it, and Slack's answer settles it. Two workers on
 // one database stand in for the two copies a deploy runs side by side.
 //
-// What the DM reads from other stacks isn't ported yet (S3's directory, S7's quests and Monday path, S13's hugs, S8's
+// What the DM reads from other stacks isn't ported yet (S3's directory, S6's xp levels, S7's quest sections, S13's hugs, S8's
 // album ledger, S9's hype reactions, the message settings, the welcome and the usage reports): each answers here at
 // its seam with a value the test sets, so this file proves the DM's booking, tries and delivery on their own. The
 // faithful port of today's convex/mondayDm/mondayDm.test.ts and convex/slack/mondayDmHugs.test.ts replaces these
@@ -12,6 +12,7 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { useTestDatabase } from "../../testing/database.ts";
 import { FakeSlack, landsButTimesOut, rateLimitedFor, slackError } from "../../testing/fakeSlack.ts";
+import { definitionsStored, onForEveryone } from "../../testing/flags.ts";
 import { seeder } from "../../testing/seed.ts";
 import { createAppTime } from "../appTime.ts";
 import { createClock, type Clock } from "../clock.ts";
@@ -27,7 +28,7 @@ import { serviceRegistry } from "../registry.ts";
 import type { MemberId } from "../workspace/directory.ts";
 import { resumeMondayQuests, stopMondayQuests } from "./stop.ts";
 
-type Person = { user: string; timeZone: string | null; inTheWorkspace: boolean; onThePath: boolean; welcomedAt: number | null; quests: QuestsSection | null; hugs: HugsSection | null; place: MessagePlace };
+type Person = { user: string; timeZone: string | null; inTheWorkspace: boolean; xpLevelsOn: boolean; welcomedAt: number | null; quests: QuestsSection | null; hugs: HugsSection | null; place: MessagePlace };
 
 const standIn = vi.hoisted(() => ({ people: new Map<string, Person>(), hugWeeks: [] as Array<{ member: string; week: string }> }));
 const personOf = (member: string) => standIn.people.get(member)!;
@@ -38,7 +39,8 @@ vi.mock("../workspace/directory.ts", async (original) => ({
   chatUserOf: async (_ctx: unknown, member: string) => ({ workspace: "T1", user: personOf(member).user }),
   timeZoneOf: async (_ctx: unknown, member: string) => personOf(member).timeZone,
 }));
-vi.mock("../quests/flag.ts", async (original) => ({ ...(await original<object>()), onTheMondayPath: async (_ctx: unknown, member: string) => personOf(member).onThePath }));
+// The Monday path is the monday-quest flag (stored on for everyone below) and xp levels being on for the member, S6's.
+vi.mock("../progression/xpLevels.ts", async (original) => ({ ...(await original<object>()), xpLevelsOnFor: async (_ctx: unknown, member: string) => personOf(member).xpLevelsOn }));
 vi.mock("../quests/mondaySection.ts", async (original) => ({ ...(await original<object>()), questsSectionFor: async (_ctx: unknown, member: string) => personOf(member).quests }));
 vi.mock("../hugs/recap.ts", async (original) => ({
   ...(await original<object>()),
@@ -87,6 +89,7 @@ let posts: Array<{ at: number; channel: string; text: string; blocks?: unknown }
 beforeEach(() => {
   vi.stubEnv("SLACK_BOT_TOKEN", "xoxb-test");
   vi.stubEnv("SLACK_APP_ID", "A_KUDOS");
+  vi.stubEnv("POSTHOG_PERSONAL_API_KEY", "phx-test");
   vi.spyOn(console, "warn").mockImplementation(() => {});
   standIn.people.clear();
   standIn.hugWeeks = [];
@@ -118,11 +121,12 @@ async function setUp(startsAt: string) {
     if (method === "chat.postMessage" && (await answer.clone().json()).ok) posts.push({ at: clock.now(), channel: String(args.channel), text: String(args.text), blocks: args.blocks });
     return answer;
   });
+  await definitionsStored(first.operations, onForEveryone("monday-quest"));
 
   /** A member who started quests, so the sweep looks at them; on the Monday path with this week's quest unless told. */
   async function person(user: string, timeZone: string | null, details: Partial<Person> = {}): Promise<MemberId> {
     const member = await seed.insert("members", { workspace: "T1", user, kind: "member", ...(timeZone !== null && { timeZone }) });
-    standIn.people.set(member, { user, timeZone, inTheWorkspace: true, onThePath: true, welcomedAt: null, quests: oneQuest, hugs: null, place: "dm", ...details });
+    standIn.people.set(member, { user, timeZone, inTheWorkspace: true, xpLevelsOn: true, welcomedAt: null, quests: oneQuest, hugs: null, place: "dm", ...details });
     await seed.insert("questStarts", { member, at: clock.now() });
     return member;
   }
@@ -232,7 +236,7 @@ describe("the Monday DM reaches each member at 9:00 on Monday in their own time 
 
   test("a member off the Monday path, or no longer in the workspace, is booked nothing", async () => {
     const t = await setUp("2026-10-14T10:00:00Z");
-    await t.person("U_ANN", "Europe/Berlin", { onThePath: false });
+    await t.person("U_ANN", "Europe/Berlin", { xpLevelsOn: false });
     await t.person("U_BEN", "Europe/Berlin", { inTheWorkspace: false });
 
     await t.sweepAt("2026-10-14T10:00:00Z");
@@ -241,7 +245,7 @@ describe("the Monday DM reaches each member at 9:00 on Monday in their own time 
 
   test("a member with a hug week last week is booked the hugs recap, though not on the Monday path", async () => {
     const t = await setUp("2026-10-14T10:00:00Z");
-    const ann = await t.person("U_ANN", "Europe/Berlin", { onThePath: false, quests: null, hugs: hugsRecap });
+    const ann = await t.person("U_ANN", "Europe/Berlin", { xpLevelsOn: false, quests: null, hugs: hugsRecap });
     standIn.hugWeeks = [{ member: ann, week: "2026-10-12" }];
 
     await t.sweepAt("2026-10-14T10:00:00Z");
@@ -322,8 +326,8 @@ describe("the Monday DM's try", () => {
 
   test("a DM left scheduled after its try stopped is settled by the next sweep: failed once tried, tried again if never started", async () => {
     const t = await setUp("2026-10-19T12:00:00Z");
-    const ann = await t.person("U_ANN", "Europe/Berlin", { onThePath: false });
-    const ben = await t.person("U_BEN", "Europe/Berlin", { onThePath: false });
+    const ann = await t.person("U_ANN", "Europe/Berlin", { xpLevelsOn: false });
+    const ben = await t.person("U_BEN", "Europe/Berlin", { xpLevelsOn: false });
     const due = Date.parse("2026-10-19T07:00:00Z");
     await seed.insert("mondayDms", { member: ann, monday: "2026-10-19", state: "scheduled", dueAt: due, tries: 1 });
     await seed.insert("mondayDms", { member: ben, monday: "2026-10-19", state: "scheduled", dueAt: due, tries: 0 });
