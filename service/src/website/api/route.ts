@@ -59,21 +59,27 @@ export function memberCommand<const Name extends string, Shape extends ArgsShape
  * Convex refused a field its validator didn't name, at any depth, and never changed a value it checked. A nested
  * `z.object` would drop an unknown field silently, so every object inside a route's arguments must be `z.strictObject`,
  * and only the kinds of value a Convex validator could describe may appear, checked and never changed: no coercion, no
- * default, no `.trim()` or other overwrite, no refinement, which may change what it reads. The service refuses to start
- * otherwise. Unknown kinds fail closed.
+ * default, no URL format, which trims and normalizes, and only checks that compare a value without touching it. The
+ * service refuses to start otherwise. Unknown kinds and unknown checks fail closed.
  */
 const plainValues: ReadonlySet<string> = new Set(["string", "number", "boolean", "bigint", "null", "undefined", "literal", "enum", "nan", "template_literal"]);
 
-// Zod's checks that may change the value they check: `.overwrite()` and what it builds (`.trim()`, `.toLowerCase()`),
-// and refinements, whose callback is handed the value itself.
-const changesValues: ReadonlySet<string> = new Set(["overwrite", "custom"]);
+// Zod's checks that only compare a value: lengths, sizes, bounds, and number and string formats. Any other check may
+// change what it reads: `.overwrite()` and `.trim()`, refinements, and `z.property` and `z.properties`, which hold
+// schemas of their own.
+const comparesOnly: ReadonlySet<string> = new Set(["min_length", "max_length", "length_equals", "min_size", "max_size", "size_equals", "less_than", "greater_than", "multiple_of", "number_format", "bigint_format", "string_format"]);
+
+// The one string format that rewrites what it checks: zod trims a URL and drops its tabs and newlines.
+const rewritingFormats: ReadonlySet<string> = new Set(["url"]);
 
 function refuseLooseObjects(schema: z.ZodType, at: string): void {
   const def = schema._zod.def as unknown as Record<string, unknown> & { type: string };
   const inner = (value: unknown, where = at) => refuseLooseObjects(value as z.ZodType, where);
   if (def.coerce === true) throw new Error(`${at} coerces its value; a route's arguments are checked as sent, as Convex checked them`);
-  for (const check of (def.checks ?? []) as Array<{ _zod: { def: { check: string } } }>) {
-    if (changesValues.has(check._zod.def.check)) throw new Error(`${at} has a check that may change its value (${check._zod.def.check}); a route's arguments are checked as sent, as Convex checked them`);
+  if (typeof def.format === "string" && rewritingFormats.has(def.format)) throw new Error(`${at} is a ${def.format}, which zod rewrites as it checks; a route's arguments are checked as sent, as Convex checked them`);
+  for (const check of (def.checks ?? []) as Array<{ _zod: { def: { check: string; format?: string } } }>) {
+    const { check: kind, format } = check._zod.def;
+    if (!comparesOnly.has(kind) || (format !== undefined && rewritingFormats.has(format))) throw new Error(`${at} has a check that may change its value (${format ?? kind}); a route's arguments are checked as sent, as Convex checked them`);
   }
   if (plainValues.has(def.type)) return;
   switch (def.type) {

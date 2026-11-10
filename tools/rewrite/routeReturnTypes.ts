@@ -66,10 +66,10 @@ type Keys<T> = { [Key in Extract<keyof T, string | number>]-?: `${Key}${IsOption
 type Takes<A, B> = [B] extends [A] ? true : false;
 
 /**
- * True when each member of either union has a twin in the other: a member with the same fields, each as optional,
- * whose fields' values are twins in turn at every depth. Values themselves are assignability's to judge, so a value
- * that one side splits across members, as `{ groups: true } | { groups: false }` splits `{ groups: boolean }`, has a
- * twin on each side.
+ * True when each member of either union has a twin in the other: a member that shares some value with it, so never one
+ * of another `kind`, with the same fields, each as optional, whose fields' values are twins in turn at every depth.
+ * Values themselves are assignability's to judge, so a value that one side splits across members, as
+ * `{ groups: true } | { groups: false }` splits `{ groups: boolean }`, has a twin on each side.
  */
 type Structure<A, B> = Twins<A, B> extends true ? Twins<B, A> : false;
 type Twins<A, B> = false extends (A extends unknown ? HasTwin<A, B> : never) ? false : true;
@@ -86,13 +86,15 @@ type IsTwin<A, B> = A extends Leaf
         : false
       : B extends readonly unknown[]
         ? false
-        : Takes<Keys<A>, Keys<B>> extends true
-          ? Takes<Keys<B>, Keys<A>> extends true
-            ? false extends { [Key in keyof A & keyof B]-?: Structure<A[Key], B[Key]> }[keyof A & keyof B]
-              ? false
-              : true
-            : false
-          : false;
+        : [A & B] extends [never]
+          ? false
+          : Takes<Keys<A>, Keys<B>> extends true
+            ? Takes<Keys<B>, Keys<A>> extends true
+              ? false extends { [Key in keyof A & keyof B]-?: Structure<A[Key], B[Key]> }[keyof A & keyof B]
+                ? false
+                : true
+              : false
+            : false;
 
 /** True when A and B are the same shape: each takes every value of the other, no `any` hides in either, and each member has a twin of the same fields at every depth. */
 export type Same<A, B> = true extends HasAny<A> | HasAny<B>
@@ -202,3 +204,8 @@ export type SpellsARecordOtherwise = Holds<Same<Record<string, { x: number }>, {
 export type MovesAFieldBetweenMembers = Holds<Same<{ f?: number } | { f: number; g?: string }, { f: number } | { f?: number; g?: string }>>;
 // @ts-expect-error a field moved between members one field down
 export type MovesAFieldOneDown = Holds<Same<{ card: { f?: number } | { f: number; g?: string } }, { card: { f: number } | { f?: number; g?: string } }>>;
+// @ts-expect-error an optional field moved to a member of another kind
+export type MovesAFieldToAnotherKind = Holds<Same<{ kind: "a"; f?: number } | { kind: "b" }, { kind: "a" } | { kind: "b"; f?: number }>>;
+// @ts-expect-error an optional field moved to a member of another kind, one field down
+export type MovesAFieldToAnotherKindOneDown = Holds<Same<{ card: { kind: "a"; f?: number } | { kind: "b" } }, { card: { kind: "a" } | { kind: "b"; f?: number } }>>;
+export type SplitsAKind = Holds<Same<{ kind: "a" | "b"; f?: number }, { kind: "a"; f?: number } | { kind: "b"; f?: number }>>;

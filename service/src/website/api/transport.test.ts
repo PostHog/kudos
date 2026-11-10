@@ -287,11 +287,26 @@ describe("arguments pass the route's shape or nothing runs", () => {
       ["overwrite inside an object", z.strictObject({ week: z.number() }).overwrite((value) => ({ ...value, member: "m_other" }))],
       ["overwrite of a record's key", z.record(z.string().overwrite(() => "same"), z.number())],
       ["refinement", z.string().refine((value) => value.length > 0)],
+      ["URL, as a record's key", z.record(z.url(), z.number())],
+      ["URL as a check", z.string().check(z.url())],
+      [
+        "a property's own refinement",
+        z.strictObject({ nested: z.strictObject({ week: z.number() }) }).check(
+          z.property(
+            "nested",
+            z.custom<{ week: number }>((value) => {
+              (value as Record<string, unknown>).member = "m_other";
+              return true;
+            }),
+          ),
+        ),
+      ],
+      ["properties", z.strictObject({ week: z.number() }).check(z.properties({ week: z.number() }))],
     ];
     for (const [kind, schema] of refused) {
       expect(() => memberRead("website.test.odd", { value: schema }, async () => null), kind).toThrow(/website\.test\.odd\(value\)/);
     }
-    expect(() => memberRead("website.test.plain", { name: z.string(), week: z.number().int().optional(), kind: z.enum(["a", "b"]), tags: z.record(z.string(), z.boolean()), pair: z.tuple([z.string(), z.number()]), either: z.union([z.literal("x"), z.null()]) }, async () => null)).not.toThrow();
+    expect(() => memberRead("website.test.plain", { name: z.string(), week: z.number().int().optional(), kind: z.enum(["a", "b"]), tags: z.record(z.string(), z.boolean()), pair: z.tuple([z.string(), z.number()]), either: z.union([z.literal("x"), z.null()]), email: z.email(), short: z.string().max(80).regex(/^[a-z]+$/), many: z.array(z.string()).min(1), positive: z.number().gt(0) }, async () => null)).not.toThrow();
   });
 
   test("a body over the limit answers 413 before it is read whole, with or without its length", async () => {
