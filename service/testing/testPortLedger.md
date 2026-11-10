@@ -26,12 +26,12 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/album/earnedEmojis.test.ts | S9 | | |
 | convex/album/emojiMappings.test.ts | S9 | | |
 | convex/album/emojiNames.test.ts | S9 | | |
-| convex/album/emojiRoll.test.ts | S9 | | |
+| convex/album/emojiRoll.test.ts | S2 | service/src/album/emojiRoll.test.ts | |
 | convex/album/emojiWizard.test.ts | S9 | | |
 | convex/album/endState.test.ts | S9 | | |
 | convex/album/history.test.ts | S9 | | |
 | convex/album/hoggies/avatar.test.ts | S10 | | |
-| convex/album/hoggies/catalogue.test.ts | S10 | | |
+| convex/album/hoggies/catalogue.test.ts | S2 | service/src/album/hoggies/catalogue.test.ts | |
 | convex/album/hoggies/crests.test.ts | S10 | | |
 | convex/album/hoggies/draw.test.ts | S10 | | |
 | convex/album/hoggies/drops.test.ts | S10 | | |
@@ -103,13 +103,13 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/groups/primaryGroups.test.ts | S11 | | |
 | convex/groups/transitionsInsertOnly.test.ts | S11 | | |
 | convex/leaderboard/backfill.test.ts | S11 | | |
-| convex/leaderboard/board.test.ts | S11 | | |
+| convex/leaderboard/board.test.ts | S2 | service/src/leaderboard/board.test.ts | |
 | convex/leaderboard/boards.test.ts | S11 | | |
 | convex/leaderboard/counts.test.ts | S11 | | |
 | convex/leaderboard/groupBoards.test.ts | S11 | | |
 | convex/leaderboard/groupTotals.test.ts | S11 | | |
 | convex/leaderboard/groupsBoard.test.ts | S11 | | |
-| convex/leaderboard/improvement.test.ts | S11 | | |
+| convex/leaderboard/improvement.test.ts | S2 | service/src/leaderboard/improvement.test.ts | |
 | convex/leaderboard/improvementLine.test.ts | S11 | | |
 | convex/leaderboard/mondayPost.test.ts | S11 | | |
 | convex/leaderboard/peer.test.ts | S11 | | |
@@ -300,5 +300,6 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | tools/release/promotion.test.ts | S20 | | |
 | tools/release/slackManifest.test.ts | S20 | | |
 | tools/rewrite/drizzle/generate.test.ts | S20 | | |
+| tools/rewrite/moduleMap/landed.test.ts | S20 | | |
 | tools/rewrite/moduleMap/moduleMap.test.ts | S20 | | |
 | tools/rewrite/schemaParity.test.ts | S20 | | |
