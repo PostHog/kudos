@@ -207,20 +207,29 @@ export function validatorEdits(checker: ts.TypeChecker, sourceFile: ts.SourceFil
  * The Convex validator class a value's type is, such as `VUnion`, or `Validator` for a value that may be any of
  * several classes (`GenericValidator`), whose members the codemod renames none of.
  */
-export function validatorClassOf(type: ts.Type): string | undefined {
+export function validatorClassOf(type: ts.Type, depth = 0): string | undefined {
+  if (depth > 8) return undefined;
   // A type parameter bound to a validator (`T extends typeof x`) reads as one.
   if (type.flags & ts.TypeFlags.TypeParameter) {
     const constraint = type.getConstraint();
-    return constraint ? validatorClassOf(constraint) : undefined;
+    return constraint ? validatorClassOf(constraint, depth + 1) : undefined;
   }
-  const name = convexClass(type);
-  if (name) return name;
-  if (!type.isUnion()) return undefined;
-  const classes = new Set(type.types.map(convexClass));
-  // One class over several type arguments (`VLiteral<"a"> | VLiteral<"b">`) is that class; several are any validator.
-  if (classes.has(undefined)) return undefined;
-  if (classes.size === 1) return [...classes][0];
-  return "Validator";
+  // A validator with more on it (`typeof x & { tag: string }`) is still that validator.
+  if (type.isIntersection()) return oneClass(type.types.map((member) => validatorClassOf(member, depth + 1)).filter((name) => name !== undefined));
+  if (type.isUnion()) {
+    // `undefined` or `null` beside a validator (an optional parameter) leaves it one; anything else makes it no validator.
+    const members = type.types.filter((member) => !(member.flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Null)));
+    const classes = members.map((member) => validatorClassOf(member, depth + 1));
+    return classes.includes(undefined) ? undefined : oneClass(classes as string[]);
+  }
+  return convexClass(type);
+}
+
+/** One class over several type arguments (`VLiteral<"a"> | VLiteral<"b">`) is that class; several are any validator. */
+function oneClass(classes: string[]): string | undefined {
+  const distinct = new Set(classes);
+  if (distinct.size === 0) return undefined;
+  return distinct.size === 1 ? [...distinct][0] : "Validator";
 }
 
 /** A validator class's name, when Convex's own package declares it; an app's class of the same name isn't one. */
