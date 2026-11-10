@@ -103,7 +103,7 @@ export async function memberChanged(t: TestBackend, ...event: Parameters<typeof 
 // reaches another stack's stub answers 500 and logs only the error's class, so the step ends at a stub then too, not at
 // a later assertion. The log names no request, and sends may run at once: a 500 ends at a stub only when every failure
 // logged while it ran was a stub, so another request's stub never hides a real failure.
-async function sentTo(t: TestBackend, kind: EventKind, path: string, body: string) {
+export async function sentTo(t: TestBackend, kind: EventKind, path: string, body: string) {
   if (!Object.hasOwn(serviceRegistry.slack.events ?? {}, kind)) throw notPorted(path);
   const logged = t.logs.length;
   const response = await t.send("/events", body);
