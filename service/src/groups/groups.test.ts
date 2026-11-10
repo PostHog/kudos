@@ -49,6 +49,11 @@ function backend() {
   const slackIds = new Map<GroupId, string>();
   return {
     operations,
+    /** A second runner on the same database, as another process in a deploy's overlap, its clock at `instant`. */
+    elsewhere: (instant: number) => {
+      const other = createOperations({ pool: database.pool, clock: createClock({ real: () => instant }), log: quiet, retryDelayMs: () => 1, subscribers: subscribersOf(subscriptions) });
+      return <T>(handler: (ctx: MutationContext) => Promise<T>) => other.mutation("test.elsewhere", handler);
+    },
     seed,
     at: (instant: number) => void (now = instant),
     mutation: <T>(handler: (ctx: MutationContext) => Promise<T>) => operations.mutation("test.mutation", handler),
@@ -223,11 +228,27 @@ describe("GB9: primaryGroupAt answers the history entry in force at an instant",
 
     await t.mutation((ctx) => recordChange(ctx, person, null, owls, "default", start));
     await t.mutation((ctx) => recordChange(ctx, person, owls, ants, "picked", start));
-    await t.mutation((ctx) => recordChange(ctx, person, ants, owls, "picked", start - minute));
+    expect(await t.query((ctx) => primaryGroupAt(ctx, ann, start))).toBe(ants);
 
+    await t.mutation((ctx) => recordChange(ctx, person, ants, owls, "picked", start - minute));
     expect(await t.query((ctx) => primaryGroupAt(ctx, ann, start - 1))).toBeNull();
     expect((await t.history(ann)).map(({ at }) => at)).toEqual([start, start, start]);
     expect(await t.query((ctx) => primaryGroupAt(ctx, ann, start))).toBe(owls);
+  });
+
+  test("a change another runner records in the same millisecond, its clock behind, is still the one in force", async () => {
+    const { t, ann, ants, owls } = await annAndBob();
+    const person = (await t.seed.get("members", ann))!;
+    const behind = t.elsewhere(start - minute);
+
+    await t.mutation((ctx) => recordChange(ctx, person, null, owls, "default", start));
+    await behind((ctx) => recordChange(ctx, person, owls, ants, "picked", start));
+
+    expect((await t.history(ann)).map(({ group, at }) => ({ group, at }))).toEqual([
+      { group: owls, at: start },
+      { group: ants, at: start },
+    ]);
+    expect(await t.query((ctx) => primaryGroupAt(ctx, ann, start))).toBe(ants);
   });
 });
 
@@ -315,19 +336,31 @@ describe("GB10: a kudos message counts for the giver's primary group at its spen
 
   test("a message naming more people than a page reconciles hands the rest to the next run and attributes once all are reconciled", async () => {
     const t = backend();
+    const owls = await t.group("S_OWLS", "Owls", 2);
+    const ants = await t.group("S_ANTS", "Ants", 200);
     const ann = await t.member("U_ANN");
+    await t.joins("S_OWLS", "U_ANN");
     const recipients: MemberId[] = [];
-    for (let i = 0; i < 120; i++) recipients.push(await t.member(`U${String(i).padStart(3, "0")}`));
+    for (let i = 0; i < 120; i++) {
+      const user = `U${String(i).padStart(3, "0")}`;
+      recipients.push(await t.member(user));
+      await t.joins("S_ANTS", user);
+    }
     const event = kudosGiven(ann, recipients);
 
     await t.mutation((ctx) => attributeKudosGiven(ctx, { event }));
 
     const [next] = (await t.scheduled("groups.attribution.attributeKudosGiven")) as Array<{ unreconciled: MemberId[] }>;
-    expect(next?.unreconciled).toHaveLength(21);
+    expect(next?.unreconciled).toEqual(recipients.slice(99));
     expect(await t.seed.all("attributions")).toEqual([]);
+    expect((await t.seed.all("memberGroups")).map(({ member }) => member)).toEqual([ann, ...recipients.slice(0, 99)]);
 
     await t.mutation((ctx) => attributeKudosGiven(ctx, { event, unreconciled: next!.unreconciled }));
-    expect(await t.seed.all("attributions")).toHaveLength(1);
+    const [attribution, ...more] = await t.seed.all("attributions");
+    expect(more).toEqual([]);
+    expect(attribution?.group).toBe(owls);
+    expect(attribution?.awards.map(({ recipient, recipientGroup }) => ({ recipient, recipientGroup }))).toEqual(recipients.map((recipient) => ({ recipient, recipientGroup: ants })));
+    expect(await t.published("awardsAttributed")).toHaveLength(1);
   });
 });
 
@@ -465,5 +498,48 @@ describe("GB27, GB1, GB8, GB26: the group mode", () => {
     await t.mutation((ctx) => setGroupMode(ctx, "T1", admin, { mode: "all" }));
     await t.mutation((ctx) => setGroupMode(ctx, "T1", admin, { mode: "allowlist" }));
     expect(await t.seed.all("groupSettings")).toEqual([expect.objectContaining({ mode: "allowlist", allowlist: [ants] })]);
+  });
+});
+
+describe("GB9, GB10: the logs are only ever added to", () => {
+  test("reconciling, picking, switching the group mode and attributing again leave every earlier log row as it was", async () => {
+    postHogDeciding("sandbox");
+    try {
+      const { t, ann, bob, ants, owls } = await annAndBob();
+      await definitionsStored(t.operations, onForEveryone("groups"));
+      const admin = { member: await t.member("U_ADMIN", { admin: true }), admin: true };
+      const logs = async () => ({
+        history: await t.seed.all("primaryGroupHistory"),
+        departures: await t.seed.all("userGroupDepartures"),
+        changes: await t.seed.all("groupCountingChanges"),
+        attributions: await t.seed.all("attributions"),
+      });
+      await t.mutation((ctx) => reconcileMember(ctx, ann));
+      await t.leaves(owls, "U_ANN", start + minute);
+      await t.mutation((ctx) => setGroupMode(ctx, "T1", admin, { mode: "allowlist", allowlist: [owls] }));
+      await t.mutation((ctx) => attributeKudosGiven(ctx, { event: kudosGiven(ann, [bob]) }));
+      const before = await logs();
+      expect(Object.values(before).every((rows) => rows.length > 0)).toBe(true);
+
+      t.at(start + 5 * minute);
+      await t.joins("S_OWLS", "U_ANN");
+      await t.mutation((ctx) => reconcileWorkspace(ctx, { workspace: "T1" }));
+      await t.mutation((ctx) => setGroupMode(ctx, "T1", admin, { mode: "all" }));
+      await t.mutation((ctx) => reconcileWorkspace(ctx, { workspace: "T1" }));
+      await t.mutation((ctx) => pickPrimaryGroup(ctx, ann, ants));
+      await t.leaves(ants, "U_BOB", start + 6 * minute);
+      await t.mutation((ctx) => attributeKudosGiven(ctx, { event: kudosGiven(ann, [bob]) }));
+      await t.mutation((ctx) => attributeKudosGiven(ctx, { event: kudosGiven(bob, [ann], { message: { workspace: "T1", conversation: "C1", message: "2" } }) }));
+      const after = await logs();
+
+      for (const [log, rows] of Object.entries(before)) {
+        const kept = after[log as keyof typeof after];
+        expect(kept.slice(0, rows.length), log).toEqual(rows);
+        expect(kept.length, log).toBeGreaterThan(log === "attributions" ? rows.length : rows.length - 1);
+      }
+    } finally {
+      vi.unstubAllEnvs();
+      vi.unstubAllGlobals();
+    }
   });
 });

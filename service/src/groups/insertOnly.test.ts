@@ -1,5 +1,6 @@
 // GB9, GB10: the groups domain's logs are only ever inserted. Ports convex/groups/attributionInsertOnly.test.ts,
-// historyInsertOnly.test.ts and transitionsInsertOnly.test.ts onto the service's sources.
+// historyInsertOnly.test.ts and transitionsInsertOnly.test.ts onto the service's sources: a guard over every module,
+// which no run of the domain can give. groups.test.ts checks the same rule by running it.
 import { readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,7 +21,15 @@ function modulesNaming(table: RegExp): string[] {
     .toSorted();
 }
 
-const rowWrites = /\.(update|delete)\(|patchDocument\(/;
+// A change or removal of a row: an update, a delete, a patch, or an insert that overwrites on a conflict.
+const rowWrites = /\.(update|delete)\(|patchDocument\(|onConflictDo/;
+
+test("the insert the logs go through only ever adds a row", () => {
+  const rows = sources[join("groups", "rows.ts")] ?? "";
+  const insert = rows.slice(rows.indexOf("export async function insertDocument"));
+
+  expect(insert).toMatch(/^export async function insertDocument[^{]*\{\s*await tx\.insert\(table\)\.values\(fromDocument\(table, document\)\);\s*\}/);
+});
 
 describe("GB10: an attribution is only ever inserted, never changed or deleted", () => {
   test("only the attribution module names the table, and it never updates or deletes a row", () => {

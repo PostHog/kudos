@@ -28,11 +28,28 @@ export async function latestEntryOf(ctx: QueryContext, member: MemberId): Promis
   return uniqueOf(primaryGroupHistory, rows);
 }
 
-/** Records the change no earlier than the member's latest entry, so the history stays in order, and publishes it. */
+/**
+ * Records the change no earlier than the member's latest entry, so the history stays in order, and publishes it. An
+ * entry dated in the latest's millisecond is stamped after it too: `newRow` orders stamps only within one process, and
+ * another runner's clock, as in a deploy's overlap, may stand behind. The mutation's read of the latest entry makes a
+ * concurrent change to the same member conflict and run again, so the latest it reads is the latest there is.
+ */
 export async function recordChange(ctx: MutationContext, person: Doc<"members">, from: GroupId | null, to: GroupId | null, cause: PrimaryGroupCause, recordedAt: number): Promise<void> {
-  const at = Math.max(recordedAt, (await latestEntryOf(ctx, person._id))?.at ?? recordedAt);
+  const latest = await latestEntryOf(ctx, person._id);
+  const at = Math.max(recordedAt, latest?.at ?? recordedAt);
+  const row = ctx.newRow();
+  const _creationTime = latest === null ? row._creationTime : Math.max(row._creationTime, nextAfter(latest._creationTime));
   const change = { workspace: person.workspace, member: person._id, from, cause, at };
-  await insertDocument(ctx.tx, primaryGroupHistory, { ...ctx.newRow(), ...change, group: to });
+  await insertDocument(ctx.tx, primaryGroupHistory, { ...row, _creationTime, ...change, group: to });
   const event: PrimaryGroupChangedEvent = { type: "primaryGroupChanged", ...change, to };
   await ctx.publish(event);
+}
+
+/** The next float64 above `value`, the step `newRow` takes between stamps. */
+function nextAfter(value: number): number {
+  const view = new DataView(new ArrayBuffer(8));
+  view.setFloat64(0, value);
+  const bits = view.getBigUint64(0);
+  view.setBigUint64(0, value >= 0 ? bits + 1n : bits - 1n);
+  return value === 0 ? Number.MIN_VALUE : view.getFloat64(0);
 }
