@@ -5,9 +5,9 @@
 // slackEmoji.ts, customEmoji.ts, directory.ts and convex/album/earnedEmojis.ts answer it. A test file mocks a module
 // with `standIn`, which keeps the module's other exports:
 //
-//   vi.mock("../workspace/slackEmoji.ts", async (original) => (await import("../../testing/emojiWorld.ts")).standIn(original, "slackEmoji"));
-import type { QueryContext } from "../src/operations.ts";
-import { standardEmojiListed, standardEmojiNamed, standardEmojiStartingWith } from "../src/workspace/standardEmoji.ts";
+//   vi.mock("../workspace/slackEmoji.ts", async (original) => (await import("./testing/emojiWorld.ts")).standIn(original, "slackEmoji"));
+import type { QueryContext } from "../../operations.ts";
+import { standardEmojiListed, standardEmojiNamed, standardEmojiStartingWith } from "../../workspace/standardEmoji.ts";
 
 type ListedEmoji = { name: string; image: string };
 type CustomEmoji = ListedEmoji & { aliasOf?: string };
@@ -103,7 +103,7 @@ const earnedEmojis = {
   hypeFaceOf: async (_ctx: unknown, _workspace: string, person: string) => ({ name: emojiWorld.members.get(person)?.fullName ?? "Someone", picture: `https://faces.example/${person}.png` }),
   earnedEmojisAmong: async (ctx: QueryContext, workspace: string, member: string, names: string[], counts: (emoji: string) => boolean | Promise<boolean>) => {
     // Read when called, so loading this module never loads the album's while a mock factory runs.
-    const { namesHeldIn } = await import("../src/album/emojiNames.ts");
+    const { namesHeldIn } = await import("../emojiNames.ts");
     const registry = await namesHeldIn(ctx, workspace);
     const earned = new Map<string, string>();
     for (const name of new Set(names)) {

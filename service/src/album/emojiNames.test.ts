@@ -3,19 +3,19 @@
 // Today's file drives each case through Slack: a kudos grants a thoughtful pack, whose grant names the recipient's
 // hype emoji (convex/album/packs.ts), and posthog.com's sync replaces the company's teams. The packs (S8) and the
 // directory (S3) are still stubs in the module map, so here `thanks` names each recipient's hype emoji as the grant
-// does, the directory's names come from a world the test gives (service/testing/emojiWorld.ts), and the company's
+// does, the directory's names come from a world the test gives (service/src/album/testing/emojiWorld.ts), and the company's
 // teams change through the ported sync's own mutation, whose companyTeamsReplaced event runs the registry's
 // subscriber through the test backend's worker.
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { useTestBackend, type TestBackend } from "../../testing/backend.ts";
-import { emojiWorld } from "../../testing/emojiWorld.ts";
+import { emojiWorld } from "./testing/emojiWorld.ts";
 import { replaceCompanyProfiles } from "../companyProfiles/sync.ts";
 import { serviceRegistry } from "../registry.ts";
 import type { MemberId } from "../workspace/directory.ts";
 import { emojiNameOf, giveEmojiASecondName, nameHypeEmojiOf, reserveSharedEmojiNames, reserveTeamNamesAfterTheSync, type EarnedEmojiId } from "./emojiNames.ts";
 
-vi.mock("../workspace/directory.ts", async (original) => (await import("../../testing/emojiWorld.ts")).standIn(original, "directory"));
-vi.mock("../workspace/slackEmoji.ts", async (original) => (await import("../../testing/emojiWorld.ts")).standIn(original, "slackEmoji"));
+vi.mock("../workspace/directory.ts", async (original) => (await import("./testing/emojiWorld.ts")).standIn(original, "directory"));
+vi.mock("../workspace/slackEmoji.ts", async (original) => (await import("./testing/emojiWorld.ts")).standIn(original, "slackEmoji"));
 
 type Team = { slug: string; name: string };
 

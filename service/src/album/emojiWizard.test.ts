@@ -4,12 +4,12 @@
 // reads what a member sees in the album's earned emojis (S9, later in the stack), and gets its people, Slack's custom
 // emoji and the flags from Slack, the directory and PostHog (S3, S9's flag.ts). Here the cases call this module's own
 // reads and writes, as the website calls them, and those other stacks' reads answer from a world the test gives
-// (service/testing/emojiWorld.ts); what a member holds is the world's, and the holdings the maintainer's list counts
+// (service/src/album/testing/emojiWorld.ts); what a member holds is the world's, and the holdings the maintainer's list counts
 // are the album's own tables, seeded. The website's own guards (the wizard and list off, WS61, the person page) stay
 // with the website's port, and a standard emoji's place among custom ones with S3's slackEmoji.
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { useTestBackend, type TestBackend } from "../../testing/backend.ts";
-import { emojiWorld } from "../../testing/emojiWorld.ts";
+import { emojiWorld } from "./testing/emojiWorld.ts";
 import { replaceCompanyProfiles } from "../companyProfiles/sync.ts";
 import { fromDocument } from "../db/documents.ts";
 import { emojiNames } from "../db/schema/index.ts";
@@ -20,12 +20,12 @@ import { placeSlackEmoji, type EmojiPlace } from "./emojiMappings.ts";
 import { emojiNameOf, nameHypeEmojiOf, teamEmojiNameOf, type EarnedEmojiId } from "./emojiNames.ts";
 import { appEmojisIn, emojiInPlaceFor, mapAppEmojiInPlace, mapHeldEmoji, mostAppEmojisListed, slackEmojisNear, type AppEmojiRow, type AppEmojiRows } from "./emojiWizard.ts";
 
-vi.mock("../workspace/directory.ts", async (original) => (await import("../../testing/emojiWorld.ts")).standIn(original, "directory"));
-vi.mock("../workspace/slackEmoji.ts", async (original) => (await import("../../testing/emojiWorld.ts")).standIn(original, "slackEmoji"));
-vi.mock("../workspace/workspaceSettings.ts", async (original) => (await import("../../testing/emojiWorld.ts")).standIn(original, "workspaceSettings"));
-vi.mock("./levelEmojis.ts", async (original) => (await import("../../testing/emojiWorld.ts")).standIn(original, "levelEmojis"));
-vi.mock("./earnedEmojis.ts", async (original) => (await import("../../testing/emojiWorld.ts")).standIn(original, "earnedEmojis"));
-vi.mock("./flag.ts", async (original) => (await import("../../testing/emojiWorld.ts")).standIn(original, "flags"));
+vi.mock("../workspace/directory.ts", async (original) => (await import("./testing/emojiWorld.ts")).standIn(original, "directory"));
+vi.mock("../workspace/slackEmoji.ts", async (original) => (await import("./testing/emojiWorld.ts")).standIn(original, "slackEmoji"));
+vi.mock("../workspace/workspaceSettings.ts", async (original) => (await import("./testing/emojiWorld.ts")).standIn(original, "workspaceSettings"));
+vi.mock("./levelEmojis.ts", async (original) => (await import("./testing/emojiWorld.ts")).standIn(original, "levelEmojis"));
+vi.mock("./earnedEmojis.ts", async (original) => (await import("./testing/emojiWorld.ts")).standIn(original, "earnedEmojis"));
+vi.mock("./flag.ts", async (original) => (await import("./testing/emojiWorld.ts")).standIn(original, "flags"));
 
 const owner = "m_owner" as MemberId;
 const alice = "m_alice" as MemberId;

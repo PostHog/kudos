@@ -3,22 +3,22 @@
 //
 // Today's file picks through the website (pickKudosEmoji, getAlbum: S16) and earns its emojis through Slack and the
 // album's progression (S8's packs, S9's earned emojis later in the stack). Here the cases call this module's own pick
-// and read, as the website calls them, and what a member holds is the world's (service/testing/emojiWorld.ts), as
+// and read, as the website calls them, and what a member holds is the world's (service/src/album/testing/emojiWorld.ts), as
 // convex/album/earnedEmojis.ts answers it. The album and kudos-emoji-picks flags guard the website's mutation, so their
 // two cases stay with the website's port. The parse hook, which convex/slack/earnedEmojiKudos.test.ts proves end to end
 // through Slack, is proven here at its own seam.
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { useTestBackend, type TestBackend } from "../../testing/backend.ts";
-import { emojiWorld } from "../../testing/emojiWorld.ts";
+import { emojiWorld } from "./testing/emojiWorld.ts";
 import { replaceCompanyProfiles } from "../companyProfiles/sync.ts";
 import type { Mention } from "../engine/messageEvent.ts";
 import type { MemberId } from "../workspace/directory.ts";
 import { nameHypeEmojiOf, openTheRegistryIn, teamEmojiNameOf } from "./emojiNames.ts";
 import { earnedEmojiHook, kudosEmojiPicksOf, pickKudosEmoji } from "./kudosEmojis.ts";
 
-vi.mock("../workspace/directory.ts", async (original) => (await import("../../testing/emojiWorld.ts")).standIn(original, "directory"));
-vi.mock("./earnedEmojis.ts", async (original) => (await import("../../testing/emojiWorld.ts")).standIn(original, "earnedEmojis"));
-vi.mock("./flag.ts", async (original) => (await import("../../testing/emojiWorld.ts")).standIn(original, "flags"));
+vi.mock("../workspace/directory.ts", async (original) => (await import("./testing/emojiWorld.ts")).standIn(original, "directory"));
+vi.mock("./earnedEmojis.ts", async (original) => (await import("./testing/emojiWorld.ts")).standIn(original, "earnedEmojis"));
+vi.mock("./flag.ts", async (original) => (await import("./testing/emojiWorld.ts")).standIn(original, "flags"));
 
 const levelEmojis = ["level:5", "level:10", "level:15", "level:20", "level:25"];
 const alice = { user: "U_ALICE", name: "Alice Marchetti" };
