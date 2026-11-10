@@ -1,17 +1,17 @@
 // A new week of quests reaches the member: the hourly sweep draws it and their App Home shows it. The test runs every
-// module as it is, with Slack and PostHog faked at their boundaries, except the two reads still stubbed on main that the
-// draw passes through (welcome's isWelcomed, S6's xp-levels decision): those stand in over the seeded rows as today's
-// code reads them, as in weekTurn.test.ts. The home is S5's
-// republish, so the test waits on S5 and checks that it ends there: once the draw is made, it refreshes the home.
+// module as it is, with Slack and PostHog faked at their boundaries, except welcome's isWelcomed, still stubbed on main,
+// which stands in over the seeded rows as today's code reads it, as in weekTurn.test.ts. S5's home publishing
+// (slack.appHome.publishHome) is still a stub that nothing registers on main, so the backend registers its job as the
+// service will, and the test waits on S5 and checks that it ends there: once the draw is made, the home is published.
 import { eq } from "drizzle-orm";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { memberDecision } from "../analytics/flags.ts";
 import { indexOrder } from "../db/indexOrder.ts";
 import { welcomes } from "../db/schema/index.ts";
 import { unique } from "../db/unique.ts";
 import type { QueryContext } from "../operations.ts";
-import { xpLevels } from "../progression/xpLevels.ts";
 import type { MemberId } from "../workspace/directory.ts";
+import { serviceRegistry } from "../registry.ts";
+import { publishHomeJob } from "../slack/appHome.ts";
 import { flagsKey, postHogHost, projectToken } from "../../testing/fakePostHog.ts";
 import { definitionsStored, onForEveryone } from "../../testing/flags.ts";
 import { useTestBackend } from "../../testing/backend.ts";
@@ -24,20 +24,18 @@ vi.mock("../welcome/welcome.ts", async (original) => ({
   isWelcomed: async (ctx: QueryContext, member: MemberId): Promise<boolean> =>
     unique("welcomes", await ctx.tx.select({ _id: welcomes._id }).from(welcomes).where(eq(welcomes.member, member)).orderBy(...indexOrder(welcomes, ["member"]).orderBy()).limit(2)) !== null,
 }));
-// S6's xpLevelsOnFor: the member's xp-levels decision, as convex/progression/xpLevels.ts decides it.
-vi.mock("../progression/xpLevels.ts", async (original) => ({ ...(await original<object>()), xpLevelsOnFor: (ctx: QueryContext, member: MemberId) => memberDecision(ctx, xpLevels, member) }));
 
 /** Tuesday 13 October 2026, 10:00 UTC, in the week of Monday 12 October. */
 const tuesday = Date.UTC(2026, 9, 13, 10);
-const backend = useTestBackend({ now: tuesday });
+const backend = useTestBackend({ now: tuesday, registry: { ...serviceRegistry, jobs: new Map([...serviceRegistry.jobs, [publishHomeJob.name, publishHomeJob]]) } });
 
 afterEach(() => {
   vi.unstubAllEnvs();
 });
 
 describe("the week turn reaches the member", () => {
-  // Waits on S5: today it ends in S5's republish stub, which only the drawn week reaches. Once S5 lands it passes, and
-  // stillWaiting fails it so S5 makes it a plain test.
+  // Waits on S5: today it ends in S5's publishHome stub, which only the drawn week's republish reaches. Once S5 lands
+  // it passes, and stillWaiting fails it so S5 makes it a plain test and drops the registry above.
   test("the hourly sweep draws an onboarded member's week and their App Home shows it (waits on S5)", async () => {
     const t = backend();
     vi.stubEnv("POSTHOG_PROJECT_TOKEN", projectToken);
@@ -59,6 +57,6 @@ describe("the week turn reaches the member", () => {
       expect(t.slack.homeShownTo("U_BOB"), "Bob's App Home was published").toBeDefined();
     });
 
-    expect(stoppedAt, "the drawn week refreshes the home, S5's stub").toBe("feedback.homes.republish");
+    expect(stoppedAt, "the drawn week publishes the home, S5's stub").toBe("slack.appHome.publishHome");
   });
 });
