@@ -285,7 +285,6 @@ export const landed = [
   "convex/slack/strandedJobs.ts",
   "convex/slack/thankYouNudge.ts",
   "convex/slack/userGroups.ts",
-  "convex/slack/verifyMember.ts",
   "convex/slack/webApi.ts",
   "convex/slack/welcome.ts",
   "convex/slack/welcomeNudge.ts",
