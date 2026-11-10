@@ -13,6 +13,8 @@ import { jobs } from "../db/schema/index.ts";
 import type { MessageRef } from "../engine/messageEvent.ts";
 import type { MutationContext, QueryContext } from "../operations.ts";
 import type { MemberId } from "../workspace/directory.ts";
+import { findsOnHug } from "./hoggies/draw.ts";
+import { drawSecret } from "./hoggies/drops.ts";
 import { turnedFindOf } from "./items/finds.ts";
 import { hypeWaitsForItsItem } from "./items/hypes.ts";
 import { earnItem, markTurned } from "./items/ledger.ts";
@@ -75,13 +77,31 @@ describe("the album's item jobs run on their events", () => {
     expect(await t.seed.all("items")).toEqual([]);
   });
 
-  // A rewarding hug and a rewarded quest check membership in S3's directory first, and a greeting that owes the welcome
-  // item earns it through S10's rarity caps. Each job ends in that body's stub, which proves the event reached the job
-  // that owes the item; once that stack lands, the job earns and its test fails, to be turned into the earning tests of
-  // the ported ledger files.
+  // A rewarding hug from a member draws its find from the hug alone, and the find is S8's own earning. The draw is the
+  // hug's secret hash, so the test picks one hug that finds and one that doesn't, as the draw answers them.
+  test("a rewarding hug earns its giver the day's hug find once when its draw finds one, and nothing when it doesn't", async () => {
+    const t = backend();
+    const alice = await t.member("U_ALICE");
+    const hugOn = (message: string): DomainEvent => ({ ...hug(alice, true), message: { ...ref, message } });
+    const draws: Record<"finds" | "misses", string[]> = { finds: [], misses: [] };
+    for (let n = 0; n < 500 && (draws.finds.length < 2 || draws.misses.length < 1); n++) {
+      const message = `1760000000.${String(n).padStart(6, "0")}`;
+      draws[(await findsOnHug({ secret: drawSecret(), member: alice, hug: `${ref.conversation}:${message}` })) ? "finds" : "misses"].push(message);
+    }
+    const earned = async () => (await t.seed.all("items")).map(({ member, source, key, reason }) => ({ member, source, key, reason }));
+
+    await t.published(hugOn(draws.misses[0]!));
+    expect(await earned()).toEqual([]);
+
+    for (const message of draws.finds.slice(0, 2)) await t.published(hugOn(message));
+    expect(await earned()).toEqual([{ member: alice, source: "hoggie", key: "hug-find:2026-10-13", reason: { kind: "hug" } }]);
+  });
+
+  // A rewarded quest earns its hoggie, and a greeting that owes the welcome item earns it, through S10's rarity caps.
+  // Each job ends in that stub, which proves the event reached the job that owes the item; once S10 lands, the job earns
+  // and its test fails, to be turned into the earning tests of the ported ledger files.
   const reaching = [
-    { name: "a rewarding hug reaches the find that pays it", stacks: ["S3"], event: (alice: MemberId) => hug(alice, true), stub: "workspace.directory.isMember" },
-    { name: "a rewarded quest reaches the hoggie it pays", stacks: ["S3"], event: (alice: MemberId) => quest(alice, "journey:first-thanks"), stub: "workspace.directory.isMember" },
+    { name: "a rewarded quest reaches the hoggie it pays", stacks: ["S10"], event: (alice: MemberId) => quest(alice, "journey:first-thanks"), stub: "album.hoggies.rarityCaps.earnHoggieItem" },
     { name: "a greeting that owes the welcome item reaches the body that earns it", stacks: ["S10"], event: (alice: MemberId) => greeting(alice, true), stub: "album.hoggies.rarityCaps.earnHoggieItem" },
   ] as const;
   for (const { name, stacks, event, stub } of reaching) {
