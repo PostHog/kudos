@@ -206,6 +206,27 @@ describe("the history pages and resumes", () => {
   });
 });
 
+describe("restarted as recovery restarts it, the history counts nothing twice", () => {
+  // The data move restarts an unfinished history from the start of its phase, keeping the hug it was in (S18 18.3):
+  // safe only because each sticker, award and hug person is recorded once.
+  test.each<{ restart: string; at: Partial<Doc<"albumHistory">> }>([
+    { restart: "from the start of the awards", at: { phase: "kudos" } },
+    { restart: "from the start of the hugs, in the middle of a hug", at: { phase: "hugs", hug: "h1" as Id<"hugs">, hugPeopleAfter: "m_hugged010" as MemberId } },
+  ])("$restart", async ({ at }) => {
+    const kudos = thanks(alice, 7, bob, carol);
+    thanks(dana, 3, alice);
+    hug(carol, Array.from({ length: hugPeoplePerHistoryPage + 5 }, (_, index) => `m_hugged${String(index).padStart(3, "0")}` as MemberId), kudos);
+    await runTheHistory();
+    const before = await everythingTallied();
+
+    await t.seed.patch("albumHistory", (await historyRow())._id, { ...at, cursor: null, done: false });
+    await mutation((ctx) => ctx.jobs.enqueue(recordAlbumHistoryJob, { workspace: "T1" }));
+    await settle();
+
+    expect(await everythingTallied()).toEqual(before);
+  });
+});
+
 describe("what the history tallies", () => {
   test("pairs keep the first thanks and the wordiest kudos; weeks count each side and the days given on", async () => {
     thanks(alice, 4, bob, { at: start - 2 * minute });
@@ -323,6 +344,13 @@ async function weekOf(member: MemberId): Promise<Doc<"weekTallies">> {
   const week = (await t.seed.all("weekTallies")).find((tally) => tally.member === member && tally.week === theWeek);
   if (!week) throw new Error(`No week tally for ${member}`);
   return week;
+}
+
+async function everythingTallied() {
+  const tables = ["albumStickers", "pairTallies", "weekTallies", "talliedAwards", "talliedHugs", "thoughtfulBoardTallies", "thoughtfulGiverCounts"] as const;
+  const all: Record<string, unknown[]> = {};
+  for (const table of tables) all[table] = (await t.seed.all(table)).map(({ _id, _creationTime, ...fields }) => fields).toSorted((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+  return all;
 }
 
 async function argsOfJobs(name: string) {

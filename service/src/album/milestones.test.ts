@@ -5,12 +5,13 @@
 // The directory's pages and chat users (S3), the hoggie collection (S10), team pages (S10), the tier items (S8) and the
 // given messages (S4) are still stubs in the module map. Here they read a world the test gives, through the map's own
 // signatures, so this file proves the album's side today. The faithful port of convex/album/milestones.test.ts waits on
-// those stacks.
+// those stacks. The backfills run as the worker runs them: one job enqueued, and each job enqueues the next.
 import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { useTestBackend, type TestBackend } from "../../testing/backend.ts";
 import { toDocument } from "../db/documents.ts";
 import { jobs } from "../db/schema/service.ts";
+import type { MutationJob } from "../jobs/define.ts";
 import type { MutationContext, QueryContext } from "../operations.ts";
 import type { MemberId } from "../workspace/directory.ts";
 import { milestoneCatalogue } from "./milestoneCatalogue.ts";
@@ -20,9 +21,10 @@ import {
   membersPerMilestonePage,
   milestonesOf,
   recordMilestonesAfterAHoggieDrop,
-  recordMilestonesInWorkspace,
+  recordMilestonesInWorkspaceJob,
   recordMilestonesOf,
   recordMilestonesOfStickerHolders,
+  recordMilestonesOfStickerHoldersJob,
   tiersEarnedBy,
 } from "./milestones.ts";
 import { anEmptyWeek } from "./tallies.ts";
@@ -34,14 +36,23 @@ const world = vi.hoisted(() => ({
   pagesRead: [] as string[],
   items: [] as Array<{ member: string; milestone: string; tier: string; at: number }>,
   given: null as null | Array<{ created: number; awards: Array<{ award: string }>; annotations: Record<string, unknown> }>,
+  // The directory's cursors are opaque, as Convex's are: each names where its page ended, and a made-up one is refused.
+  cursors: new Map<string, number>(),
+  cursorsRead: [] as Array<string | null>,
 }));
 
 vi.mock("../workspace/directory.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../workspace/directory.ts")>()),
   membersPageIn: async (_ctx: unknown, workspace: string, cursor: string | null, numItems: number) => {
+    world.cursorsRead.push(cursor);
     const members = world.members.filter((each) => each.workspace === workspace).map(({ member }) => member);
-    const from = cursor === null ? 0 : Number(cursor);
-    return { members: members.slice(from, from + numItems), continueCursor: from + numItems < members.length ? String(from + numItems) : null };
+    const from = cursor === null ? 0 : world.cursors.get(cursor);
+    if (from === undefined) throw new Error(`The directory never gave the cursor ${cursor}`);
+    const to = from + numItems;
+    if (to >= members.length) return { members: members.slice(from), continueCursor: null };
+    const next = `opaque-${world.cursors.size + 1}-${Math.random().toString(36).slice(2)}`;
+    world.cursors.set(next, to);
+    return { members: members.slice(from, to), continueCursor: next };
   },
   chatUserOf: async (_ctx: unknown, member: string) => {
     const found = world.members.find((each) => each.member === member);
@@ -96,6 +107,8 @@ beforeEach(() => {
   world.pagesRead.length = 0;
   world.items.length = 0;
   world.given = null;
+  world.cursors.clear();
+  world.cursorsRead.length = 0;
 });
 
 describe("a tier is earned once, with its item", () => {
@@ -169,15 +182,34 @@ describe("the backfills walk by cursor, a job a page", () => {
     }
     await holds(crowd[0]!, crowd[1]!);
 
-    await mutation((ctx) => recordMilestonesInWorkspace(ctx, { workspace: "T1", cursor: null }));
-    expect(await pending()).toEqual([{ name: "album.milestones.recordMilestonesInWorkspace", args: { workspace: "T1", cursor: String(membersPerMilestonePage) } }]);
-    await mutation((ctx) => recordMilestonesInWorkspace(ctx, { workspace: "T1", cursor: String(membersPerMilestonePage) }));
+    await enqueue(recordMilestonesInWorkspaceJob, { workspace: "T1", cursor: null });
+    const { ran } = await t.settle();
 
+    expect(ran.filter((name) => name === recordMilestonesInWorkspaceJob.name), "two pages of members").toHaveLength(2);
+    expect(world.cursorsRead, "the second job reads on from the cursor the directory gave").toEqual([null, [...world.cursors.keys()][0]]);
+    expect(ran.filter((name) => name === recordMilestonesOfStickerHoldersJob.name), "the holders' walk follows once: the holder, then the end").toHaveLength(2);
     const tiered = new Set((await t.seed.all("milestoneTiers")).map(({ member }) => member));
-    expect(tiered.size, "everyone but the one sticker holder").toBe(crowd.length - 1);
-    expect(tiered.has(crowd[0]!)).toBe(false);
-    expect(world.pagesRead, "the workspace walk reads no team page").toEqual([]);
-    expect((await pending()).at(-1)).toEqual({ name: "album.milestones.recordMilestonesOfStickerHolders", args: { workspace: "T1", after: null } });
+    expect(tiered, "everyone, the sticker holder by the holders' walk").toEqual(new Set(crowd));
+    expect(world.pagesRead, "only the holders' walk reads team pages, for the holder").toEqual([crowd[0]]);
+  });
+
+  test("restarted from its start, as recovery restarts it, the workspace walk earns nothing twice", async () => {
+    const crowd = Array.from({ length: membersPerMilestonePage + 5 }, (_, index) => `m_${String(index).padStart(2, "0")}` as MemberId);
+    for (const each of crowd) {
+      member(each, "T1");
+      await gaveThoughtfully(each, 1);
+    }
+    await holds(crowd[0]!, crowd[1]!);
+    await enqueue(recordMilestonesInWorkspaceJob, { workspace: "T1", cursor: null });
+    await t.settle();
+    const tiers = await t.seed.all("milestoneTiers");
+    const items = [...world.items];
+
+    await enqueue(recordMilestonesInWorkspaceJob, { workspace: "T1", cursor: null });
+    await t.settle();
+
+    expect(await t.seed.all("milestoneTiers")).toEqual(tiers);
+    expect(world.items).toEqual(items);
   });
 
   test("the holders' walk records one holder of the workspace a job, in member order, skipping other workspaces, and ends", async () => {
@@ -186,21 +218,14 @@ describe("the backfills walk by cursor, a job a page", () => {
       await holds(each as MemberId, bob);
     }
 
-    const walked: string[] = [];
-    let after: MemberId | null = null;
-    for (let job = 0; job < 5; job++) {
-      await mutation((ctx) => recordMilestonesOfStickerHolders(ctx, { workspace: "T1", after }));
-      walked.push(...world.items.splice(0).map(({ member }) => member));
-      const next = (await pending()).filter(({ name }) => name === "album.milestones.recordMilestonesOfStickerHolders").at(-1);
-      await clearJobs();
-      if (next === undefined) break;
-      after = (next.args as { after: MemberId }).after;
-    }
+    await enqueue(recordMilestonesOfStickerHoldersJob, { workspace: "T1", after: null });
+    const { ran } = await t.settle();
 
-    expect(walked).toEqual(["m_a", "m_c"]);
+    expect(world.items.map(({ member }) => member)).toEqual(["m_a", "m_c"]);
+    expect(ran.filter((name) => name === recordMilestonesOfStickerHoldersJob.name), "one job a holder, then the end").toHaveLength(3);
   });
 
-  test(`a job scans at most ${holdersScannedAMutation} holders of other workspaces, then hands on where it stopped`, async () => {
+  test(`a job scans at most ${holdersScannedAMutation} holders of other workspaces, then hands on where it stopped, and the next job goes on from there`, async () => {
     const others = Array.from({ length: holdersScannedAMutation + 1 }, (_, index) => `m_${String(index).padStart(3, "0")}` as MemberId);
     for (const each of others) {
       member(each, "T2");
@@ -211,6 +236,11 @@ describe("the backfills walk by cursor, a job a page", () => {
 
     expect(world.items).toEqual([]);
     expect(await pending()).toEqual([{ name: "album.milestones.recordMilestonesOfStickerHolders", args: { workspace: "T1", after: others[holdersScannedAMutation - 1] } }]);
+
+    member("m_t1" as MemberId, "T1");
+    await holds("m_t1" as MemberId, bob);
+    await t.settle();
+    expect(world.items.map(({ member }) => member), "the next job takes over where it stopped and finds the workspace's holder").toEqual(["m_t1"]);
   });
 });
 
@@ -255,6 +285,10 @@ function query<T>(handler: (ctx: QueryContext) => Promise<T>): Promise<T> {
   return t.query(handler);
 }
 
+function enqueue<Args, Input>(job: MutationJob<Args, Input>, args: Input) {
+  return mutation((ctx) => ctx.jobs.enqueue(job, args));
+}
+
 async function pending() {
   return t.query(async ({ tx }) => {
     const rows = await tx.select().from(jobs).where(eq(jobs.state, "pending"));
@@ -262,8 +296,3 @@ async function pending() {
   });
 }
 
-async function clearJobs() {
-  await t.run(async ({ tx }) => {
-    await tx.delete(jobs);
-  });
-}
