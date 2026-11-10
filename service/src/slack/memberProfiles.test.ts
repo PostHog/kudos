@@ -39,7 +39,7 @@ afterEach(() => {
 });
 
 describe("F1 F2: team_join and user_change keep a member's Slack profile in the directory", () => {
-  waitsOn(["S5", "S11"], "a member who joins is kept with their email, real name, display name and title", async () => {
+  test("a member who joins is kept with their email, real name, display name and title", async () => {
     const t = backend();
 
     await memberChanged(t, "team_join", { id: "U_ANN", profile: annsProfile });
@@ -47,7 +47,7 @@ describe("F1 F2: team_join and user_change keep a member's Slack profile in the 
     expect(await profileOf(t, "U_ANN")).toEqual(annStored);
   });
 
-  waitsOn(["S5", "S11"], "a newer user_change replaces a changed field and removes one Slack no longer gives", async () => {
+  test("a newer user_change replaces a changed field and removes one Slack no longer gives", async () => {
     const t = backend();
     await memberChanged(t, "team_join", { id: "U_ANN", profile: annsProfile }, { eventTs: earlierTs });
 
@@ -56,7 +56,7 @@ describe("F1 F2: team_join and user_change keep a member's Slack profile in the 
     expect(await profileOf(t, "U_ANN")).toEqual({ email: "ann.example@example.com", realName: "Ann Example" });
   });
 
-  waitsOn(["S5", "S11"], "a user_change older than the one the directory holds changes nothing", async () => {
+  test("a user_change older than the one the directory holds changes nothing", async () => {
     const t = backend();
     await memberChanged(t, "user_change", { id: "U_ANN", profile: annsProfile }, { eventTs: nowTs });
 
@@ -65,7 +65,7 @@ describe("F1 F2: team_join and user_change keep a member's Slack profile in the 
     expect(await profileOf(t, "U_ANN")).toEqual(annStored);
   });
 
-  waitsOn(["S5", "S11"], "a newer user_change that changes nothing the directory keeps, like a status, leaves the member's row as it was", async () => {
+  test("a newer user_change that changes nothing the directory keeps, like a status, leaves the member's row as it was", async () => {
     const t = backend();
     await memberChanged(t, "team_join", { id: "U_ANN", tz: "Europe/Berlin", profile: annsProfile }, { eventTs: earlierTs });
     const before = await directoryRowOf(t, "U_ANN");
@@ -75,7 +75,7 @@ describe("F1 F2: team_join and user_change keep a member's Slack profile in the 
     expect(await directoryRowOf(t, "U_ANN")).toEqual(before);
   });
 
-  waitsOn(["S5", "S11"], "a display name Slack leaves empty is not kept", async () => {
+  test("a display name Slack leaves empty is not kept", async () => {
     const t = backend();
 
     await memberChanged(t, "team_join", { id: "U_ANN", profile: { ...annsProfile, display_name: "", title: "" } });
@@ -113,7 +113,7 @@ describe("F1 F5: only a member holds a profile", () => {
     ["a bot", { id: "B_HELPER", is_bot: true, profile: annsProfile }],
     ["a person from another workspace", { id: "U_GUEST", team_id: "T_OTHER", profile: annsProfile }],
   ] as const) {
-    waitsOn(["S5", "S11"], `${who} is kept without one`, async () => {
+    test(`${who} is kept without one`, async () => {
       const t = backend();
 
       await memberChanged(t, "team_join", user);
@@ -122,7 +122,7 @@ describe("F1 F5: only a member holds a profile", () => {
     });
   }
 
-  waitsOn(["S5", "S11"], "a member who leaves keeps no profile, and one who rejoins gets it back from Slack", async () => {
+  test("a member who leaves keeps no profile, and one who rejoins gets it back from Slack", async () => {
     const t = backend();
     await memberChanged(t, "team_join", { id: "U_ANN", profile: annsProfile }, { eventTs: earlierTs });
 
@@ -148,7 +148,7 @@ describe("F3: the backfill's write fills every known member's profile from a use
     expect(await directoryRowOf(t, "U_CAROL")).toBeUndefined();
   });
 
-  waitsOn(["S5"], "a member event older than the backfill's page leaves the backfilled profile, and still applies its other fields", async () => {
+  test("a member event older than the backfill's page leaves the backfilled profile, and still applies its other fields", async () => {
     const t = backend();
     await aMember(t, "U_ANN", { asOf: now - 120_000, email: "old.ann@example.com" });
     await backfill(t, now, { U_ANN: annStored });
@@ -159,7 +159,7 @@ describe("F3: the backfill's write fills every known member's profile from a use
     expect((await directoryRowOf(t, "U_ANN"))?.timeZone).toBe("Europe/Berlin");
   });
 
-  waitsOn(["S5"], "a member event newer than the backfill's page replaces the backfilled profile", async () => {
+  test("a member event newer than the backfill's page replaces the backfilled profile", async () => {
     const t = backend();
     await aMember(t, "U_ANN", { asOf: earlier() });
     await backfill(t, now, { U_ANN: annStored });
@@ -204,7 +204,7 @@ describe("the directory keeps each member's Slack picture for the website", () =
   const largePicture = "https://avatars.example.com/ann-192.png";
   const smallPicture = "https://avatars.example.com/ann-72.png";
 
-  waitsOn(["S5", "S11"], "a member who joins is kept with the 192-pixel picture Slack gives", async () => {
+  test("a member who joins is kept with the 192-pixel picture Slack gives", async () => {
     const t = backend();
 
     await memberChanged(t, "team_join", { id: "U_ANN", profile: { image_72: smallPicture, image_192: largePicture } });
@@ -212,7 +212,7 @@ describe("the directory keeps each member's Slack picture for the website", () =
     expect(await pictureOf(t, "U_ANN")).toBe(largePicture);
   });
 
-  waitsOn(["S5", "S11"], "the 72-pixel picture stands in when Slack gives no 192-pixel one", async () => {
+  test("the 72-pixel picture stands in when Slack gives no 192-pixel one", async () => {
     const t = backend();
 
     await memberChanged(t, "team_join", { id: "U_ANN", profile: { image_72: smallPicture, image_192: "" } });
@@ -220,7 +220,7 @@ describe("the directory keeps each member's Slack picture for the website", () =
     expect(await pictureOf(t, "U_ANN")).toBe(smallPicture);
   });
 
-  waitsOn(["S5", "S11"], "a newer user_change replaces the picture, and one without a picture removes it", async () => {
+  test("a newer user_change replaces the picture, and one without a picture removes it", async () => {
     const t = backend();
     await memberChanged(t, "team_join", { id: "U_ANN", profile: { image_192: smallPicture } }, { eventTs: earlierTs });
     await memberChanged(t, "user_change", { id: "U_ANN", profile: { image_192: largePicture } }, { eventTs: nowTs });
@@ -232,7 +232,7 @@ describe("the directory keeps each member's Slack picture for the website", () =
     expect(await pictureOf(t, "U_ANN")).toBeUndefined();
   });
 
-  waitsOn(["S5", "S11"], "a picture that isn't an https address is not kept", async () => {
+  test("a picture that isn't an https address is not kept", async () => {
     const t = backend();
 
     await memberChanged(t, "team_join", { id: "U_ANN", profile: { image_192: "javascript:alert(1)", image_72: "http://avatars.example.com/ann-72.png" } });
@@ -240,7 +240,7 @@ describe("the directory keeps each member's Slack picture for the website", () =
     expect(await pictureOf(t, "U_ANN")).toBeUndefined();
   });
 
-  waitsOn(["S5", "S11"], "an https address without a host gives way to the 72-pixel picture", async () => {
+  test("an https address without a host gives way to the 72-pixel picture", async () => {
     const t = backend();
 
     await memberChanged(t, "team_join", { id: "U_ANN", profile: { image_192: "https://", image_72: smallPicture } });
