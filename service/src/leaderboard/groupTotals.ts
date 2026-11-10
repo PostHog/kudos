@@ -3,7 +3,7 @@
 import { awardsAttributedEventValidator } from "../bus/events.ts";
 import type { GroupId } from "../groups/groups.ts";
 import type { MemberId } from "../workspace/directory.ts";
-import { type Compared, type PeriodKey } from "./periods.ts";
+import type { Compared, PeriodKey } from "./periods.ts";
 import { z } from "zod";
 import type { Doc } from "../db/schema/index.ts";
 import type { MutationContext, QueryContext } from "../operations.ts";

@@ -4,7 +4,7 @@ import { memberGreetedEventValidator } from "../../bus/events.ts";
 import type { CrateKey } from "../hoggies/crateKey.ts";
 import type { MemberId } from "../../workspace/directory.ts";
 import type { DmLinks } from "../../feedback/dmLinks.ts";
-import { type WaitingCount } from "./ledger.ts";
+import type { WaitingCount } from "./ledger.ts";
 import type { Turned } from "./turn.ts";
 import { z } from "zod";
 import type { Id } from "../../db/columns.ts";
