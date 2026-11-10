@@ -1,10 +1,10 @@
 // The module map's skeleton of convex/progression/effects.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
 // notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
-import { type DayKey } from "../engine/allowance.ts";
-import { type AwardId } from "../engine/awards.ts";
+import type { DayKey } from "../engine/allowance.ts";
+import type { AwardId } from "../engine/awards.ts";
 import type { MemberId } from "../workspace/directory.ts";
 import type { GateDecision } from "./gate.ts";
-import { type BonusLine, type EffectsRecord, type Side, type EarlierAward } from "./progress.ts";
+import type { BonusLine, EffectsRecord, Side, EarlierAward } from "./progress.ts";
 import type { MutationContext, QueryContext } from "../operations.ts";
 import { notPorted } from "../notPorted.ts";
 
