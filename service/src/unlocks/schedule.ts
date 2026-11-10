@@ -1,7 +1,7 @@
 // The module map's skeleton of convex/unlocks/schedule.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
 // notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
 import { achievementsFlag } from "../achievements/achievementsFlag.ts";
-import { type Flag } from "../analytics/flags.ts";
+import type { Flag } from "../analytics/flags.ts";
 import { everyoneBoardFlag } from "../leaderboard/flag.ts";
 import { questsFlag } from "../quests/questsFlag.ts";
 import { skillTreeLevel } from "../progression/levels.ts";

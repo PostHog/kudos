@@ -2,7 +2,7 @@
 // notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
 import { hugGivenEventValidator, kudosGivenEventValidator } from "../bus/events.ts";
 import { messageRefValidator, type ChatUserId, type MessageRef, type WordSegment } from "../engine/messageEvent.ts";
-import { type MemberId } from "../workspace/directory.ts";
+import type { MemberId } from "../workspace/directory.ts";
 import { z } from "zod";
 import { zv } from "../values.ts";
 import type { MutationContext, QueryContext } from "../operations.ts";

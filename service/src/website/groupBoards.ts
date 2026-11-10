@@ -3,8 +3,8 @@
 import type { GroupId, GroupRef } from "../groups/groups.ts";
 import type { GroupsBoard } from "../leaderboard/groupsBoard.ts";
 import type { Standing } from "../leaderboard/totals.ts";
-import { type LeaderboardRow } from "./leaderboard.ts";
-import { type Denial } from "./memberQuery.ts";
+import type { LeaderboardRow } from "./leaderboard.ts";
+import type { Denial } from "./memberQuery.ts";
 
 export type GroupsBoardShown = GroupsBoard<GroupId>;
 

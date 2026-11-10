@@ -1,14 +1,14 @@
 // The module map's skeleton of convex/website/settings.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
 // notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
-import { type CompanyProfileSetting, type ProfileChoice } from "../companyProfiles/links.ts";
+import type { CompanyProfileSetting, ProfileChoice } from "../companyProfiles/links.ts";
 import type { MatchedBy } from "../companyProfiles/matcher.ts";
-import { type GroupChoice } from "../groups/pick.ts";
-import { type WeeklyPostSwitch } from "../leaderboard/mondayPost.ts";
-import { type MessageSetting } from "../messageSettings/messageSettings.ts";
-import { type WorkspaceSettingsPart } from "../workspace/workspaceSettings.ts";
-import { type VerifiedMember } from "./memberQuery.ts";
-import { type SettingsSection } from "./routes.ts";
-import { type FeaturePage } from "./unlockPath.ts";
+import type { GroupChoice } from "../groups/pick.ts";
+import type { WeeklyPostSwitch } from "../leaderboard/mondayPost.ts";
+import type { MessageSetting } from "../messageSettings/messageSettings.ts";
+import type { WorkspaceSettingsPart } from "../workspace/workspaceSettings.ts";
+import type { VerifiedMember } from "./memberQuery.ts";
+import type { SettingsSection } from "./routes.ts";
+import type { FeaturePage } from "./unlockPath.ts";
 import type { QueryContext } from "../operations.ts";
 import { notPorted } from "../notPorted.ts";
 

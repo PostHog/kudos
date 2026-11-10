@@ -1,9 +1,9 @@
 // The module map's skeleton of convex/album/items/turn.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
 // notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
-import { type HypeEmoji } from "../earnedEmojis.ts";
+import type { HypeEmoji } from "../earnedEmojis.ts";
 import type { TeamSticker } from "../records.ts";
-import { type PageOwner } from "../teamPages.ts";
-import { type Drop } from "../hoggies/drops.ts";
+import type { PageOwner } from "../teamPages.ts";
+import type { Drop } from "../hoggies/drops.ts";
 import type { AppliedReward } from "../../progression/rewards.ts";
 import type { MemberId } from "../../workspace/directory.ts";
 import type { UnlockedTier } from "../milestoneXp.ts";
