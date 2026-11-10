@@ -381,7 +381,6 @@ export const landed = [
   "convex/website/routes.ts",
   "convex/website/seen.ts",
   "convex/website/settings.ts",
-  "convex/website/signIn.ts",
   "convex/website/skillTree.ts",
   "convex/website/teammateKeys.ts",
   "convex/website/teamsJoiningIn.ts",
