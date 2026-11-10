@@ -1,10 +1,10 @@
 // Generated once from convex/schema.ts by tools/rewrite/drizzle; owned by hand from here on.
 import { sql } from "drizzle-orm";
-import { index, pgTable } from "drizzle-orm/pg-core";
-import { bool, creationTime, f64, i64, id, str, value, type Id } from "../columns.ts";
+import { index } from "drizzle-orm/pg-core";
+import { bool, creationTime, documentTable, f64, i64, id, type Id, str, value } from "../columns.ts";
 import { nullValued } from "../documents.ts";
 
-export const effectsRecords = pgTable(
+export const effectsRecords = documentTable(
   "effectsRecords",
   {
     _id: id(),
@@ -25,7 +25,7 @@ export const effectsRecords = pgTable(
   ],
 );
 
-export const rewardRecords = pgTable(
+export const rewardRecords = documentTable(
   "rewardRecords",
   {
     _id: id(),
@@ -50,7 +50,7 @@ export const rewardRecords = pgTable(
 );
 nullValued(rewardRecords, ["item"]);
 
-export const receivingGivers = pgTable(
+export const receivingGivers = documentTable(
   "receivingGivers",
   {
     _id: id(),
@@ -64,7 +64,7 @@ export const receivingGivers = pgTable(
   ],
 );
 
-export const effectsBackfill = pgTable(
+export const effectsBackfill = documentTable(
   "effectsBackfill",
   {
     _id: id(),
@@ -79,7 +79,7 @@ export const effectsBackfill = pgTable(
 );
 nullValued(effectsBackfill, ["cursor"]);
 
-export const memberProgress = pgTable(
+export const memberProgress = documentTable(
   "memberProgress",
   {
     _id: id(),
@@ -93,7 +93,7 @@ export const memberProgress = pgTable(
   ],
 );
 
-export const perksOwned = pgTable(
+export const perksOwned = documentTable(
   "perksOwned",
   {
     _id: id(),
@@ -108,7 +108,7 @@ export const perksOwned = pgTable(
   ],
 );
 
-export const perkPurchases = pgTable(
+export const perkPurchases = documentTable(
   "perkPurchases",
   {
     _id: id(),

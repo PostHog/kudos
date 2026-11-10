@@ -1,10 +1,10 @@
 // Generated once from convex/schema.ts by tools/rewrite/drizzle; owned by hand from here on.
 import { sql } from "drizzle-orm";
-import { index, pgTable } from "drizzle-orm/pg-core";
-import { bool, creationTime, f64, i64, id, str, value, type Id } from "../columns.ts";
+import { index } from "drizzle-orm/pg-core";
+import { bool, creationTime, documentTable, f64, i64, id, type Id, str, value } from "../columns.ts";
 import { nullValued } from "../documents.ts";
 
-export const welcomeNudges = pgTable(
+export const welcomeNudges = documentTable(
   "welcomeNudges",
   {
     _id: id(),
@@ -17,7 +17,7 @@ export const welcomeNudges = pgTable(
   ],
 );
 
-export const indicators = pgTable(
+export const indicators = documentTable(
   "indicators",
   {
     _id: id(),
@@ -34,7 +34,7 @@ export const indicators = pgTable(
 );
 nullValued(indicators, ["emoji"]);
 
-export const privateReplies = pgTable(
+export const privateReplies = documentTable(
   "privateReplies",
   {
     _id: id(),
@@ -56,7 +56,7 @@ export const privateReplies = pgTable(
   ],
 );
 
-export const oneReplies = pgTable(
+export const oneReplies = documentTable(
   "oneReplies",
   {
     _id: id(),
@@ -73,7 +73,7 @@ export const oneReplies = pgTable(
   ],
 );
 
-export const grantReplies = pgTable(
+export const grantReplies = documentTable(
   "grantReplies",
   {
     _id: id(),
@@ -89,7 +89,7 @@ export const grantReplies = pgTable(
   ],
 );
 
-export const sentNotices = pgTable(
+export const sentNotices = documentTable(
   "sentNotices",
   {
     _id: id(),
@@ -102,7 +102,7 @@ export const sentNotices = pgTable(
   ],
 );
 
-export const celebratedLevels = pgTable(
+export const celebratedLevels = documentTable(
   "celebratedLevels",
   {
     _id: id(),
@@ -118,7 +118,7 @@ export const celebratedLevels = pgTable(
   ],
 );
 
-export const publicReplies = pgTable(
+export const publicReplies = documentTable(
   "publicReplies",
   {
     _id: id(),
@@ -142,7 +142,7 @@ export const publicReplies = pgTable(
   ],
 );
 
-export const tierNotices = pgTable(
+export const tierNotices = documentTable(
   "tierNotices",
   {
     _id: id(),
@@ -158,7 +158,7 @@ export const tierNotices = pgTable(
   ],
 );
 
-export const tierSummaries = pgTable(
+export const tierSummaries = documentTable(
   "tierSummaries",
   {
     _id: id(),
@@ -173,7 +173,7 @@ export const tierSummaries = pgTable(
   ],
 );
 
-export const homes = pgTable(
+export const homes = documentTable(
   "homes",
   {
     _id: id(),
@@ -187,7 +187,7 @@ export const homes = pgTable(
   ],
 );
 
-export const homeSelections = pgTable(
+export const homeSelections = documentTable(
   "homeSelections",
   {
     _id: id(),
@@ -201,7 +201,7 @@ export const homeSelections = pgTable(
   ],
 );
 
-export const thankYouNudges = pgTable(
+export const thankYouNudges = documentTable(
   "thankYouNudges",
   {
     _id: id(),
