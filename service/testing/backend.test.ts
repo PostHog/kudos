@@ -1,7 +1,8 @@
 // The test backend, driven from outside as a ported test drives it: a signed Slack event in, the fake Slack's channel
 // and the published events out.
 import { eq } from "drizzle-orm";
-import { expect, test } from "vitest";
+import { Hono } from "hono";
+import { describe, expect, test } from "vitest";
 import { z } from "zod";
 import { jobs } from "../src/db/schema/service.ts";
 import { actionJob, mutationJob } from "../src/jobs/define.ts";
@@ -30,10 +31,16 @@ const deliver = actionJob("testing.deliver", z.object({}), async () => {
 const broken = mutationJob("testing.broken", z.object({}), async () => {
   throw new Error("a defect in the job");
 });
+// An action still working when its test ends, which then reaches a stub through a job it enqueues.
+const lingering = actionJob("testing.lingering", z.object({}), async (ctx) => {
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  await ctx.run.mutation("testing.lingering.enqueue", async ({ jobs }) => void (await jobs.enqueue(replyPrivately, {})));
+});
 const registry = createRegistry({
   testing: {
-    jobs: [remember, replyPrivately, deliver, broken],
+    jobs: [remember, replyPrivately, deliver, broken, lingering],
     subscribers: [{ event: "noted", job: postBack }],
+    routes: ({ clock }) => new Hono().get("/testing-domain/now", (c) => c.json({ now: clock.now() })),
     slack: {
       events: {
         message: async (ctx, { event }) => {
@@ -98,6 +105,35 @@ test("the seeder, run and query share the backend's database and its clock", asy
   expect(await t.seed.get("allowanceSpending", id), "the seeded row").toMatchObject({ giver: "member-1", spent: 2, _creationTime: Date.UTC(2026, 9, 13, 10) });
   expect(await t.query(async ({ now }) => now), "a query's now").toBe(Date.UTC(2026, 9, 13, 10, 1));
   expect(Math.floor(inserted), "a mutation's new row").toBe(Date.UTC(2026, 9, 13, 10, 1));
+});
+
+test("the app serves the domains' registered website routes, as the service mounts them at boot", async () => {
+  const t = backend({ now: Date.UTC(2026, 9, 13, 10) });
+
+  const response = await t.app.request("/testing-domain/now");
+
+  expect(response.status, "the route's status").toBe(200);
+  expect(await response.json(), "the route's answer, on the backend's clock").toEqual({ now: Date.UTC(2026, 9, 13, 10) });
+});
+
+describe("a test's worker stops with its test", () => {
+  test("a job still running when its test ends finishes within that test", async () => {
+    const t = backend();
+    await t.run(async (ctx) => void (await ctx.jobs.enqueue(lingering, {})));
+
+    const settled = await t.worker.settle(1);
+
+    expect(settled.done, "settle's budget runs out while the job runs").toBe(false);
+  });
+
+  test("so the next test starts with nothing the last one left running", async () => {
+    const t = backend();
+    await new Promise((resolve) => setTimeout(resolve, 600));
+
+    const settled = await t.settle();
+
+    expect(settled.ran, "what the next test's settle ran").toEqual([]);
+  });
 });
 
 test("the PostHog fake answers fetch as well", async () => {
