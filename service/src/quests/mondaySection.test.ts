@@ -2,21 +2,18 @@
 // nothing off the Monday path, before the member's quests start, or with the quests message turned off; under
 // two-quests it draws any side due and answers the week's two quests with the workspace's kudos emoji; otherwise the
 // onboarding quests while one is unfinished, then the week's drawn quests, drawing the week when it is due.
-// The bodies other stacks still stub are stood in over the rows the tests write, as today's code reads them: S6's
-// xp-levels decision, and the message settings' placeOf (by_member_kind, then the member's progress settings).
+// S6's xp-levels decision runs as main has it. The one body still stubbed on main, the message settings' placeOf, is
+// stood in over the rows the tests write, as today's code reads it (by_member_kind, then the member's progress settings).
 import { and, eq } from "drizzle-orm";
 import { describe, expect, test, vi } from "vitest";
-import { memberDecision } from "../analytics/flags.ts";
 import { createClock } from "../clock.ts";
 import { indexOrder } from "../db/indexOrder.ts";
 import { messageSettings, progressSettings } from "../db/schema/index.ts";
 import { unique } from "../db/unique.ts";
-import type { AwardId } from "../engine/awards.ts";
 import type { Log } from "../log.ts";
 import type { MessageKind, MessagePlace } from "../messageSettings/kinds.ts";
 import { directMessageKinds, placesChosenFrom } from "../messageSettings/kinds.ts";
 import { createOperations, type QueryContext } from "../operations.ts";
-import { xpLevels } from "../progression/xpLevels.ts";
 import type { MemberId } from "../workspace/directory.ts";
 import { useTestDatabase } from "../../testing/database.ts";
 import { definitionsStored, offForEveryone, onForEveryone, postHogDeciding } from "../../testing/flags.ts";
@@ -28,8 +25,6 @@ import { onboardingSteps } from "./onboarding.ts";
 import { questOf, withoutFullStop, type QuestId } from "./pool.ts";
 import { progressUnitOf } from "./progress.ts";
 
-// S6's xpLevelsOnFor: the member's xp-levels decision, as convex/progression/xpLevels.ts decides it.
-vi.mock("../progression/xpLevels.ts", async (original) => ({ ...(await original<object>()), xpLevelsOnFor: (ctx: QueryContext, member: MemberId) => memberDecision(ctx, xpLevels, member) }));
 // The message settings' placeOf, as convex/messageSettings/messageSettings.ts reads it: the member's row for the kind
 // (by_member_kind, unique), else today's default from their progress settings (by_member, unique).
 vi.mock("../messageSettings/messageSettings.ts", async (original) => ({

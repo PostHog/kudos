@@ -3,11 +3,10 @@
 // registration's subscribers, and the hourly sweep draws the week's side quests. The reads are today's nextQuestOf and
 // twoQuestsOf, at the operation's clock. Today's file reads the two quests through the website's quests read, which is
 // S17's: its rows are asserted here on twoQuestsOf, and the website's own fields (hint, item, drawn) wait on S17.
-// The bodies other stacks still stub are stood in over the rows the tests write, as today's code reads them: welcome's
-// isWelcomed and S6's xp-levels decision; S5's republish does nothing here.
+// The one body still stubbed on main the tests reach, welcome's isWelcomed, is stood in over the rows the tests write,
+// as today's code reads it; S6's xp-levels decision and S5's republish run as main has them.
 import { eq } from "drizzle-orm";
 import { describe, expect, test, vi } from "vitest";
-import { memberDecision } from "../analytics/flags.ts";
 import type { HugGivenEvent, KudosGivenEvent } from "../bus/events.ts";
 import { createClock } from "../clock.ts";
 import { indexOrder } from "../db/indexOrder.ts";
@@ -17,7 +16,6 @@ import type { AwardId } from "../engine/awards.ts";
 import { createWorker } from "../jobs/worker.ts";
 import type { Log } from "../log.ts";
 import { createOperations, type QueryContext } from "../operations.ts";
-import { xpLevels } from "../progression/xpLevels.ts";
 import { createRegistry } from "../registration.ts";
 import { mondayQuestsOf } from "../website/mondayQuests.ts";
 import type { MemberId } from "../workspace/directory.ts";
@@ -36,10 +34,6 @@ vi.mock("../welcome/welcome.ts", async (original) => ({
   isWelcomed: async (ctx: QueryContext, member: MemberId): Promise<boolean> =>
     unique("welcomes", await ctx.tx.select({ _id: welcomes._id }).from(welcomes).where(eq(welcomes.member, member)).orderBy(...indexOrder(welcomes, ["member"]).orderBy()).limit(2)) !== null,
 }));
-// S6's xpLevelsOnFor: the member's xp-levels decision, as convex/progression/xpLevels.ts decides it.
-vi.mock("../progression/xpLevels.ts", async (original) => ({ ...(await original<object>()), xpLevelsOnFor: (ctx: QueryContext, member: MemberId) => memberDecision(ctx, xpLevels, member) }));
-// S5's republish: still a stub, so it does nothing here.
-vi.mock("../feedback/homes.ts", async (original) => ({ ...(await original<object>()), republish: async () => {} }));
 
 const database = useTestDatabase();
 const quiet: Log = { info: () => {}, error: () => {} };
