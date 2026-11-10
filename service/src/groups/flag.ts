@@ -1,18 +1,20 @@
-// The module map's skeleton of convex/groups/flag.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
-// notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
-import type { Flag } from "../analytics/flags.ts";
-import type { MemberId } from "../workspace/directory.ts";
+// The `groups` flag: who sees groups, recording the exposure where a member meets them.
+// Today's convex/groups/flag.ts over the service's transaction.
 import { z } from "zod";
+import { exposed, memberDecision, type Flag } from "../analytics/flags.ts";
 import type { MutationContext } from "../operations.ts";
-import { notPorted } from "../notPorted.ts";
+import { lookup, type MemberId } from "../workspace/directory.ts";
 
 export const groupsFlag = { key: "groups", safeDefault: false, values: [false, true] } as const satisfies Flag<boolean>;
 
 export async function groupsApplyTo(ctx: MutationContext, member: MemberId): Promise<boolean> {
-  throw notPorted("groups.flag.groupsApplyTo");
+  const applies = await memberDecision(ctx, groupsFlag, member);
+  await exposed(ctx, groupsFlag, member, applies);
+  return applies;
 }
 
 export const exposeGroupsArgs = z.strictObject({ workspace: z.string(), user: z.string() });
-export async function exposeGroups(ctx: MutationContext, args: z.infer<typeof exposeGroupsArgs>): Promise<void> {
-  throw notPorted("groups.flag.exposeGroups");
+export async function exposeGroups(ctx: MutationContext, { workspace, user }: z.infer<typeof exposeGroupsArgs>): Promise<void> {
+  const person = await lookup(ctx, workspace, user);
+  if (person?.kind === "member") await groupsApplyTo(ctx, person.member);
 }
