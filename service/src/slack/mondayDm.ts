@@ -23,7 +23,8 @@ export async function sendMondayDm(ctx: ActionContext, { dm, attempt }: z.infer<
   const message = await ctx.run.mutation("mondayDm.mondayDm.startMondayDm", (m) => startMondayDm(m, { dm, attempt }));
   if (message === null) return;
   const sent = await postMondayDm(ctx, message);
-  if (isRateLimited(sent) && attempt < triesAtMost) {
+  // A held call never reached Slack, so it keeps its attempt and waits out the hold, as `tryAtMostThreeTimes` does.
+  if (isRateLimited(sent) && (sent.kind === "held" || attempt < triesAtMost)) {
     const retry = retryAfter(sent, attempt, ctx.clock.now())!;
     await ctx.run.mutation("mondayDm.mondayDm.mondayDmLater", (m) => mondayDmLater(m, { dm, attempt, retry }));
     return;

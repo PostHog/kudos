@@ -25,6 +25,7 @@ import type { MessagePlace } from "../messageSettings/kinds.ts";
 import { createOperations, type Operations } from "../operations.ts";
 import type { QuestsSection } from "../quests/mondaySection.ts";
 import { serviceRegistry } from "../registry.ts";
+import { hold } from "../slack/rateLimits.ts";
 import type { MemberId } from "../workspace/directory.ts";
 import { resumeMondayQuests, stopMondayQuests } from "./stop.ts";
 
@@ -348,6 +349,20 @@ describe("the Monday DM's try", () => {
     expect(slack.messagesIn("U_ANN")).toEqual([]);
     expect(await t.bookedTries()).toEqual([]);
     expect((await t.dms())[0]).toMatchObject({ state: "failed", tries: 3 });
+  });
+
+  test("a last try held back by another call's rate limit never reached Slack: it waits out the hold and goes out", async () => {
+    const t = await setUp("2026-10-14T10:00:00Z");
+    await t.person("U_ANN", "Europe/Berlin");
+    slack.answering("chat.postMessage", rateLimitedFor(30), rateLimitedFor(30));
+    await t.sweepAt("2026-10-14T10:00:00Z");
+
+    // Two refusals put the third try at 07:01:00; another delivery's refusal then holds the workspace until 07:05:00.
+    await t.settleUntil("2026-10-19T07:00:45Z");
+    await t.operations.mutation("slack.rateLimits.hold", (m) => hold(m, { workspace: "T1", method: "chat.postMessage", until: Date.parse("2026-10-19T07:05:00Z") }));
+    await t.settleUntil("2026-10-19T12:00:00Z");
+    expect(postsTo("U_ANN").map(({ at }) => iso(at))).toEqual(["2026-10-19T07:05:00.000Z"]);
+    expect((await t.dms())[0]).toMatchObject({ state: "sent", tries: 3 });
   });
 
   test("a DM whose answer is lost is not sent again: it may have landed", async () => {
