@@ -11,6 +11,7 @@ import type pg from "pg";
 import { decodeStored, encodeStored, parseExport, type Value } from "../db/codec.ts";
 import { fromDocument } from "../db/documents.ts";
 import * as schema from "../db/schema/index.ts";
+import * as service from "../db/schema/service.ts";
 import { openSnapshot, type Snapshot } from "./snapshot.ts";
 
 type Doc = { [field: string]: Value };
@@ -30,9 +31,13 @@ const loadTables = new Set<unknown>([schema.loadState, schema.loadChunks, schema
 export const appTables: PgTable[] = (Object.values(schema) as unknown[]).filter(
   (table): table is PgTable => is(table, PgTable) && !loadTables.has(table),
 );
-/** The data model's tables by name: a root table loads into one of these; `archive` and `files` are the service's own. */
-const serviceTables = new Set<unknown>([schema.archive, schema.files]);
-const tablesByName = new Map(appTables.filter((table) => !serviceTables.has(table)).map((table) => [getTableName(table), table]));
+/**
+ * The data model: the tables generated from convex/schema.ts, every app table but the service's own (`archive`, `files`,
+ * jobs, crons, flag state). A root table loads into one of these by name; any other goes to the archive.
+ */
+const serviceTables = new Set<unknown>(Object.values(service));
+export const dataModelTables: PgTable[] = appTables.filter((table) => !serviceTables.has(table));
+const tablesByName = new Map(dataModelTables.map((table) => [getTableName(table), table]));
 
 /** A stored file is read whole into one row; one larger than this stops the load rather than the process. */
 export const maxFileBytes = 32 * 1024 * 1024;
@@ -53,7 +58,7 @@ export async function loadSnapshot(pool: pg.Pool, client: pg.PoolClient, chunks:
   }
 }
 
-interface Step {
+export interface Step {
   path: string;
   /** Where the entry's namespace starts: empty for the root, such as `_components/posthog/` for a component. */
   prefix: string;
@@ -65,7 +70,8 @@ interface Step {
   files?: Map<string, string>;
 }
 
-function planEntries(snapshot: Snapshot): Step[] {
+/** The snapshot's entries in load order, `_tables` last; an entry the loader doesn't know stops it. */
+export function planEntries(snapshot: Snapshot): Step[] {
   const steps: Step[] = [];
   const inventories: Step[] = [];
   for (const path of [...snapshot.entries.keys()].sort()) {
