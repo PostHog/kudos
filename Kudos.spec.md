@@ -83,10 +83,10 @@ Peer recognition for Slack on one Convex deployment per workspace; the product r
 - route POST /api/query/*: the website reads one of the route table's reads, named by its former Convex path, for the member the request signs in as
   handler: apiTransport in service/src/website/api/transport.ts
   trust: browser
-  control: none — a request without the x-hedgehug-api header, as anything but JSON, or marked cross-site by the browser gets 403, a body over 64 KiB gets 413, and arguments the route's shape refuses, an unknown field at any depth included, get 400, before anyone is looked up; only a member today's check verifies reaches the read, and anyone else gets the check's denial (service/src/website/api/transport.test.ts)
+  control: none — a request without the x-hedgehug-api header, as anything but JSON, or marked cross-site by the browser gets 403, a body over 64 KiB gets 413, and arguments the route's shape refuses, an unknown field at any depth included, get 400, before anyone is looked up; the person is whoever the edge's single sign-on names by email in x-auth-request-email, which the app drops on every other path, mapped to a member through the directory or else Slack, and only a member today's check verifies reaches the read, while anyone else gets the check's denial (service/src/website/api/transport.test.ts, service/src/website/identity.test.ts)
 - route POST /api/mutation/*: the website sends one of the route table's commands, named by its former Convex path, for the member the request signs in as
   handler: apiTransport in service/src/website/api/transport.ts
   trust: browser
-  control: none — the same guard as the reads: no cross-site form or link can send the header or the JSON, so no other site runs a command; only a member the website admits reaches the command, in one transaction that writes nothing on a denial (service/src/website/api/transport.test.ts)
+  control: none — the same guard as the reads: no cross-site form or link can send the header or the JSON, so no other site runs a command; the person is the one the edge names, as for the reads, and only a member the website admits reaches the command, in one transaction that writes nothing on a denial (service/src/website/api/transport.test.ts, service/src/website/identity.test.ts)
 
 ## invariants
