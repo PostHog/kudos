@@ -27,7 +27,6 @@ const standIn = vi.hoisted(() => ({
   groupsAvailable: true,
   announcementChannel: "C_ANNOUNCE" as string | null,
   givers: 4,
-  unfeatured: vi.fn(async (_ctx: unknown, _workspace: string, _week: string) => {}),
 }));
 
 vi.mock("../progression/xpLevels.ts", async (original) => ({ ...(await original<object>()), xpLevelsShownIn: async () => standIn.xpLevelsShown }));
@@ -48,7 +47,8 @@ vi.mock("./groupBoards.ts", async (original) => ({
     mostImproved: { group: "owls", name: "Owls", gain: 2 },
   }),
 }));
-vi.mock("./newGivers.ts", async (original) => ({ ...(await original<object>()), unfeatureNewGivers: standIn.unfeatured }));
+// Giving back a can't-post week's featured new givers is S11's write; its removal is proven once it lands.
+vi.mock("./newGivers.ts", async (original) => ({ ...(await original<object>()), unfeatureNewGivers: async () => {} }));
 vi.mock("./totals.ts", async (original) => ({ ...(await original<object>()), giversIn: async () => standIn.givers }));
 
 const database = useTestDatabase();
@@ -70,7 +70,6 @@ beforeEach(() => {
   vi.stubEnv("POSTHOG_PERSONAL_API_KEY", "phx-test");
   vi.spyOn(console, "warn").mockImplementation(() => {});
   Object.assign(standIn, { xpLevelsShown: true, groupsAvailable: true, announcementChannel: "C_ANNOUNCE", givers: 4 });
-  standIn.unfeatured.mockClear();
   slack = new FakeSlack().withMember("U_ALICE");
   posts = [];
   joins = [];
@@ -284,7 +283,6 @@ describe("GB28, 12.1: the weekly post goes out at most once a week", () => {
     await t.settleUntil(Date.parse("2026-10-26T08:00:00Z"));
 
     expect((await t.claims()).map(({ outcome }) => outcome)).toEqual(["cant-post", "posted"]);
-    expect(standIn.unfeatured.mock.calls.map(([, workspace, week]) => [workspace, week]), "the week's featured new givers are given back").toEqual([["T1", "2026-10-19"]]);
   });
 });
 
