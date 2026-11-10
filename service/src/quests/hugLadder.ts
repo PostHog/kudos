@@ -1,7 +1,7 @@
 // The hug ladder: Give 3, 5 and 10 hugs, counted from the member's first hug under two-quests. Today's
 // convex/quests/hugLadder.ts over the service's transaction, with one change: the ladder counts every hug given under
 // two-quests whatever order the hugs arrive in, where today's ladder lost a hug that arrived after a later one.
-import { and, eq, gt, gte, lt } from "drizzle-orm";
+import { and, eq, gte, lt } from "drizzle-orm";
 import { indexOrder } from "../db/indexOrder.ts";
 import { hugLadders, questRecognitions } from "../db/schema/index.ts";
 import { rewardKeyOf } from "./crates.ts";
@@ -30,14 +30,14 @@ export function hugLadderTargetOf(step: HugLadderStep): number {
 /**
  * Starts the member's ladder at a hug just recorded under two-quests, or moves its start back to that hug when it was
  * given before the start: so the ladder's start is the earliest such hug, whatever order they arrived in. It never
- * reaches back over a hug recorded while two-quests was off: every hug recorded under two-quests passes here, so a hug
- * between this one and the start was recorded without it, and this hug then counts for nothing, as the hugs before
- * two-quests do.
+ * reaches back over a hug recorded while two-quests was off: every hug recorded under two-quests passes here, so any
+ * other hug from this one's moment up to the start, the same moment included, was recorded without it, and this hug then
+ * counts for nothing, as the hugs before two-quests do. Runs after `recognize` recorded the hug.
  */
 export async function startTheHugLadder(ctx: MutationContext, member: MemberId, at: number): Promise<void> {
   const ladder = await hugLadderOf(ctx, member);
   if (ladder !== null && ladder.at <= at) return;
-  if (await hugBetween(ctx, member, at, ladder?.at ?? null)) return;
+  if (await anotherHugFrom(ctx, member, at, ladder?.at ?? null)) return;
   if (ladder === null) await ctx.tx.insert(hugLadders).values({ ...ctx.newRow(), member, at });
   else await ctx.tx.update(hugLadders).set({ at }).where(eq(hugLadders._id, ladder._id));
 }
@@ -73,15 +73,18 @@ async function hugLadderOf(ctx: QueryContext, member: MemberId) {
   return rows[0] ?? null;
 }
 
-/** Whether the member gave a hug after `after` and before `before`, or at any time after when `before` is `null`. */
-async function hugBetween(ctx: QueryContext, member: MemberId, after: number, before: number | null): Promise<boolean> {
-  const [hug] = await ctx.tx
+/**
+ * Whether the member gave a hug besides the one just recorded at `from`, at `from` or later and before `before`, or at
+ * any time from `from` when `before` is `null`. The hug just recorded is one of them, so it takes a second.
+ */
+async function anotherHugFrom(ctx: QueryContext, member: MemberId, from: number, before: number | null): Promise<boolean> {
+  const hugs = await ctx.tx
     .select({ _id: questRecognitions._id })
     .from(questRecognitions)
-    .where(and(eq(questRecognitions.giver, member), eq(questRecognitions.source, "hug"), gt(questRecognitions.at, after), before === null ? undefined : lt(questRecognitions.at, before)))
+    .where(and(eq(questRecognitions.giver, member), eq(questRecognitions.source, "hug"), gte(questRecognitions.at, from), before === null ? undefined : lt(questRecognitions.at, before)))
     .orderBy(...byGiverSourceAt.orderBy())
-    .limit(1);
-  return hug !== undefined;
+    .limit(2);
+  return hugs.length > 1;
 }
 
 /** The member's first hugs from `start`, by when each was given. */

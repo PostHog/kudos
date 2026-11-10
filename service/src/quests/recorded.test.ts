@@ -1,8 +1,14 @@
 // What Quests records over the service's transaction: each member's quest start, each recognition once from that start,
 // each finish once, and the judged marker of each award. Today's convex/quests start, recognitions, finishes, finish and
 // judged modules; their harness tests reach S4's giving and wait for it (the test-port ledger).
+import { asc, eq } from "drizzle-orm";
 import { describe, expect, test } from "vitest";
+import { z } from "zod";
+import { subscribersOf, type Subscription } from "../bus/publish.ts";
 import { createClock } from "../clock.ts";
+import { toDocument } from "../db/documents.ts";
+import { jobs } from "../db/schema/index.ts";
+import { mutationJob } from "../jobs/define.ts";
 import type { HugGivenEvent, KudosGivenEvent } from "../bus/events.ts";
 import type { AwardId } from "../engine/awards.ts";
 import type { Log } from "../log.ts";
@@ -24,10 +30,22 @@ const alice = "member-alice" as MemberId;
 const bob = "member-bob" as MemberId;
 const carol = "member-carol" as MemberId;
 
+// Every questFinished published, read back from the jobs a recording subscriber got. S4's test backend replaces it.
+const recorder = mutationJob("test.questFinished", z.object({ event: z.looseObject({ type: z.string() }) }), async () => {});
+
 function setUp() {
   const clock = createClock({ real: () => tuesday + 60 * minuteMs });
-  const operations = createOperations({ pool: database.pool, clock, log: quiet });
-  return { operations, seed: seeder(operations) };
+  const subscribers = subscribersOf([{ event: "questFinished", job: recorder }] as Subscription<any>[]);
+  const operations = createOperations({ pool: database.pool, clock, log: quiet, subscribers });
+  const published = () =>
+    operations.query("test.published", async ({ tx }) => {
+      const rows = await tx.select().from(jobs).where(eq(jobs.name, recorder.name)).orderBy(asc(jobs._creationTime), asc(jobs._id));
+      return rows.map((row) => {
+        const { fact, ...event } = toDocument<{ args: { event: Record<string, unknown> } }>(jobs, row).args.event;
+        return event;
+      });
+    });
+  return { operations, seed: seeder(operations), published };
 }
 
 function kudosAt(minutes: number, day = "2026-10-13", recipients: MemberId[] = [alice, carol]): KudosGivenEvent {
@@ -119,6 +137,25 @@ describe("quest finishes", () => {
     expect(await seed.all("questFinishes")).toEqual([expect.objectContaining({ member: bob, key: "journey:hugs-3", xp: 20, catalogueVersion: "2", at: tuesday, cause })]);
     expect(await operations.query("test", (ctx) => questFinishOf(ctx, bob, "journey:hugs-3"))).toEqual(expect.objectContaining({ member: bob, key: "journey:hugs-3" }));
     expect(await operations.query("test", (ctx) => questFinishOf(ctx, carol, "journey:hugs-3"))).toBeNull();
+  });
+
+  test("finishing a quest publishes questFinished once, with its reward, and a second finish publishes nothing", async () => {
+    const { operations, published } = setUp();
+    const cause = { workspace: "T1", conversation: "C1", message: "1.000100" };
+    const finish = () => operations.mutation("test", (ctx) => finishMondayQuest(ctx, "T1", bob, { kind: "weekly", week: "2026-10-12", slot: 1 }, { reward: { xp: 15, coins: 0, item: null }, catalogueVersion: "2", poolQuest: "say-why" }, tuesday, cause));
+
+    await finish();
+    await finish();
+
+    expect(await published()).toEqual([{ type: "questFinished", workspace: "T1", member: bob, quest: { kind: "weekly", week: "2026-10-12", slot: 1 }, poolQuest: "say-why", rewardKey: "weekly:2026-10-12:1", reward: { xp: 15, coins: 0 }, catalogueVersion: "2", at: tuesday, cause }]);
+  });
+
+  test("a finish without a cause or pool quest publishes neither", async () => {
+    const { operations, published } = setUp();
+
+    await operations.mutation("test", (ctx) => finishMondayQuest(ctx, "T1", bob, { kind: "journey", step: "hugs-3" }, { reward: { xp: 20, coins: 0, item: null }, catalogueVersion: "2" }, tuesday));
+
+    expect(await published()).toEqual([{ type: "questFinished", workspace: "T1", member: bob, quest: { kind: "journey", step: "hugs-3" }, rewardKey: "journey:hugs-3", reward: { xp: 20, coins: 0 }, catalogueVersion: "2", at: tuesday }]);
   });
 
   test("a finish without a cause keeps no cause", async () => {

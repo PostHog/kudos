@@ -122,6 +122,28 @@ describe("the hug ladder counts every hug under two-quests, whatever order the h
     expect(await finishedSteps(bob), "after the third hug under two-quests since the start").toEqual(["hugs-3"]);
   });
 
+  test("a late hug given at the same moment as a hug from before two-quests reaches back over neither", async () => {
+    const { questsStartedAt, hugUnderTwoQuests, hugWithoutTwoQuests, finishedSteps, hugsCounted } = setUp();
+    await questsStartedAt(bob, tuesday);
+    await hugWithoutTwoQuests(hugAt(2));
+    await hugUnderTwoQuests(hugAt(3));
+
+    await hugUnderTwoQuests({ ...hugAt(2), message: { workspace: "T1", conversation: "C2", message: "tied" } });
+
+    expect(await hugsCounted(bob), "only the hug at the ladder's start").toBe(1);
+    expect(await finishedSteps(bob)).toEqual([]);
+  });
+
+  test("a first hug under two-quests given at the same moment as a hug from before it starts no ladder", async () => {
+    const { questsStartedAt, hugUnderTwoQuests, hugWithoutTwoQuests, hugsCounted } = setUp();
+    await questsStartedAt(bob, tuesday);
+    await hugWithoutTwoQuests(hugAt(2));
+
+    await hugUnderTwoQuests({ ...hugAt(2), message: { workspace: "T1", conversation: "C2", message: "tied" } });
+
+    expect(await hugsCounted(bob)).toBe(0);
+  });
+
   test("hugs given before two-quests start no ladder, and the ladder starts at the first hug under it", async () => {
     const { questsStartedAt, hugUnderTwoQuests, hugWithoutTwoQuests, finishedSteps, hugsCounted } = setUp();
     await questsStartedAt(bob, tuesday);
