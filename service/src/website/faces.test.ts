@@ -70,11 +70,18 @@ describe("before team pages, a member's face is the company profile their real n
     expect(await stored(me)).toEqual({ kind: "slack", image: picture, initials: "JW" });
   });
 
-  test("the given and family names stand in for a missing name, and without a picture the initials show", async () => {
+  test("the given and family names stand in for a missing name, so the profile under them gives the face", async () => {
+    const me = await signedIn(false, { givenName: "Émile", familyName: "Okonkwo" });
+    await aCompanyProfile("Emile", "Okonkwo", companyPicture);
+
+    expect(await stored(me)).toEqual({ kind: "company-profile", image: companyPicture, colour: "#f4b400", initials: "ÉO" });
+  });
+
+  test("a matching profile without a picture is no face, so the initials show", async () => {
     const me = await signedIn(false, { givenName: "Émile", familyName: "Okonkwo" });
     await aCompanyProfile("Emile", "Okonkwo", null);
 
-    expect(await stored(me), "a profile without a picture is no face").toEqual({ kind: "initials", initials: "ÉO" });
+    expect(await stored(me)).toEqual({ kind: "initials", initials: "ÉO" });
   });
 
   test("a member with no name at all shows a question mark", async () => {
