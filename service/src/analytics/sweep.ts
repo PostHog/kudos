@@ -2,11 +2,10 @@
 // each job that failed, once, as a PostHog $exception named by the job's operation. It reads the failed jobs it has not
 // taken in yet (`sweptAt` is NULL), in the order they finished, and takes in every one it reads, reported or not. So a
 // failure is read however late its transaction commits, and never twice. The jobs the move recovers from Convex arrive
-// swept (../load/recovery.ts): Convex's sweep reported their failures.
-import { and, asc, eq, getTableName, inArray, is, isNull } from "drizzle-orm";
-import { PgTable } from "drizzle-orm/pg-core";
+// swept when Convex failed them (../load/recovery.ts), since Convex's sweep reported those; an action the move fails
+// because it was running when Convex stopped arrives unswept, and this sweep reports it once.
+import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
-import * as schema from "../db/schema/index.ts";
 import { jobs } from "../db/schema/service.ts";
 import { mutationJob } from "../jobs/define.ts";
 import type { MutationContext, QueryContext } from "../operations.ts";
@@ -39,9 +38,10 @@ export function operationPathOf(name: string): string {
 }
 
 async function reportNewFailures(ctx: MutationContext) {
+  const tables = await tablesOfTheApp(ctx);
   for (let page = 0; page < pagesPerSweep; page += 1) {
     const failed = await unsweptFailures(ctx);
-    for (const job of failed) await report(ctx, job);
+    for (const job of failed) await report(ctx, job, tables);
     if (failed.length > 0) await ctx.tx.update(jobs).set({ sweptAt: ctx.now }).where(inArray(jobs._id, failed.map(({ _id }) => _id)));
     if (failed.length < pageSize) return;
   }
@@ -58,11 +58,17 @@ async function unsweptFailures(ctx: QueryContext): Promise<FailedJob[]> {
   return rows.map((row) => ({ ...row, completedAt: row.completedAt ?? ctx.now }));
 }
 
-async function report(ctx: MutationContext, job: FailedJob) {
+async function report(ctx: MutationContext, job: FailedJob, tables: ReadonlySet<string>) {
   const error = job.error ?? undefined;
   if (job.name.startsWith(analyticsModule) || carriesReportedMarker(error)) return;
-  await recordException(ctx, { path: operationPathOf(job.name), kind: job.kind }, exceptionOfJobError(error, schemaTables), job.completedAt);
+  await recordException(ctx, { path: operationPathOf(job.name), kind: job.kind }, exceptionOfJobError(error, tables), job.completedAt);
 }
 
-/** The app's tables, which a `unique()` refusal may name: one it reports as it is, since it names no member's words. */
-const schemaTables: ReadonlySet<string> = new Set(Object.values(schema).flatMap((table) => (is(table, PgTable) ? [getTableName(table)] : [])));
+/**
+ * The app's tables, which a `unique()` refusal may name: one it reports as it is, since it names no member's words. The
+ * database lists them, so the sweep reaches no table but the jobs (R18 pins the modules that import the whole schema).
+ */
+async function tablesOfTheApp(ctx: QueryContext): Promise<ReadonlySet<string>> {
+  const { rows } = await ctx.tx.execute<{ tablename: string }>(sql`select tablename from pg_tables where schemaname = current_schema()`);
+  return new Set(rows.map(({ tablename }) => tablename));
+}
