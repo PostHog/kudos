@@ -163,6 +163,8 @@ export type Note = z.infer<typeof noteValidator>;
         "convex/ctx/unconvertible.ts:11: reads a Convex validator's members other than by name",
         "convex/ctx/unconvertible.ts:12: reads a Convex validator's members other than by name",
         "convex/ctx/unconvertible.ts:14: a record keyed other than by v.string(), which zod would require every key of",
+        "convex/ctx/unconvertible.ts:15: reads a Convex validator's members other than by name",
+        "convex/ctx/unconvertible.ts:16: reads isOptional of a Convex validator, which zod has no counterpart for",
       ],
     });
     expect(convert("convex/ctx/handler.ts")).toEqual({ refusals: ["convex/ctx/handler.ts: imports ../_generated/server, which the service has no counterpart for"] });
