@@ -1,6 +1,6 @@
 // The analytics drain, ported from convex/analytics/drain.test.ts onto the service's runner, jobs and worker. Events
 // are recorded through the outbox's write API here, since the subscribers that record them in production are 14.3's.
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, onTestFinished, test, vi } from "vitest";
 import { useTestDatabase } from "../../testing/database.ts";
 import { FakePostHog, answersAMomentLater, answersWith, failsToConnect, neverAnswers, postHogHost, projectToken, routedFetch, stallsUntilReleased, type BatchRequest } from "../../testing/fakePostHog.ts";
@@ -14,7 +14,7 @@ import { createWorker, type Worker } from "../jobs/worker.ts";
 import type { Log, LogFields } from "../log.ts";
 import { createOperations } from "../operations.ts";
 import { serviceRegistry } from "../registry.ts";
-import { claim, cleanUp, cleanUpJob, createDrain, drainArgs, recover, recoverJob, settle } from "./drain.ts";
+import { claim, cleanUp, cleanUpJob, createDrain, drainArgs, recover, recoverJob, settle, wakeDrain } from "./drain.ts";
 import { record } from "./outbox.ts";
 import { drainJob, sendBatch } from "./send.ts";
 
@@ -199,6 +199,22 @@ describe("O18: a batch PostHog doesn't accept is retried", () => {
       { state: "exhausted", reason: "rejected" },
     ]);
     expect(warnings.mock.calls).toEqual([["analytics.events_given_up", { reason: "rejected", events: ["kudos given", "kudos received"] }]]);
+  });
+
+  // Convex read a batch's rows back by ID, in the order it claimed them. Here the rows are stored, and their IDs sort,
+  // against that order, so a read back without an order of its own lists them the other way round.
+  test("events given up together are named in the order they were recorded", async () => {
+    postHog.answering(answersWith(503));
+    const at = clock.now();
+    const pending = { distinctId: "a-member", timestamp: at, properties: {}, state: "pending" as const, failures: 5, dueAt: at };
+    await seed.insert("analyticsOutbox", { _id: "a-received", _creationTime: at + 1, uuid: "u-received", event: "kudos received", ...pending });
+    await seed.insert("analyticsOutbox", { _id: "b-given", _creationTime: at, uuid: "u-given", event: "kudos given", ...pending });
+    await operations.mutation("test.wake", (ctx) => wakeDrain(ctx));
+
+    await settle_();
+
+    expect(postHog.requests.map((request) => request.events.map(({ event }) => event))).toEqual([["kudos given", "kudos received"]]);
+    expect(warnings.mock.calls).toEqual([["analytics.events_given_up", { reason: "exhausted", events: ["kudos given", "kudos received"] }]]);
   });
 });
 
@@ -400,6 +416,29 @@ describe("the drain and the requests that wake it", () => {
   // #96's oracle found requests answering 500: today's wake read the drain's singleton in the request's transaction,
   // so drains claiming the outbox ran requests out of retries. Here requests record while the real drains claim,
   // send and settle, all under SERIALIZABLE on a pool of their own.
+  test("a request recording an event reads nothing of the outbox or the jobs, the drain's state", async () => {
+    const [member] = await members(1);
+    await seed.insert("analyticsIds", { member: member!, analyticsId: "analytics-id-0" });
+    await seed.insert("workspaceKeys", { workspace: "T1", workspaceKey: "workspace-key-1" });
+
+    // Postgres's read locks for the request's own transaction, as serializable conflict tracking holds them.
+    const read = await operations.mutation("test.request", async (ctx) => {
+      await record(ctx, "T1", [{ event: "kudos received", subject: { member: member! }, at: clock.now(), properties: {} }]);
+      const { rows } = await ctx.tx.execute<{ relation: string }>(
+        sql`select distinct c.relname as relation from pg_locks l join pg_class c on c.oid = l.relation where l.pid = pg_backend_pid() and l.mode = 'SIReadLock' order by 1`,
+      );
+      return rows.map(({ relation }) => relation);
+    });
+
+    expect(read.length, "it reads its workspace's key and its member's analytics ID").toBeGreaterThan(0);
+    expect(read.filter((relation) => relation.startsWith("analyticsOutbox") || relation.startsWith("jobs"))).toEqual([]);
+  });
+
+  // A request may still retry once, and that's harmless: it is rolled back whole and runs again with the same `now`.
+  // A drain that read the outbox's due rows before the request inserted one, and whose own writes another drain or the
+  // worker read, is a pivot; when it is already committing, Postgres can't cancel it and cancels the committing
+  // request instead ("Canceled on commit attempt with conflict in from prepared pivot"). That race is narrow and
+  // timing-bound: under one shared Postgres it hits about one run in many, so this test bounds retries, not forbids them.
   test("requests recording while drains claim and settle: none fails, hardly any is retried, and every event is sent once", async () => {
     const requests = 60;
     const recorders = await members(requests);
@@ -447,10 +486,10 @@ describe("the drain and the requests that wake it", () => {
     await settleInTimeOrder();
 
     expect(outcomes.filter(({ status }) => status === "rejected"), "no request failed").toEqual([]);
-    // Today's wake shape retried 10 to 13 of these 60 requests. Recording now only inserts, so none conflicts with a drain;
-    // a test suite sharing one Postgres can still coarsen its serializable tracking until an odd request retries once.
+    // Today's wake shape, which read the drain's state, retried 10 to 13 of these 60 requests.
     expect(lines.filter(({ message }) => message.includes("test.request")), "no request logged a failure").toEqual([]);
     expect(attempts.filter((count) => count > 1).length, "hardly any was retried").toBeLessThanOrEqual(2);
+    expect(Math.max(...attempts), "none more than once").toBeLessThanOrEqual(2);
     expect(sentWhileRecording, "the drains sent a batch after each wave but the last").toBeGreaterThanOrEqual(waves - 1);
     const sent = postHog.events().map(({ properties }) => properties.request);
     expect(sent.toSorted((a, b) => Number(a) - Number(b)), "each request's event, once").toEqual(recorders.map((_, i) => i));
