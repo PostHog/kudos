@@ -1,9 +1,11 @@
-// The module map's skeleton of convex/website/faces.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
-// notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
-import { type CompanyFace } from "../companyProfiles/faces.ts";
+// The faces the website shows: a member's own, from their company profile, Slack picture or initials, and a teammate's.
+// Today's convex/website/faces.ts over the service's transaction.
+import { companyFaceOf, type CompanyFace } from "../companyProfiles/faces.ts";
+import { teamPagesShownTo } from "../companyProfiles/flag.ts";
+import { companyProfileOf } from "../companyProfiles/matcher.ts";
+import { storedCompanyFaceOf } from "../companyProfiles/storedFaces.ts";
 import type { VerifiedMember } from "./memberQuery.ts";
 import type { QueryContext } from "../operations.ts";
-import { notPorted } from "../notPorted.ts";
 
 export type Face =
   | { kind: "company-profile"; image: string; colour: string; initials: string }
@@ -11,17 +13,35 @@ export type Face =
   | { kind: "initials"; initials: string };
 
 export async function faceOf(ctx: QueryContext, me: VerifiedMember): Promise<Face> {
-  throw notPorted("website.faces.faceOf");
+  return faceFrom(me, await ownCompanyFaceOf(ctx, me));
 }
 
 export async function storedFaceOf(ctx: QueryContext, me: VerifiedMember): Promise<Face> {
-  throw notPorted("website.faces.storedFaceOf");
+  return faceFrom(me, await ownStoredCompanyFaceOf(ctx, me));
+}
+
+function faceFrom(me: VerifiedMember, companyFace: CompanyFace | undefined): Face {
+  if (companyFace !== undefined) return { kind: "company-profile", ...companyFace, initials: initialsOf(me) };
+  return signInFaceOf(me);
 }
 
 export function signInFaceOf(me: VerifiedMember): Face {
   const initials = initialsOf(me);
   if (me.image !== undefined) return { kind: "slack", image: me.image, initials };
   return { kind: "initials", initials };
+}
+
+async function ownStoredCompanyFaceOf(ctx: QueryContext, me: VerifiedMember): Promise<CompanyFace | undefined> {
+  if (!(await teamPagesShownTo(ctx, me.member))) return companyFaceOf(ctx, realNameOf(me));
+  return (await storedCompanyFaceOf(ctx, me.workspace, me.member)) ?? undefined;
+}
+
+async function ownCompanyFaceOf(ctx: QueryContext, me: VerifiedMember): Promise<CompanyFace | undefined> {
+  if (!(await teamPagesShownTo(ctx, me.member))) return companyFaceOf(ctx, realNameOf(me));
+  const stored = await storedCompanyFaceOf(ctx, me.workspace, me.member);
+  if (stored !== undefined) return stored ?? undefined;
+  const profile = (await companyProfileOf(ctx, me.member))?.profile;
+  return profile?.image === undefined ? undefined : { image: profile.image, colour: profile.colour };
 }
 
 export const nameless = "A teammate";
@@ -42,6 +62,10 @@ function teammateFaceOf(name: string | undefined, picture: string | null): Face 
 }
 
 type Names = { name?: string; givenName?: string; familyName?: string };
+
+function realNameOf({ name, givenName, familyName }: Names) {
+  return name ?? [givenName, familyName].filter((part) => part !== undefined).join(" ");
+}
 
 function initialsOf({ name, givenName, familyName }: Names) {
   const words = givenName !== undefined && familyName !== undefined ? [givenName, familyName] : (name ?? "").split(/\s+/);
