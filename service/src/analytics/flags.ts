@@ -128,3 +128,5 @@ async function emailOf(ctx: QueryContext, member: MemberId): Promise<{ email?: s
 function canWrite(ctx: QueryContext | MutationContext): ctx is MutationContext {
   return "newRow" in ctx;
 }
+
+export { exposedApart, recordExposure, recordExposureArgs, recordExposureJob } from "./flags.map.ts";

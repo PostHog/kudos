@@ -12,9 +12,11 @@ import { NotPortedError } from "../../../service/src/notPorted.ts";
 import { zv } from "../../../service/src/values.ts";
 import { closureCheck, servicePackages } from "./closure.ts";
 import { convertModule } from "./codemod.ts";
+import { reexportLine, s1Part, toolOf } from "./bootstrap.ts";
 import { copyModule, importOnlyDiff } from "./copy.ts";
 import { convexAccepts, disagreements } from "./equivalence.ts";
-import { reachedByName, skeletonModule } from "./skeleton.ts";
+import { exportedNames, reachedByName, skeletonModule, type Contracts } from "./skeleton.ts";
+import { parse } from "./imports.ts";
 
 const repo = fileURLToPath(new URL("../../..", import.meta.url));
 const fixtures = fileURLToPath(new URL("./fixtures", import.meta.url));
@@ -115,7 +117,7 @@ describe("the closure check", () => {
           'import { gone } from "./gone.ts";',
           'import { two } from "./two";',
           'import { v } from "convex/values";',
-          'import satori from "satori";',
+          'import pad from "left-pad";',
           'import { outside } from "../../../convex/schema.ts";',
           "const lazy = await import(`./${name}.ts`);",
           'import type Two = require("./two.ts");',
@@ -127,7 +129,7 @@ describe("the closure check", () => {
       "service/src/a/one.ts: ./gone.ts: no module in the batch, an earlier batch or the foundation",
       "service/src/a/one.ts: ./two: a relative import names its .ts file in the service",
       "service/src/a/one.ts: convex/values: a Convex package",
-      "service/src/a/one.ts: satori: a package the service doesn't list",
+      "service/src/a/one.ts: left-pad: a package the service doesn't list",
       "service/src/a/one.ts: ../../../convex/schema.ts: outside the service",
       "service/src/a/one.ts: <computed>: an import of a computed specifier",
       "service/src/a/one.ts: ./two.ts: an import = require(), which an ES module can't use",
@@ -259,8 +261,51 @@ describe("the equivalence check", () => {
   });
 });
 
+describe("the bootstrap's choice of tool", () => {
+  const modules = ["convex/pure/format.ts", "convex/rules/events.ts", "convex/skeleton/awards.ts", "convex/wrapping/builder.ts", "convex/wrapping/routes.ts", "convex/wrapping/hook.ts"];
+  const program = ts.createProgram(modules.map(onDisk), compilerOptions);
+  const toolFor = (convexPath: string) => toolOf(program, program.getSourceFile(onDisk(convexPath))!, convexPath);
+
+  test("copies what names nothing of Convex, converts validators and skeletons Convex's machinery", () => {
+    expect(["convex/pure/format.ts", "convex/rules/events.ts", "convex/skeleton/awards.ts", "convex/wrapping/builder.ts"].map(toolFor)).toEqual(["copy", "convert", "skeleton", "skeleton"]);
+  });
+
+  test("skeletons a module over a context that imports nothing of Convex: a registration through the app's builder, a context-typed parameter", () => {
+    expect(["convex/wrapping/routes.ts", "convex/wrapping/hook.ts"].map(toolFor)).toEqual(["skeleton", "skeleton"]);
+  });
+});
+
+test("a module's exports are values unless only a type declares them, under the names it exports by", () => {
+  const file = parse(
+    "service/src/x.map.ts",
+    [
+      "type Token = { n: number };",
+      "const Token = { n: 1 };",
+      "type Shape = { side: number };",
+      "interface Plan { at: number }",
+      "const x = 1;",
+      "export { Token, Shape, type x as y, x as \"not-an-identifier\" };",
+      "export type { Plan };",
+      "export const z = 2;",
+      "",
+    ].join("\n"),
+  );
+  expect(exportedNames(file)).toEqual({ values: ["Token", "not-an-identifier", "z"], types: ["Shape", "y", "Plan"] });
+});
+
+test("S1's re-export line quotes a name that is no identifier", () => {
+  expect(reexportLine("service/src/x.ts", { values: ["a", "not-an-identifier"], types: ["B"] })).toBe('export { a, type B, "not-an-identifier" } from "./x.map.ts";');
+});
+
+test("S1's module is what S1 wrote, less only the last line a landing gave it", () => {
+  const text = 'export const keep = 1;\n// export { keep } from "./x.map.ts";\n';
+  expect(s1Part("service/src/x.ts", `${text}\nexport { a, type B } from "./x.map.ts";\n`)).toBe(`${text}`);
+  expect(s1Part("service/src/x.ts", text)).toBe(text);
+  expect(s1Part("service/src/x.ts", `${text}\nexport { a } from "./y.map.ts";\n`)).toBe(`${text}\nexport { a } from "./y.map.ts";\n`);
+});
+
 describe("the skeleton generator", () => {
-  const modules = ["convex/skeleton/awards.ts", "convex/skeleton/caller.ts", "convex/skeleton/tangled.ts", "convex/skeleton/edges.ts", "convex/skeleton/refused.ts", "convex/skeleton/inline.ts", "convex/skeleton/shadowed.ts", "convex/skeleton/appTypes.ts", "convex/skeleton/helpers.ts", "convex/skeleton/wrapped.ts"];
+  const modules = ["convex/skeleton/awards.ts", "convex/skeleton/caller.ts", "convex/skeleton/tangled.ts", "convex/skeleton/edges.ts", "convex/skeleton/refused.ts", "convex/skeleton/inline.ts", "convex/skeleton/shadowed.ts", "convex/skeleton/appTypes.ts", "convex/skeleton/helpers.ts", "convex/skeleton/wrapped.ts", "convex/skeleton/printed.ts", "convex/wrapping/builder.ts", "convex/skeleton/follows.ts"];
   const program = ts.createProgram(modules.map(onDisk), compilerOptions);
   const sourceFiles = modules.map((module) => program.getSourceFile(onDisk(module))!);
   const reached = reachedByName(sourceFiles);
@@ -270,6 +315,95 @@ describe("the skeleton generator", () => {
   const appTypes = landed(skeleton(7));
   const helpers = landed(skeleton(8));
   const wrapped = landed(skeleton(9));
+  const printed = landed(skeleton(10));
+  const builder = landed(skeleton(11));
+
+  test("prints an ID that lost its alias as the service's Id, parenthesizes a union of objects in an array, and leaves out a type the checker can't resolve", () => {
+    expect(printed.text).toContain('export async function tagged(ctx: QueryContext): Promise<Id<"members">> {');
+    expect(printed.text).toContain("export async function lines(ctx: QueryContext): Promise<({ text: string } | { link: string })[]> {");
+    // A brand with more than the table's name isn't an ID.
+    expect(printed.text).toContain('export async function indexed(ctx: QueryContext): Promise<string & { __tableName: "members"; [key: string]: unknown }> {');
+    expect(printed.text).toContain('export async function classification(ctx: QueryContext): Promise<{ isConvexFunction: true; label: string }> {');
+    expect(printed.text).not.toContain("sorted");
+    expect(printed.omitted).toEqual(["sorted: names a type the checker can't resolve, so its signature can't be printed"]);
+  });
+
+  test("leaves out a builder that returns Convex's registration, which the service's operations replace", () => {
+    expect(builder.text).not.toContain("memberRead");
+    expect(builder.omitted).toEqual(["memberRead: returns a Convex function registration, which the service's operations replace"]);
+  });
+
+  describe("beside a module S1 ported in part", () => {
+    // S1's port of part of the awards module: a type and a helper it exports, and a job under another one's Convex path.
+    const text = [
+      "// S1's port of part of convex/skeleton/awards.ts.",
+      'import { z } from "zod";',
+      'import { mutationJob as define } from "../jobs/define.ts";',
+      "",
+      'export type AwardId = "first" | "tenth";',
+      "",
+      "export function dayOf(at: number): number {",
+      "  return Math.floor(at / 86_400_000);",
+      "}",
+      "",
+      "export const sweepJob = define('skeleton.awards.sweepAwards', z.strictObject({}), async () => {});",
+      '// mutationJob("skeleton.awards.notifyAll", …) waits for its stack.',
+      "",
+    ].join("\n");
+    const over = (index: number, s1Text: string) => skeletonModule(program, sourceFiles[index]!, modules[index]!, reached, exists, { s1: { servicePath: landed(skeleton(index)).servicePath, text: s1Text } });
+    const sibling = landed(over(0, text));
+
+    test("is a module of its own beside S1's, of only what S1 doesn't export", () => {
+      expect(sibling.servicePath).toBe("service/src/skeleton/awards.map.ts");
+      expect(sibling.text).toContain('export async function grant(ctx: MutationContext, member: Id<"members">, award: AwardId): Promise<void> {');
+      expect(sibling.text).not.toMatch(/function dayOf|type AwardId =/);
+      // A stub's args schema and job are exports S1's module re-exports too.
+      expect(sibling.exports.values).toEqual(expect.arrayContaining(["grant", "notifyAllArgs", "notifyAllJob"]));
+      expect([...sibling.exports.values, ...sibling.exports.types]).not.toContain("dayOf");
+    });
+
+    test("names a type of S1's by a type-only import from S1's module", () => {
+      expect(sibling.text).toContain('import type { AwardId } from "./awards.ts";');
+    });
+
+    test("exports what an export list names, so S1's module re-exports it too", () => {
+      // edges.ts declares `half` and `names` and exports them by `export { half, names }`.
+      const listed = landed(over(3, "// S1's port of nothing yet.\n"));
+      expect(listed.text).toContain("export { half, names };");
+      expect(listed.exports.values).toEqual(expect.arrayContaining(["half", "names"]));
+    });
+
+    test("knows S1's jobs by their calls, however S1 imports or quotes them, and not by a comment", () => {
+      expect(sibling.text).not.toContain('"skeleton.awards.sweepAwards"');
+      expect(sibling.omitted).toContain("sweepAwards: S1 ported it as the job skeleton.awards.sweepAwards");
+      expect(sibling.text).toContain('Job("skeleton.awards.notifyAll"');
+    });
+
+    test("refuses a value of S1's that a stub needs, which an import would close a cycle for", () => {
+      expect(over(0, "export const awardIdValidator = 0;\n")).toEqual({ refusals: expect.arrayContaining(["convex/skeleton/awards.ts: its stubs need S1's awardIdValidator as a value, which an import from service/src/skeleton/awards.ts would close a cycle for"]) });
+    });
+
+    test("refuses S1's export of one of several names one statement declares", () => {
+      expect(over(10, "export const first = 1;\n")).toEqual({ refusals: ["convex/skeleton/printed.ts: S1's service/src/skeleton/printed.ts exports first of first, second, which one statement declares; port them together"] });
+    });
+  });
+
+  describe("a contract for an export the generator can't print", () => {
+    const contract = { text: 'export async function sorted(ctx: QueryContext): Promise<number[]> {\n  throw notPorted("skeleton.printed.sorted");\n}' };
+    const over = (contracts: Contracts) => skeletonModule(program, sourceFiles[10]!, modules[10]!, reached, exists, { contracts });
+
+    test("stands where the generator leaves the export out", () => {
+      const kept = landed(over({ "convex/skeleton/printed.ts": { sorted: contract } }));
+      expect(kept.text).toContain("export async function sorted(ctx: QueryContext): Promise<number[]> {");
+      expect(kept.omitted).toEqual([]);
+    });
+
+    test("is refused for an export the generator lands itself, or one the module doesn't have", () => {
+      expect(over({ "convex/skeleton/printed.ts": { tagged: contract, nowhere: contract } })).toEqual({
+        refusals: ["convex/skeleton/printed.ts: a contract for tagged, which the generator lands itself; delete the contract", "convex/skeleton/printed.ts: a contract for nowhere, which the module doesn't export; delete the contract"],
+      });
+    });
+  });
 
   test("finds every function reached by name: run in place by an action, or later by the scheduler, a cron or the bus", () => {
     expect(Object.fromEntries([...reached].map(([path, how]) => [path, [...how]]))).toEqual({

@@ -35,3 +35,5 @@ export async function existingAnalyticsId(ctx: QueryContext, member: MemberId): 
  * on and no other ID waits. Until S14 registers that job, a new ID waits here with nothing scheduled.
  */
 async function identifyNewPeopleLater(_ctx: MutationContext): Promise<void> {}
+
+export { catchUp, catchUpArgs, catchUpJob, followMembers, followMembersArgs, followMembersJob, followMembersLater, followPeople, followPeopleArgs, followPeopleJob, followPeopleLater, followPeopleSentLate, forgetRecordedProfiles, identifyNewPeople, identifyNewPeopleArgs, identifyNewPeopleJob, markDeliveriesUncertain, personEventsIn, type PersonProfile, profileKeys, requestCatchUp, withoutStalePersonEvents } from "./person.map.ts";
