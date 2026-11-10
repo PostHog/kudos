@@ -46,7 +46,6 @@ export const landed = [
   "convex/album/hypeCollections.ts",
   "convex/album/hypeReactions.ts",
   "convex/album/hypes.ts",
-  "convex/album/items/fill.ts",
   "convex/album/items/records.ts",
   "convex/album/items/shareArt.ts",
   "convex/album/kudosEmojis.ts",

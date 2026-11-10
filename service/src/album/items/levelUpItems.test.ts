@@ -2,7 +2,7 @@
 // turn within its floor, cap and weights, and fillItems reveals waiting level items through the old drop once
 // hidden-items is off. A kudos in Slack reaches S4's message handler (none is registered yet) and S6's progression; a
 // level reached reaches S6's unlocks and S10's level-up hoggies; the board, the turn and the level-up reveal are S16's
-// website reads behind S15's sign-in; a turn's drop is S10's; fillItems pages through S11's `paginate`.
+// website reads behind S15's sign-in; a turn's drop is S10's; fillItems pages through S11's `paginate`, now on main.
 import { afterEach, describe, expect, vi } from "vitest";
 import { useTestBackend, type TestBackend } from "../../../testing/backend.ts";
 import { emoji, mention, section } from "../../../testing/slackMessages.ts";
@@ -33,8 +33,8 @@ const leveledInSlack: [Stack, ...Stack[]] = ["S4", "S6", "S10", "S15", "S16"];
 const reached: [Stack, ...Stack[]] = ["S6", "S10", "S15", "S16"];
 // Items earned straight into the ledger, turned on the website (S15, S16) into S10's drops.
 const earned: [Stack, ...Stack[]] = ["S10", "S15", "S16"];
-// A level reached, then filled (S11's paginate) into S10's old reveal, read on the website.
-const filled: [Stack, ...Stack[]] = ["S6", "S10", "S11", "S15", "S16"];
+// A level reached, then filled into S10's old reveal, read on the website.
+const filled: [Stack, ...Stack[]] = ["S6", "S10", "S15", "S16"];
 
 const backend = useTestBackend({ now: tuesday, registry });
 let t: TestBackend;

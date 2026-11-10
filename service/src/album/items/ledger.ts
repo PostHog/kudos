@@ -11,10 +11,9 @@ import type { Id } from "../../db/columns.ts";
 import { fromDocument, toDocument } from "../../db/documents.ts";
 import { indexOrder } from "../../db/indexOrder.ts";
 import { unique } from "../../db/unique.ts";
-import type { Page } from "../../db/page.ts";
+import { paginate, type Page } from "../../db/page.ts";
 import { items, type Doc } from "../../db/schema/index.ts";
 import type { MutationContext, QueryContext } from "../../operations.ts";
-import { notPorted } from "../../notPorted.ts";
 
 export const mostItemsShown = 100;
 
@@ -94,7 +93,7 @@ async function waitingOf(ctx: QueryContext, member: MemberId, most: number): Pro
 }
 
 export function waitingPageOf(ctx: QueryContext, member: MemberId, cursor: string | null, numItems: number): Promise<Page<Doc<"items">>> {
-  throw notPorted("album.items.ledger.waitingPageOf");
+  return paginate<Doc<"items">>(ctx.tx, { table: items, order: byMemberTurned, where: and(eq(items.member, member), isNull(items.turnedAt)) }, { cursor, numItems });
 }
 
 function faceDown({ _id, earnedAt, reason }: Item): FaceDown {

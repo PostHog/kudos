@@ -170,7 +170,7 @@ describe("LP23: a flag reversal never counts anything twice", { timeout: 60_000 
 });
 
 describe("LP24: fillItems earns every pack not yet opened and every tray item not yet put in, once", { timeout: 60_000 }, () => {
-  waitsOn([...theTrayPath, "S11"], "the packs and tray of a member from before the ledger wait on the board after the fill, and a rerun earns nothing", async () => {
+  waitsOn(theTrayPath, "the packs and tray of a member from before the ledger wait on the board after the fill, and a rerun earns nothing", async () => {
     await everyoneJoins();
     await thanks(alice, bob, carol);
     const asAlice = await signedIn(alice);
@@ -190,7 +190,7 @@ describe("LP24: fillItems earns every pack not yet opened and every tray item no
     expect(await thanksItemsOf(asAlice)).toEqual([]);
   });
 
-  waitsOn(["S3", "S4", "S11"], "a member with more than 100 packs and 100 tray items continues in the next mutation, one member a mutation", async () => {
+  waitsOn(["S3", "S4"], "a member with more than 100 packs and 100 tray items continues in the next mutation, one member a mutation", async () => {
     await everyoneJoins();
     const [giver, other] = [await memberOf(alice), await memberOf(bob)];
     await waitingRowsFor(giver, 101);
