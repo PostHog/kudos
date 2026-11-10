@@ -152,6 +152,15 @@ describe("O22: the failed-job sweep", () => {
     expect(exceptions(t)).toEqual([]);
   });
 
+  test("records nothing of a service job the boundary already reported, in the worker's form of the marker", async () => {
+    const t = backend();
+    await failedJob(t, "slack.events.slackEvents", "Error: [reported] TypeError");
+
+    await sweepAfter(t, minutes(15));
+
+    expect(exceptions(t)).toEqual([]);
+  });
+
   test("records nothing of a job Convex reported before the move, however long it sweeps after", async () => {
     const t = backend();
     const job = await failedJob(t, "welcome.welcome.welcomeNewMembers", "Uncaught Error: gone");
@@ -256,6 +265,7 @@ describe("O22: the [reported] marker", () => {
   test.each<[string, string, boolean]>([
     ["the boundary's own rethrow", "[reported] ReportableError", true],
     ["the rethrow as an outer action or a failed job sees it", "Uncaught Error: [reported] TypeError\n    at reported (../../convex/analytics/boundary.ts:71:10)", true],
+    ["the rethrow as the service's worker stores it", "Error: [reported] TypeError", true],
     ["a parse error that quotes the marker from its input", `Unexpected token 'r', "[reported] SyntaxError" is not valid JSON`, false],
     ["a validation error whose arguments hold the marker", "ArgumentValidationError: Value does not match validator.\nPath: .event\nValue: {\"text\":\"[reported] Error\"}", false],
     ["a message whose second line is the marker", "dependency rejected\n[reported] TypeError", false],

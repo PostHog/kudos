@@ -15,7 +15,8 @@ export type Exception = z.infer<typeof exceptionValidator>;
 
 export const reportedMarker = "[reported]";
 
-const markedFirstLine = /^(?:Uncaught Error: )?\[reported\] [A-Za-z_$][\w$]*$/;
+// The boundary's rethrow as it threw it, as Convex stored it (`Uncaught Error: …`), or as the service's worker stores it (`Error: …`).
+const markedFirstLine = /^(?:(?:Uncaught )?Error: )?\[reported\] [A-Za-z_$][\w$]*$/;
 
 const unexpectedError = "unexpected error";
 const wordsWithheld = "message withheld: it may quote kudos text";
