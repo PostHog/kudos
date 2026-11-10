@@ -131,6 +131,8 @@ export function validatorEdits(checker: ts.TypeChecker, sourceFile: ts.SourceFil
       const target = calls[kind];
       const [key] = node.arguments;
       if (!target) refuse(node, `v.${kind} has no zod counterpart here`);
+      // `v.object<PropertyValidators>(…)`: Convex's type arguments mean nothing to zod's builders.
+      else if (node.typeArguments) refuse(node, `passes type arguments to v.${kind}, which zod's builders take differently`);
       else if (kind === "record" && !(key && isConvexCall(key, "string") && key.arguments.length === 0)) {
         refuse(node, "a record keyed other than by v.string(), which zod would require every key of");
       } else if (kind === "union" && node.arguments.length === 0) replace(node.getStart(sourceFile), node.getEnd(), "z.never()");

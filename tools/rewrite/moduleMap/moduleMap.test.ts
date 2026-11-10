@@ -169,6 +169,7 @@ export type Note = z.infer<typeof noteValidator>;
         "convex/ctx/unconvertible.ts:18: reads isOptional of a Convex validator, which zod has no counterpart for",
         "convex/ctx/unconvertible.ts:19: reads isOptional of a Convex validator, which zod has no counterpart for",
         "convex/ctx/unconvertible.ts:20: reads a member of an optional Convex validator, which zod wraps in z.optional",
+        "convex/ctx/unconvertible.ts:21: passes type arguments to v.object, which zod's builders take differently",
       ],
     });
     expect(convert("convex/ctx/handler.ts")).toEqual({ refusals: ["convex/ctx/handler.ts: imports ../_generated/server, which the service has no counterpart for"] });

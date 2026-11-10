@@ -1,4 +1,4 @@
-import { v, type GenericValidator } from "convex/values";
+import { v, type GenericValidator, type PropertyValidators } from "convex/values";
 
 const anything = v.any();
 export const kindOf = v.string().kind;
@@ -18,3 +18,4 @@ export const throughUnion = <T extends typeof anything>(validator: T | typeof an
 export const throughIntersection = <T extends typeof anything & { tag: string }>(validator: T) => validator.isOptional;
 export const maybeValidator = (validator?: typeof anything) => validator?.isOptional;
 export const optionalFields = v.optional(v.object({ a: v.string() })).fields;
+export const typed = v.object<PropertyValidators>({ a: v.string() });
