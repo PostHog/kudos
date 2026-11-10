@@ -6,9 +6,9 @@
 // stored file at a time, and a running hash per table.
 import { createHash } from "node:crypto";
 import { createInterface } from "node:readline";
-import { and, asc, eq, getTableColumns, getTableName, gt } from "drizzle-orm";
+import { and, asc, eq, getTableColumns, getTableName, gt, is } from "drizzle-orm";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
-import type { PgTable } from "drizzle-orm/pg-core";
+import { PgTable } from "drizzle-orm/pg-core";
 import type pg from "pg";
 import { decodeStored, encodeStored, parseExport, printExport, type Value } from "../db/codec.ts";
 import { toDocument } from "../db/documents.ts";
@@ -51,8 +51,10 @@ const at = (where: { table: string } | { archive: [string, string] } | { orphan:
 
 /** Rows per page: a document can be near 1 MiB, so a page stays within tens of MiB. */
 const pageRows = 64;
-/** The service's own tables that must still be empty before recovery: all but the archive and the files. */
-const serviceTables = (Object.values(service) as PgTable[]).filter((table) => table !== archive && table !== files);
+/** The service's own tables that must still be empty before recovery: all but the archive and the files. Its sequences, such as the creation clock, are no tables. */
+const serviceTables = (Object.values(service) as unknown[]).filter(
+  (table): table is PgTable => is(table, PgTable) && table !== archive && table !== files,
+);
 
 /** Compares the copy in Postgres with the staged snapshot of `chunks` chunks. */
 export async function roundTrip(pool: pg.Pool, client: pg.PoolClient, chunks: number): Promise<RoundTrip> {
