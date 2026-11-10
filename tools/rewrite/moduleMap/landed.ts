@@ -331,7 +331,6 @@ export const landed = [
   "convex/website/faces.ts",
   "convex/website/flag.ts",
   "convex/website/groupBoards.ts",
-  "convex/website/hosting.ts",
   "convex/website/inventory.ts",
   "convex/website/lastVisit.ts",
   "convex/website/leaderboard.ts",

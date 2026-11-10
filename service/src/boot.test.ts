@@ -43,7 +43,7 @@ describe("booting", () => {
 
     await service.waitFor((line) => line.message === "migrations done");
     expect(await (await get(service, "/healthz")).json(), "health after the migrations").toMatchObject({ migrations: "done" });
-    expect((await get(service, "/nowhere")).status, "an unknown route once migrated").toBe(404);
+    expect((await get(service, "/nowhere.txt")).status, "a file the website lacks, once migrated").toBe(404);
     await service.waitFor((line) => line.message === "worker started");
     const messages = service.lines().map((line) => line.message);
     expect(messages.indexOf("listening"), "it listens before it migrates").toBeLessThan(messages.indexOf("migrations done"));
