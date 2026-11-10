@@ -12,7 +12,7 @@ import { notPorted } from "../notPorted.ts";
 import { serviceRegistry } from "../registry.ts";
 import { fillProfiles } from "../workspace/directory.ts";
 import type { EventKind } from "./frontDoor.ts";
-import { verifyMember } from "./verifyMember.ts";
+import { verificationOf, verifyMember } from "./verifyMember.ts";
 import type { MemberProfile } from "../workspace/memberProfile.ts";
 
 const now = new Date("2026-10-13T10:00:00Z").getTime();
@@ -312,6 +312,7 @@ describe("F6: a Slack answer that can hold a profile is never logged", () => {
   test("a users.info refusal carrying a retry delay that isn't a number fails verification without quoting it", async () => {
     const t = backend();
     t.slack.answering("users.info", () => Response.json({ ok: false, error: "user_not_found", retryAfterMs: "dave@example.com" }));
+    await t.seed.insert("memberVerifications", { workspace: "T1", user: "U_DAVE", attempts: 0, state: "pending", nextTryAt: now });
 
     const failure = await t.operations.action("slack.verifyMember.verifyMember", (ctx) => verifyMember(ctx, { workspace: "T1", user: "U_DAVE" })).then(
       () => null,
@@ -319,6 +320,9 @@ describe("F6: a Slack answer that can hold a profile is never logged", () => {
     );
 
     expect(t.slack.callsTo("users.info")).toEqual([{ user: "U_DAVE" }]);
+    // The delay that isn't a number is dropped, so the first backoff stands.
+    const verification = await t.query((ctx) => verificationOf(ctx, "T1", "U_DAVE"));
+    expect(verification).toMatchObject({ state: "pending", attempts: 1, nextTryAt: now + 1_000 });
     expect(failure ?? "").not.toMatch(/dave@/i);
     expect(everythingLogged(t)).not.toMatch(/dave@/i);
   });
