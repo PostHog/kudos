@@ -4,19 +4,17 @@
 import { eq, getTableName, type SQL } from "drizzle-orm";
 import type { PgColumn, PgTable } from "drizzle-orm/pg-core";
 import { fromDocument, toDocument } from "../db/documents.ts";
+import { unique } from "../db/unique.ts";
 import type { IndexOrder } from "../db/indexOrder.ts";
 import type { MutationContext, QueryContext } from "../operations.ts";
 
 type Table = PgTable & { _id: PgColumn };
 
-/**
- * The one document the index range holds, or `null`; two fail with Convex's own `.unique()` error, word for word.
- * S4's `db/unique.ts` (PostHog/kudos#922) replaces the check once it is on main.
- */
+/** The one document the index range holds, or `null`; two fail with Convex's own `.unique()` error (../db/unique.ts). */
 export async function uniqueIn<Doc>(ctx: QueryContext, table: Table, index: IndexOrder, where: SQL | undefined): Promise<Doc | null> {
   const rows = await ctx.tx.select().from(table).where(where).orderBy(...index.orderBy()).limit(2);
-  if (rows.length > 1) throw new Error(`unique() query returned more than one result from table ${getTableName(table)}:`);
-  return rows[0] ? toDocument<Doc>(table, rows[0]) : null;
+  const row = unique(getTableName(table), rows);
+  return row ? toDocument<Doc>(table, row) : null;
 }
 
 /** The first document of the index range in Convex's order, or `null`, as `.first()` read it. */
