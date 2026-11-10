@@ -64,8 +64,11 @@ export function landAll(repo: string, paths: readonly string[] = landed, partly:
 }
 
 /** The line S1's module ends with that re-exports its sibling's stubs. */
-const reexportLine = (servicePath: string, { values, types }: Skeleton["exports"]) =>
-  `export { ${[...values.map((name) => [name, name] as const), ...types.map((name) => [name, `type ${name}`] as const)].sort(([a], [b]) => a.localeCompare(b)).map(([, text]) => text).join(", ")} } from "./${basename(siblingOf(servicePath))}";`;
+export const reexportLine = (servicePath: string, { values, types }: Skeleton["exports"]) =>
+  `export { ${[...values.map((name) => [name, exportName(name)] as const), ...types.map((name) => [name, `type ${exportName(name)}`] as const)].sort(([a], [b]) => a.localeCompare(b)).map(([, text]) => text).join(", ")} } from "./${basename(siblingOf(servicePath))}";`;
+
+/** A name as an export list writes it: quoted when it is no identifier (`x as "not-an-identifier"`). */
+const exportName = (name: string) => (/^[\p{ID_Start}$_][\p{ID_Continue}$\u200c\u200d]*$/u.test(name) ? name : JSON.stringify(name));
 
 /** S1's module as S1 wrote it: without the last line a landing gave it. */
 export function s1Part(servicePath: string, text: string): string {

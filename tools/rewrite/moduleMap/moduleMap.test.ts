@@ -12,10 +12,11 @@ import { NotPortedError } from "../../../service/src/notPorted.ts";
 import { zv } from "../../../service/src/values.ts";
 import { closureCheck, servicePackages } from "./closure.ts";
 import { convertModule } from "./codemod.ts";
-import { s1Part, toolOf } from "./bootstrap.ts";
+import { reexportLine, s1Part, toolOf } from "./bootstrap.ts";
 import { copyModule, importOnlyDiff } from "./copy.ts";
 import { convexAccepts, disagreements } from "./equivalence.ts";
-import { reachedByName, skeletonModule, type Contracts } from "./skeleton.ts";
+import { exportedNames, reachedByName, skeletonModule, type Contracts } from "./skeleton.ts";
+import { parse } from "./imports.ts";
 
 const repo = fileURLToPath(new URL("../../..", import.meta.url));
 const fixtures = fileURLToPath(new URL("./fixtures", import.meta.url));
@@ -272,6 +273,28 @@ describe("the bootstrap's choice of tool", () => {
   test("skeletons a module over a context that imports nothing of Convex: a registration through the app's builder, a context-typed parameter", () => {
     expect(["convex/wrapping/routes.ts", "convex/wrapping/hook.ts"].map(toolFor)).toEqual(["skeleton", "skeleton"]);
   });
+});
+
+test("a module's exports are values unless only a type declares them, under the names it exports by", () => {
+  const file = parse(
+    "service/src/x.map.ts",
+    [
+      "type Token = { n: number };",
+      "const Token = { n: 1 };",
+      "type Shape = { side: number };",
+      "interface Plan { at: number }",
+      "const x = 1;",
+      "export { Token, Shape, type x as y, x as \"not-an-identifier\" };",
+      "export type { Plan };",
+      "export const z = 2;",
+      "",
+    ].join("\n"),
+  );
+  expect(exportedNames(file)).toEqual({ values: ["Token", "not-an-identifier", "z"], types: ["Shape", "y", "Plan"] });
+});
+
+test("S1's re-export line quotes a name that is no identifier", () => {
+  expect(reexportLine("service/src/x.ts", { values: ["a", "not-an-identifier"], types: ["B"] })).toBe('export { a, type B, "not-an-identifier" } from "./x.map.ts";');
 });
 
 test("S1's module is what S1 wrote, less only the last line a landing gave it", () => {

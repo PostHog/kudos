@@ -474,19 +474,7 @@ export function skeletonModule(program: ts.Program, sourceFile: ts.SourceFile, c
   ];
   if (reachesConvex.length > 0) return { refusals: reachesConvex.map((what) => `${convexPath}: its skeleton ${what}, which no skeleton may`) };
   // What it exports, read from what it writes: a stub's args schema and job are exports beside its function.
-  const exports: Skeleton["exports"] = { values: [], types: [] };
-  const isTypeStatement = (statement: ts.Statement) => ts.isTypeAliasDeclaration(statement) || ts.isInterfaceDeclaration(statement);
-  const localTypes = new Set(writtenFile.statements.filter(isTypeStatement).flatMap(declaredNames));
-  for (const statement of writtenFile.statements) {
-    if (isExported(statement)) (isTypeStatement(statement) ? exports.types : exports.values).push(...declaredNames(statement));
-    // An export list of the module's own names, as an export the module declares apart (`export { half, names }`).
-    else if (ts.isExportDeclaration(statement) && !statement.moduleSpecifier && statement.exportClause && ts.isNamedExports(statement.exportClause)) {
-      for (const element of statement.exportClause.elements) {
-        const isType = statement.isTypeOnly || element.isTypeOnly || localTypes.has((element.propertyName ?? element.name).text);
-        (isType ? exports.types : exports.values).push(element.name.text);
-      }
-    }
-  }
+  const exports = exportedNames(writtenFile);
   return { servicePath, text: output, omitted: [...new Set(omitted)], exports };
 
   function helperStub(fn: ts.SignatureDeclaration & { body?: ts.Node }, statement: ts.Statement, path: string): string {
@@ -1025,6 +1013,27 @@ function importLine(statement: ts.ImportDeclaration, kept: ReturnType<typeof imp
   const named = kept.filter(({ imported }) => imported !== "default" && imported !== "*").map(({ text }) => text);
   const parts = [...defaults, ...namespace, ...(named.length > 0 ? [`{ ${named.join(", ")} }`] : [])];
   return `import ${typeOnly}${parts.join(", ")} from "${specifier}";`;
+}
+
+/** What a module exports, by the names it exports them under: a type when only a type declares it. */
+export function exportedNames(file: ts.SourceFile): Skeleton["exports"] {
+  const exports: Skeleton["exports"] = { values: [], types: [] };
+  const isTypeStatement = (statement: ts.Statement) => ts.isTypeAliasDeclaration(statement) || ts.isInterfaceDeclaration(statement);
+  const localTypes = new Set(file.statements.filter(isTypeStatement).flatMap(declaredNames));
+  // A name a value declares too (`type Token` beside `const Token`) exports the value, and the type with it.
+  const localValues = new Set(file.statements.filter((statement) => !isTypeStatement(statement)).flatMap(declaredNames));
+  for (const statement of file.statements) {
+    if (isExported(statement)) (isTypeStatement(statement) ? exports.types : exports.values).push(...declaredNames(statement));
+    // An export list of the module's own names, as an export the module declares apart (`export { half, names }`).
+    else if (ts.isExportDeclaration(statement) && !statement.moduleSpecifier && statement.exportClause && ts.isNamedExports(statement.exportClause)) {
+      for (const element of statement.exportClause.elements) {
+        const local = (element.propertyName ?? element.name).text;
+        const isType = statement.isTypeOnly || element.isTypeOnly || (localTypes.has(local) && !localValues.has(local));
+        (isType ? exports.types : exports.values).push(element.name.text);
+      }
+    }
+  }
+  return exports;
 }
 
 function declaredNames(statement: ts.Statement): string[] {
