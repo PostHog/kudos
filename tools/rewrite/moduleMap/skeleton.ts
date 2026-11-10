@@ -516,7 +516,9 @@ function registrationOf(checker: ts.TypeChecker, statement: ts.Statement): Regis
   const args = property && (ts.isPropertyAssignment(property) ? property.initializer : (property as ts.ShorthandPropertyAssignment).name);
   if (args) {
     // A wrapper may register other args than it is given (adding a token, retyping a field): what the definition's
-    // validators accept must be the registered args type, field by field.
+    // validators accept must be the registered args type, field by field. Types, not validators, are compared, so a
+    // wrapper that swaps a validator for another of a compatible type (`v.any()` for `v.string()`, an added optional
+    // nested field) passes; every wrapper in convex/ hands its definition's args through unchanged (d-afde4bcb).
     const given = checker.getTypeAtLocation(args);
     const accepted = (validator: ts.Type) => {
       const type = validator.getProperty("type");
