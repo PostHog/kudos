@@ -3,13 +3,13 @@
 // stands in as the stub it waits on.
 import { afterEach, describe, expect, vi } from "vitest";
 import { useTestBackend, type TestBackend } from "../../testing/backend.ts";
-import { emoji, mention, messageChangedEvent, messageDeletedEvent, messageEvent, reactionEvent, section, text, type RichElement } from "../../testing/slackMessages.ts";
+import { emoji, mention, messageChangedEvent, messageDeletedEvent, messageEvent, section, text, type RichElement } from "../../testing/slackMessages.ts";
 import { waitsOn } from "../../testing/waiting.ts";
 import type { KudosGivenEvent } from "../bus/events.ts";
 import type { Subscription } from "../bus/publish.ts";
 import type { Registry } from "../registration.ts";
 import type { MemberId } from "../workspace/directory.ts";
-import { aDeploymentForWorkspace, aSignedInSession, memberOrNullOf, registry, slackEvent, switchWebsite, type Person } from "./albumPorts.testing.ts";
+import { aDeploymentForWorkspace, aSignedInSession, memberOrNullOf, react, registry, slackEvent, switchWebsite, type Person } from "./albumPorts.testing.ts";
 import { grantThoughtfulPacks, grantThoughtfulPacksJob } from "./packs.ts";
 
 const tuesday = new Date("2026-10-13T10:00:00Z");
@@ -215,7 +215,7 @@ async function thanks(giver: Person, words: string, ...recipients: Person[]) {
 }
 
 async function hugs(giver: Person, author: Person, ts: string) {
-  await slackEvent(t, reactionEvent({ user: giver.user, itemUser: author.user, ts, eventId: `EvHug${nextTs()}` }));
+  await react(t, { user: giver.user, itemUser: author.user, ts, eventId: `EvHug${nextTs()}` });
   await t.settle();
 }
 

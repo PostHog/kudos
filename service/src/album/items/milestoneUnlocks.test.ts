@@ -11,8 +11,9 @@ import { jobs } from "../../db/schema/index.ts";
 import type { Doc } from "../../db/schema/index.ts";
 import type { AlbumAnswer, TurnAnswer } from "../../website/album.ts";
 import type { Denial } from "../../website/memberQuery.ts";
+import { notPorted } from "../../notPorted.ts";
 import { milestoneCatalogue } from "../milestoneCatalogue.ts";
-import { aDeploymentForWorkspace, aSignedInSession, formerConvexCall, kudosReceived, memberChanged, memberOf, person, post, react, registry, switchWebsite, type Person, type Reader } from "../albumPorts.testing.ts";
+import { aDeploymentForWorkspace, aSignedInSession, kudosReceived, memberChanged, memberOf, person, post, react, registry, switchWebsite, type Person, type Reader } from "../albumPorts.testing.ts";
 
 const tuesday = Date.parse("2026-10-13T10:00:00Z");
 const minuteMs = 60_000;
@@ -218,9 +219,15 @@ async function hugsCount() {
   return (await t.seed.all("hugs")).length;
 }
 
-/** Today's `t.mutation(internal.album.emojiNames.reserveSharedEmojiNames, { workspace })`, S9's. */
-function reserveSharedEmojiNames(workspace: string): Promise<void> {
-  return formerConvexCall("album.emojiNames.reserveSharedEmojiNames", null, { workspace });
+/**
+ * Today's `t.mutation(internal.album.emojiNames.reserveSharedEmojiNames, { workspace })`. It is no website command, so
+ * S15's route table will never list it, and the module map gave S9's `emojiNames.ts` no stub for it because only tests
+ * call it. The test waits on S9 exporting it from that module; this then becomes
+ * `t.run((ctx) => reserveSharedEmojiNames(ctx, { workspace }))`.
+ */
+async function reserveSharedEmojiNames(workspace: string): Promise<void> {
+  void workspace;
+  throw notPorted("album.emojiNames.reserveSharedEmojiNames");
 }
 
 async function signedIn(person: Person) {
