@@ -96,6 +96,43 @@ async function bytesUpTo(answer: Response, max: number): Promise<Uint8Array | nu
   return Buffer.concat(chunks);
 }
 
+/**
+ * A GIF's sides: its screen's, widened to reach every frame, since a decoder draws each frame at the frame's own size
+ * wherever its screen says less. Null when it holds no frame or its blocks don't read as a GIF's.
+ */
+function gifSidesOf(bytes: Uint8Array, view: DataView, text: (from: number, to: number) => string): { width: number; height: number } | null {
+  if (bytes.byteLength < 13 || !["GIF87a", "GIF89a"].includes(text(0, 6))) return null;
+  let width = view.getUint16(6, true);
+  let height = view.getUint16(8, true);
+  const tableSize = (packed: number) => (packed & 0x80 ? 3 * 2 ** ((packed & 0x07) + 1) : 0);
+  /** Where the sub-blocks starting at `at` end, past their zero-length terminator; null when they run off the end. */
+  const pastSubBlocks = (at: number): number | null => {
+    while (at < bytes.byteLength) {
+      const size = bytes[at]!;
+      if (size === 0) return at + 1;
+      at += 1 + size;
+    }
+    return null;
+  };
+  let at: number | null = 13 + tableSize(bytes[10]!);
+  let frames = 0;
+  while (at !== null && at < bytes.byteLength) {
+    const block = bytes[at]!;
+    if (block === 0x3b) break;
+    if (block === 0x21) {
+      at = at + 2 <= bytes.byteLength ? pastSubBlocks(at + 2) : null;
+      continue;
+    }
+    if (block !== 0x2c || at + 10 > bytes.byteLength) return null;
+    frames += 1;
+    width = Math.max(width, view.getUint16(at + 1, true) + view.getUint16(at + 5, true));
+    height = Math.max(height, view.getUint16(at + 3, true) + view.getUint16(at + 7, true));
+    at = at + 10 + tableSize(bytes[at + 9]!) + 1;
+    at = at <= bytes.byteLength ? pastSubBlocks(at) : null;
+  }
+  return at === null || frames === 0 ? null : { width, height };
+}
+
 /** A PNG's, JPEG's or GIF's sides as its header gives them, or null when the header isn't its type's. */
 function sidesOf(bytes: Uint8Array, type: string): { width: number; height: number } | null {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -104,10 +141,7 @@ function sidesOf(bytes: Uint8Array, type: string): { width: number; height: numb
     if (bytes.byteLength < 24 || view.getUint32(0) !== 0x89504e47 || view.getUint32(4) !== 0x0d0a1a0a || text(12, 16) !== "IHDR") return null;
     return { width: view.getUint32(16), height: view.getUint32(20) };
   }
-  if (type === "image/gif") {
-    if (bytes.byteLength < 10 || !["GIF87a", "GIF89a"].includes(text(0, 6))) return null;
-    return { width: view.getUint16(6, true), height: view.getUint16(8, true) };
-  }
+  if (type === "image/gif") return gifSidesOf(bytes, view, text);
   if (bytes.byteLength < 4 || view.getUint16(0) !== 0xffd8) return null;
   let at = 2;
   while (at + 9 <= bytes.byteLength) {

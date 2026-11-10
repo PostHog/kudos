@@ -158,7 +158,21 @@ describe("a renderer thread that fails is replaced, and the next card draws", { 
     expect(answerOf((after as PromiseFulfilledResult<Uint8Array>).value)).toMatch(/^after on thread \d+$/);
   });
 
-  test("an idle renderer thread doesn't hold the process open", async () => {
+  test("a render stuck past its deadline fails at once, and the next card waits until the stuck thread has stopped", async () => {
+    const render = cardRenderer(fixture, { deadlineMs: 300 });
+    const started = performance.now();
+
+    const blocked = render(named("block"), noArt, cardWordsOf(quietMember)).then(
+      () => "drawn",
+      () => performance.now() - started,
+    );
+    const after = render(named("after"), noArt, cardWordsOf(quietMember)).then(() => performance.now() - started);
+
+    expect(await blocked).toBeLessThan(1_000);
+    expect(await after).toBeGreaterThanOrEqual(1_500);
+  });
+
+    test("an idle renderer thread doesn't hold the process open", async () => {
     const renderer = new URL("./cardRenderer.ts", import.meta.url).href;
     const words = { quiet: "", quietLine: "", place: "", rarity: null, foundDay: null };
     const script = `const { renderedCard } = await import(${JSON.stringify(renderer)});
@@ -205,6 +219,9 @@ describe("art is bounded before it reaches the renderer", () => {
     ["a PNG taller than the ceiling", pngOf(64, 20_000), "image/png"],
     ["a JPEG larger than the ceiling", jpegOf(30_000, 30_000), "image/jpeg"],
     ["a GIF larger than the ceiling", gifOf(9_000, 9_000), "image/gif"],
+    ["a small GIF whose first frame is larger than the ceiling", gifOf(64, 64, [{ width: 3_000, height: 3_000 }]), "image/gif"],
+    ["a small GIF whose later frame reaches past the ceiling", gifOf(64, 64, [{ width: 64, height: 64 }, { left: 2_040, width: 64, height: 64 }]), "image/gif"],
+    ["a GIF without a frame", gifOf(64, 64, []), "image/gif"],
     ["a file whose header isn't its type's", new TextEncoder().encode("not a picture at all"), "image/png"],
     ["a file past the download cap", padded(pngOf(64, 64), 3 * 1_048_576), "image/png"],
   ])("%s isn't drawn, and the card keeps without it", async (_, bytes, type) => {
@@ -259,8 +276,14 @@ function jpegOf(width: number, height: number) {
   return new Uint8Array([0xff, 0xd8, ...app0, ...sof0, 0xff, 0xd9]);
 }
 
-function gifOf(width: number, height: number) {
-  return new Uint8Array([...new TextEncoder().encode("GIF89a"), width & 0xff, width >> 8, height & 0xff, height >> 8, 0, 0, 0, 0x3b]);
+type GifFrame = { left?: number; top?: number; width: number; height: number };
+
+/** A GIF with a two-colour global table, a comment extension, and the frames given, each one block of image data. */
+function gifOf(width: number, height: number, frames: GifFrame[] = [{ width, height }]) {
+  const short = (n: number) => [n & 0xff, (n >> 8) & 0xff];
+  const comment = [0x21, 0xfe, 0x03, 0x61, 0x62, 0x63, 0x00];
+  const framed = frames.flatMap(({ left = 0, top = 0, width, height }) => [0x2c, ...short(left), ...short(top), ...short(width), ...short(height), 0x00, 0x02, 0x02, 0x44, 0x01, 0x00]);
+  return new Uint8Array([...new TextEncoder().encode("GIF89a"), ...short(width), ...short(height), 0x80, 0, 0, 0, 0, 0, 0xff, 0xff, 0xff, ...comment, ...framed, 0x3b]);
 }
 
 function padded(bytes: Uint8Array, size: number) {

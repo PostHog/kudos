@@ -2,9 +2,11 @@
 // synchronous: on the main thread either would hold Slack's acknowledgements and the website for as long as a card draws.
 // One at a time keeps one card's pictures and pixels in memory at most. The thread's JS heap has a ceiling of its own;
 // the art it is sent is bounded before it leaves the main thread (cardDrawing.ts), since decoded images live outside
-// that heap. A thread that crashes, errs or misses a render's deadline is ended and dropped before the next card goes,
-// and the next card starts a new one. The thread lives on between cards, so its fonts are decoded once, and it never
-// holds the process open while it waits. It loads cardPicture.ts alone, which imports nothing of the service's.
+// that heap. A thread that crashes, errs or misses a render's deadline is ended and dropped, and the next card starts a
+// new one. A render past its deadline fails its caller at once, but the next card waits until the old thread has
+// stopped: a render stuck in native code runs on until it returns, and two renders never run at once. The thread lives
+// on between cards, so its fonts are decoded once, and it never holds the process open while it waits. It loads
+// cardPicture.ts alone, which imports nothing of the service's.
 import { Worker } from "node:worker_threads";
 import type { CardArt, CardWords } from "./cardPicture.ts";
 import type { DrawnCard } from "./playerCard.ts";
@@ -22,14 +24,18 @@ type Answer = { png: Uint8Array } | { error: string };
 
 export type RenderCard = (card: DrawnCard, art: CardArt, words: CardWords) => Promise<Uint8Array>;
 
+/** One render: its picture for the caller, and when the renderer is free for the next card. */
+type Turn = { picture: Promise<Uint8Array>; over: Promise<unknown> };
+
 /** A renderer: one thread running `script`, drawing the cards it is asked for in order, each within `deadlineMs`. */
 export function cardRenderer(script: URL, { deadlineMs }: { deadlineMs: number }): RenderCard {
   let thread: Worker | undefined;
   let turns: Promise<unknown> = Promise.resolve();
 
+  /** Drops the thread so the next card starts a new one; resolves once the old one has stopped. */
   const retired = (worker: Worker) => {
     if (thread === worker) thread = undefined;
-    void worker.terminate();
+    return worker.terminate().catch(() => undefined);
   };
 
   const started = () => {
@@ -41,9 +47,11 @@ export function cardRenderer(script: URL, { deadlineMs }: { deadlineMs: number }
     return worker;
   };
 
-  const renderOnce = (card: DrawnCard, art: CardArt, words: CardWords) => {
+  const renderOnce = (card: DrawnCard, art: CardArt, words: CardWords): Turn => {
     const worker = (thread ??= started());
-    return new Promise<Uint8Array>((resolve, reject) => {
+    let free: (stopped?: Promise<unknown>) => void = () => {};
+    const over = new Promise<unknown>((resolve) => (free = (stopped) => resolve(stopped)));
+    const picture = new Promise<Uint8Array>((resolve, reject) => {
       const done = () => {
         clearTimeout(late);
         worker.off("message", answered);
@@ -53,22 +61,23 @@ export function cardRenderer(script: URL, { deadlineMs }: { deadlineMs: number }
       };
       const answered = (answer: Answer) => {
         done();
+        free();
         if ("png" in answer) resolve(answer.png);
         else reject(new Error(`the card renderer failed: ${answer.error}`));
       };
       const failed = (error: Error) => {
         done();
-        retired(worker);
+        free(retired(worker));
         reject(error);
       };
       const stopped = (code: number) => {
         done();
-        retired(worker);
+        free(retired(worker));
         reject(new Error(`the card renderer stopped with exit code ${code}`));
       };
       const late = setTimeout(() => {
         done();
-        retired(worker);
+        free(retired(worker));
         reject(new Error(`the card renderer missed its ${deadlineMs} ms deadline`));
       }, deadlineMs);
       worker.on("message", answered);
@@ -77,12 +86,16 @@ export function cardRenderer(script: URL, { deadlineMs }: { deadlineMs: number }
       worker.ref();
       worker.postMessage({ card, art, words });
     });
+    return { picture, over };
   };
 
   return (card, art, words) => {
     const turn = turns.then(() => renderOnce(card, art, words));
-    turns = turn.catch(() => undefined);
-    return turn;
+    turns = turn.then(
+      ({ over }) => over,
+      () => undefined,
+    );
+    return turn.then(({ picture }) => picture);
   };
 }
 
