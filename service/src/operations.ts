@@ -18,6 +18,7 @@ import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { publish, type DomainEvent, type Subscribers } from "./bus/publish.ts";
 import type { Clock } from "./clock.ts";
+import { advanceCreationClock, creationClockFloor, readCreationClock } from "./db/creationClock.ts";
 import { createScheduler, type Scheduler } from "./jobs/schedule.ts";
 import { errorFields, type Log } from "./log.ts";
 
@@ -77,27 +78,6 @@ export interface OperationsOptions {
 interface Stamps {
   floor: number;
   highest?: number;
-}
-
-// The creation clock (db/schema/service.ts) holds a float64 as an int64 that orders the same way: a non-negative one's
-// bits as they are, a negative one's with all but the sign bit flipped. Exact, so no stamp rounds below the one it keys.
-const readCreationClock = `select case when is_called then last_value end as clock from "creationClock"`;
-
-function creationClockFloor(result: pg.QueryResult): number {
-  const key = (result.rows[0] as { clock: string | null } | undefined)?.clock;
-  if (key === null || key === undefined) return Number.NEGATIVE_INFINITY;
-  const bits = BigInt(key);
-  const view = new DataView(new ArrayBuffer(8));
-  view.setBigInt64(0, bits < 0n ? bits ^ 0x7fff_ffff_ffff_ffffn : bits);
-  return view.getFloat64(0);
-}
-
-/** The statement that moves the creation clock to `stamp`; its key is an integer, so it is safe to write inline. */
-function advanceCreationClock(stamp: number): string {
-  const view = new DataView(new ArrayBuffer(8));
-  view.setFloat64(0, stamp);
-  const bits = view.getBigInt64(0);
-  return `select "advanceCreationClock"('${bits < 0n ? bits ^ 0x7fff_ffff_ffff_ffffn : bits}'::bigint)`;
 }
 
 // pg answers a text of several statements with one result each.
@@ -343,8 +323,12 @@ export function createOperations({ pool, clock, log, maxAttempts = 10, retryDela
       committing = true;
       const committed = await client.query(`${advance}COMMIT`).catch((error: unknown) => {
         // The connection may be gone even when Postgres answered: a session ended at COMMIT answers 57P01 first. A
-        // failed advance drops it too, and with it any lock the advance held.
+        // failed advance drops it too, and with it any lock the advance held, and the transaction it left aborted.
         broken ??= error;
+        // A statement the handler left running failed after it returned, so the advance found the transaction aborted:
+        // that statement's failure is the answer, as COMMIT's ROLLBACK would have given it, so a serialization failure
+        // still retries.
+        if (hasSqlState(error) && error.code === "25P02" && aborted !== undefined) throw wentOnAfter(aborted);
         throw error;
       });
       const commit = lastOf(committed);
