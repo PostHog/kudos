@@ -3,7 +3,7 @@
 // answers it. The reads and commands whose subject is the member check or a session (closed, signed out, a session from
 // before the preview) go through S15's route transport with the reader's identity, in S17's route pull request. Today's
 // getLeaderboard read has no service handler yet, so the closest service functions stand in for it until S16 ports it.
-import { afterEach, beforeEach, describe, expect, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { useTestBackend, type TestBackend } from "../../testing/backend.ts";
 import { flagsKey, postHogHost, projectToken, type FlagDefinition } from "../../testing/fakePostHog.ts";
 import { definitionsStored, onForEmails, onForEveryone } from "../../testing/flags.ts";
@@ -111,11 +111,12 @@ const meOf = (member: MemberId, { user, name }: { user: string; name: string }):
 // The stacks a member's profile read reaches past the member check: engine/ S4, progression/ S6, wallet/ S7, the album
 // flag S9, avatars S10, groups/ S11, the clock and the member check S15, the unlock path, inventory and book spread
 // S16, settings and the skill tree S17's later PRs.
-// A sign-in reaches the directory S3, the welcome item S8, the website flag S15 and the preview moments it runs S6.
+// A sign-in reaches the directory S3, the welcome item S8 and the preview moments it runs S6, and the website flag reads
+// S6's unlock launch.
 
 describe("F26 F27 F28 F29: a member previews the website by their own decision", () => {
   describe("F26: signing in admits on the workspace decision or the member's own", () => {
-    waitsOn(["S3", "S15"], "while the website is closed for the workspace, a member it doesn't name and a person the directory doesn't know are refused, and no account appears", async () => {
+    test("while the website is closed for the workspace, a member it doesn't name and a person the directory doesn't know are refused, and no account appears", async () => {
       await aMemberWithEmail(alice);
       await aMemberWithEmail(bob);
       await flagsServed(websiteForAlice);
@@ -194,7 +195,7 @@ describe("F26 F27 F28 F29: a member previews the website by their own decision",
       expect(bobsLinks).toBeNull();
     });
 
-    waitsOn(["S3", "S15", "S16", "S17"], "with the website on for the workspace, App Home links to the pages themselves", async () => {
+    waitsOn(["S3", "S6", "S15", "S16", "S17"], "with the website on for the workspace, App Home links to the pages themselves", async () => {
       await aMemberWithEmail(bob);
       await flagsServed(onForEveryone("website"));
 
