@@ -2,15 +2,13 @@
 // set up as their `workspace()` set up Convex's, signed reactions and kudos through the front door, settling in time
 // order, and reads of members, standings and stored rows. Time moves with the app's clock: the fixtures' timestamps
 // read `Date.now()`, which follows the app's clock here.
-import { getTableName, is } from "drizzle-orm";
-import { PgTable } from "drizzle-orm/pg-core";
+import { getTableName } from "drizzle-orm";
 import { eq, min } from "drizzle-orm";
 import { afterEach, beforeEach, vi } from "vitest";
 import type { DomainEvent } from "../bus/events.ts";
-import * as dataModel from "../db/schema/index.ts";
 import type { TableName } from "../db/schema/index.ts";
-import * as serviceTables from "../db/schema/service.ts";
 import { jobs } from "../db/schema/service.ts";
+import { dataModelTables as loadedTables } from "../load/loader.ts";
 import { NotPortedError, notPorted } from "../notPorted.ts";
 import { achievementsLiveIn } from "../achievements/flag.ts";
 import { unlocksLiveIn } from "../unlocks/launch.ts";
@@ -212,13 +210,11 @@ export async function setHugBudget(t: TestBackend, args: { workspace: string; hu
   await t.run((ctx) => setHugBudgetOf(ctx, args));
 }
 
-const serviceOwned = new Set((Object.values(serviceTables) as unknown[]).filter((table): table is PgTable => is(table, PgTable)).map(getTableName));
-
-/** The data model's tables, the ones Convex held; the service's own (jobs, crons, receipts' bookkeeping) are not. */
-export const dataModelTables: TableName[] = (Object.values(dataModel) as unknown[])
-  .filter((table): table is PgTable => is(table, PgTable))
-  .map((table) => getTableName(table) as TableName)
-  .filter((table) => !serviceOwned.has(table));
+/**
+ * The data model's tables, the ones Convex held; the service's own (jobs, crons, receipts' bookkeeping) are not. The
+ * cutover load's list, so this helper never imports the whole schema, which R18 keeps to the modules it pins.
+ */
+export const dataModelTables: TableName[] = loadedTables.map((table) => getTableName(table) as TableName);
 
 /** Today's `everythingStored`: every row of the data model, table by table in creation order. */
 export async function everythingStored(t: TestBackend, { except = [] }: { except?: string[] } = {}): Promise<Array<Record<string, unknown>>> {
