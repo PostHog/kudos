@@ -214,7 +214,7 @@ describe("website commands pass one guard", () => {
     const [item] = (await boardOf(asAlice)).items;
     const before = await everythingWritten(t);
 
-    expect(await turn(signedOut, item!.item)).toEqual({ kind: "signed-out" });
+    expect(await turn(signedOut(t), item!.item)).toEqual({ kind: "signed-out" });
     expect(await everythingWritten(t)).toEqual(before);
     await memberChanged(t, "user_change", { id: alice.user, team_id: "T1", deleted: true });
     await t.settle();

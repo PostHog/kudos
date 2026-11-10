@@ -8,6 +8,7 @@
 // - A website command or read with no service route nor module-map stub answers through `formerConvexCall`, named by
 //   its Convex path.
 import { asc, getTableName, is, eq } from "drizzle-orm";
+import { Hono } from "hono";
 import { PgTable } from "drizzle-orm/pg-core";
 import { expect, vi } from "vitest";
 import type { TestBackend } from "../../testing/backend.ts";
@@ -25,7 +26,7 @@ import * as schema from "../db/schema/index.ts";
 import { jobs, type TableName } from "../db/schema/index.ts";
 import { notPorted } from "../notPorted.ts";
 import type { MutationContext } from "../operations.ts";
-import type { Registry } from "../registration.ts";
+import type { Registry, Routes } from "../registration.ts";
 import { serviceRegistry } from "../registry.ts";
 import { slackEvents } from "../slack/events.ts";
 import type { EventCallback, EventKind, Handled, SlackEvent } from "../slack/frontDoor.ts";
@@ -38,6 +39,9 @@ import type { AlbumHoggiesRead, AlbumPersonRead, AlbumRead, LevelUpRead, OpenAns
 import type { CollectionAnswer } from "../website/collection.ts";
 import type { CommandAnswer, CrateOpenAnswer, CratePurchaseAnswer } from "../website/commands.ts";
 import type { Denial } from "../website/memberQuery.ts";
+import type { Route } from "../website/api/route.ts";
+import { websiteRoutes } from "../website/api/table.ts";
+import { apiHeader } from "../website/api/transport.ts";
 import { rememberSignedInMember } from "../website/signIn.ts";
 import type { MemberId } from "../workspace/directory.ts";
 import { catalogue, hoggieNamed } from "./hoggies/catalogue.ts";
@@ -119,14 +123,27 @@ export type FormerConvexPath =
   | "website.commands.openFeature"
   | "website.commands.buyCrate";
 
-// The one seam for the calls that have neither a service route nor a module-map stub yet: each is named by its former
-// Convex path and throws that path's `NotPortedError`, as a stub there would. Once S15's route table
-// (PostHog/kudos#935) is on main, look the name up there, call the route when it is registered (or POST
-// /api/query|mutation/<name>), and throw `notPorted(<name>)` only when it isn't. S8 makes that switch when #935 lands.
-export async function formerConvexCall<T>(name: FormerConvexPath, caller: Session | null, args: Record<string, unknown> = {}): Promise<T> {
+// The one seam for the website's calls: each is named by its former Convex path, as S15's route table (PostHog/kudos#935)
+// names its routes. A call the table registers goes to its route through the app, as the website's browser sends it,
+// `POST /api/<query|mutation>/<name>`; one it doesn't register yet throws that path's `NotPortedError`, as a stub there
+// would, so each test switches to the real route by itself once the stack that owns it registers it.
+//
+// Who the request signs in as waits on S15's identity mapping (15.2): until then the transport's identify throws its
+// stub for everyone, and `caller` isn't sent. When 15.2 lands, S8 sends the caller's session the way it reads one.
+export async function formerConvexCall<T>(t: TestBackend, name: FormerConvexPath, caller: Session | null, args: Record<string, unknown> = {}): Promise<T> {
+  const route = (websiteRoutes as readonly Route[]).find((each) => each.name === name);
+  if (route === undefined) throw notPorted(name);
   void caller;
-  void args;
-  throw notPorted(name);
+  routeFailures.length = 0;
+  const response = await t.app.request(`/api/${route.kind}/${name}`, { method: "POST", headers: { [apiHeader]: "1", "content-type": "application/json" }, body: JSON.stringify(args) });
+  if (response.status === 200) return (await response.json()) as T;
+  // The transport answers only "the arguments don't fit the route"; the route's own schema says why, as Convex's
+  // validator did.
+  if (response.status === 400) {
+    const refused = route.args.safeParse(args);
+    if (!refused.success) throw new Error(`${name} refused its arguments: ${refused.error.issues.map(({ message }) => message).join("; ")}`);
+  }
+  throw routeFailures.pop() ?? new Error(`${name} answered ${response.status}: ${await response.text()}`);
 }
 
 /** A website caller, signed in or not, as today's `t.withIdentity(...)` or `t` makes the calls. */
@@ -148,11 +165,11 @@ export type Reader = {
   buyCrate(args: { next: number }): Promise<CratePurchaseAnswer | Denial>;
 };
 
-function readerOf(session: Session | null): Reader {
+function readerOf(t: TestBackend, session: Session | null): Reader {
   const call =
     <T>(name: FormerConvexPath) =>
     (args: Record<string, unknown> = {}) =>
-      formerConvexCall<T>(name, session, args);
+      formerConvexCall<T>(t, name, session, args);
   return {
     session,
     getAlbum: call("website.album.getAlbum"),
@@ -173,7 +190,9 @@ function readerOf(session: Session | null): Reader {
 }
 
 /** A caller with no session, as today's calls on `t` itself. */
-export const signedOut: Reader = readerOf(null);
+export function signedOut(t: TestBackend): Reader {
+  return readerOf(t, null);
+}
 
 const hourMs = 60 * 60 * 1000;
 
@@ -188,7 +207,7 @@ export async function aSignedInSession(
 ): Promise<{ user: Id<"users">; asSignedIn: Reader }> {
   const profile = { id: `${workspace}/${user}`, chatWorkspace: workspace, chatUser: user, name };
   const userId = await t.run((ctx) => rememberSignedInMember(ctx, { existingUserId, profile }));
-  return { user: userId, asSignedIn: readerOf({ user: userId, endsAt: t.clock.now() + endsIn }) };
+  return { user: userId, asSignedIn: readerOf(t, { user: userId, endsAt: t.clock.now() + endsIn }) };
 }
 
 /**
@@ -217,7 +236,23 @@ const events: Partial<Record<EventKind, EventHandler>> = Object.fromEntries(
     },
   ]),
 );
-export const registry: Registry = { ...serviceRegistry, slack: { ...serviceRegistry.slack, events } };
+// Every website route's failure is kept too, so a stub a route reaches is thrown to the test as itself rather than as
+// the request's 500, whose log names only the error's class.
+const routeFailures: unknown[] = [];
+const keepingFailures =
+  (routes: Routes): Routes =>
+  (runtime) =>
+    new Hono()
+      .use(async (_c, next) => {
+        try {
+          await next();
+        } catch (error) {
+          routeFailures.push(error);
+          throw error;
+        }
+      })
+      .route("/", routes(runtime));
+export const registry: Registry = { ...serviceRegistry, slack: { ...serviceRegistry.slack, events }, routes: serviceRegistry.routes.map(keepingFailures) };
 
 // The front door's classification, for the events these ports send: the first kind whose test passes takes it.
 function kindOf(event: SlackEvent): EventKind {

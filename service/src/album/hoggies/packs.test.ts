@@ -26,6 +26,7 @@ import {
   switchWebsite,
   unlocksShippedBeforeAnyoneJoined,
   type Reader,
+  registry,
 } from "../albumPorts.testing.ts";
 import type { CrateKey } from "./crateKey.ts";
 import { packBonusOf } from "./draw.ts";
@@ -42,7 +43,7 @@ const coinAmounts = [1, 2, 3, 4, 5];
 
 type Bonus = { xp: number; coins: number };
 
-const testBackend = useTestBackend({ now: now.getTime() });
+const testBackend = useTestBackend({ now: now.getTime(), registry });
 let t: TestBackend;
 let publishedSeen = 0;
 

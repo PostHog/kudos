@@ -371,8 +371,8 @@ describe("website commands pass one guard", () => {
     const [sticker] = await openEvery(asAlice);
     const before = await everyTable();
 
-    expect(await putIn(signedOut, sticker!.item)).toEqual({ kind: "signed-out" });
-    expect(await putAllIn(signedOut)).toEqual({ kind: "signed-out" });
+    expect(await putIn(signedOut(t), sticker!.item)).toEqual({ kind: "signed-out" });
+    expect(await putAllIn(signedOut(t))).toEqual({ kind: "signed-out" });
     expect(await everyTable()).toEqual(before);
     await memberChanged(t, "user_change", { id: alice.user, team_id: "T1", deleted: true });
     await t.settle();
