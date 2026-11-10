@@ -328,9 +328,9 @@ describe("the round trip", () => {
   const reverify = async (service: Copy): Promise<Status> => {
     await database.pool.query(`update "loadState" set phase = 'verifying', "roundTrip" = null, error = null`);
     await service.load.refresh(); // a copy stops reading the state once the load is done
-
+    // Settled, not only answered: an equal round trip goes on into recovery, which must end before the test changes more.
     await waitFor(async () => (await status(service)).roundTrip !== null);
-    return status(service);
+    return settled(service);
   };
   const differing = (answer: Status) => answer.roundTrip?.tables.filter((table) => !table.equal).map((table) => table.table);
 
