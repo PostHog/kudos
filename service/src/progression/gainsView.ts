@@ -1,17 +1,18 @@
-// The module map's skeleton of convex/progression/gainsView.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
-// notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
+// Which gains a reply or a view shows: XP, quest progress and perk bonuses. Today's convex/progression/gainsView.ts.
+import { onTheMondayPath } from "../quests/flag.ts";
 import type { MemberId } from "../workspace/directory.ts";
 import type { QueryContext } from "../operations.ts";
-import { notPorted } from "../notPorted.ts";
+import { skillTreeAppliesIn } from "./skillTree.ts";
+import { xpLevelsOnFor, xpLevelsShownIn } from "./xpLevels.ts";
 
 export function xpGainsShownTo(ctx: QueryContext, workspace: string, member: MemberId | null): Promise<boolean> {
-  throw notPorted("progression.gainsView.xpGainsShownTo");
+  return member === null ? xpLevelsShownIn(ctx, workspace) : xpLevelsOnFor(ctx, member);
 }
 
 export async function questGainsShownTo(ctx: QueryContext, member: MemberId | null): Promise<boolean> {
-  throw notPorted("progression.gainsView.questGainsShownTo");
+  return member !== null && (await onTheMondayPath(ctx, member));
 }
 
 export async function bonusGainsShownTo(ctx: QueryContext, workspace: string, member: MemberId | null): Promise<boolean> {
-  throw notPorted("progression.gainsView.bonusGainsShownTo");
+  return (await xpGainsShownTo(ctx, workspace, member)) && (await skillTreeAppliesIn(ctx, workspace));
 }

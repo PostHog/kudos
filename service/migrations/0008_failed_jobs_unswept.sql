@@ -1,0 +1,2 @@
+ALTER TABLE "jobs" ADD COLUMN "sweptAt" double precision;--> statement-breakpoint
+CREATE INDEX "jobs_failed_and_unswept" ON "jobs" USING btree ("completedAt","_id") WHERE "jobs"."state" = 'failed' and "jobs"."sweptAt" is null;
