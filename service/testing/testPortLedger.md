@@ -75,7 +75,7 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/analytics/projections.test.ts | S14 | | |
 | convex/analytics/questFinished.test.ts | S14 | | |
 | convex/analytics/skillTreeAndBook.test.ts | S14 | | |
-| convex/analytics/sweep.test.ts | S14 | | |
+| convex/analytics/sweep.test.ts | S14 | service/src/analytics/sweep.test.ts | |
 | convex/analytics/unlocks.test.ts | S14 | | |
 | convex/bus/replay.test.ts | S1 | | |
 | convex/bus/seams.guard.test.ts | S1 | | |
@@ -207,7 +207,7 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/slack/progressionHome.test.ts | S6 | | |
 | convex/slack/publicNotices.test.ts | S5 | | |
 | convex/slack/receiptCleanup.test.ts | S1 | | |
-| convex/slack/signIn.test.ts | S15 | | |
+| convex/slack/signIn.test.ts | S15 | service/src/website/identity.test.ts | S3 S6 |
 | convex/slack/skillTree.test.ts | S6 | | |
 | convex/slack/skillTreeFlag.test.ts | S6 | | |
 | convex/slack/stickerBookGate.test.ts | S10 | | |
@@ -266,7 +266,7 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/website/leaderboard.test.ts | S16 | | |
 | convex/website/leaderboardHugs.test.ts | S16 | | |
 | convex/website/levelUp.test.ts | S17 | service/src/website/levelUp.test.ts | S6 S9 S10 S16 |
-| convex/website/link.test.ts | S17 | service/src/website/link.test.ts | S15 |
+| convex/website/link.test.ts | S17 | service/src/website/link.test.ts | |
 | convex/website/mondayQuests.test.ts | S17 | | |
 | convex/website/onboarding.test.ts | S17 | service/src/website/onboarding.test.ts | S4 S5 S6 S7 S8 S9 S10 S11 S12 S13 S14 S16 |
 | convex/website/petHoggie.test.ts | S16 | | |
@@ -280,7 +280,7 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/website/setBoardVisibility.test.ts | S17 | service/src/website/setBoardVisibility.test.ts | S4 S5 S6 S10 S11 S15 S16 S17 |
 | convex/website/settings.test.ts | S17 | service/src/website/settings.test.ts | S3 S4 S5 S6 S7 S9 S10 S11 S12 S15 S16 S17 |
 | convex/website/shareableUrls.test.ts | S17 | service/src/website/shareableUrls.test.ts | S16 |
-| convex/website/signIn.test.ts | S17 | service/src/website/firstEntry.test.ts | S3 S8 S15 |
+| convex/website/signIn.test.ts | S17 | service/src/website/firstEntry.test.ts | S3 S6 S8 |
 | convex/website/skillTree.test.ts | S17 | service/src/website/skillTree.test.ts | S4 S5 S6 S7 S9 S10 S11 S15 S16 |
 | convex/website/skillTreeCatalogue.test.ts | S17 | service/src/website/skillTreeCatalogue.test.ts | S6 S7 S10 S16 |
 | convex/website/spotlight.test.ts | S16 | | |
