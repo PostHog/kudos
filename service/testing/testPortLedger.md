@@ -259,7 +259,7 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/website/features.test.ts | S15 | | |
 | convex/website/groupBoards.test.ts | S16 | | |
 | convex/website/hoggieForge.test.ts | S16 | | |
-| convex/website/hosting.test.ts | S15 | | |
+| convex/website/hosting.test.ts | S15 | service/src/website/hosting.test.ts | |
 | convex/website/inventory.test.ts | S16 | | |
 | convex/website/lastVisit.test.ts | S17 | | |
 | convex/website/leaderboard.test.ts | S16 | | |

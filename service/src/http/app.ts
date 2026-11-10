@@ -38,12 +38,14 @@ export interface AppOptions {
   slack?: Hono;
   /** The domains' website routes, mounted at the root behind the gate, after the app's own paths. */
   routes?: Hono[];
+  /** The website's built files, mounted last: its single-page fallback answers only what no other route does. */
+  website?: Hono;
 }
 
 const slackPaths = /^\/slack(\/|$)/;
 const loadPaths = /^\/admin\/load(\/|$)/;
 
-export function createApp({ commit, readiness, off, log, clock, testSecret, worker, timeBudgetMs = 25_000, load, slack, routes = [] }: AppOptions): Hono {
+export function createApp({ commit, readiness, off, log, clock, testSecret, worker, timeBudgetMs = 25_000, load, slack, routes = [], website }: AppOptions): Hono {
   const app = new Hono();
 
   // One line per request: method, path without its query, status and duration. Never a header or a body.
@@ -96,6 +98,7 @@ export function createApp({ commit, readiness, off, log, clock, testSecret, work
   // The app's own paths: a domain's route never answers them, whatever the front door, the seam or the load mounted.
   for (const reserved of ["/healthz", "/slack", "/slack/*", "/testing/*", "/admin/load", "/admin/load/*"]) app.all(reserved, (c) => c.notFound());
   for (const domainRoutes of routes) app.route("/", domainRoutes);
+  if (website) app.route("/", website);
 
   // A failure answers 500; the log names the path and the error's class and code, never its message, which may quote
   // SQL parameters or a member's words. Hono's default would print the whole error: this hands it to the request log,

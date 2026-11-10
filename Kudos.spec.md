@@ -76,6 +76,10 @@ Peer recognition for Slack on one Convex deployment per workspace; the product r
 - route POST /admin/load/reset: the operator holding HEDGEHUG_ADMIN_TOKEN empties every table a load wrote, before the load is done
   handler: createLoadControl in service/src/load/control.ts
   trust: browser
+- route GET /*: a browser reads one of the website's built files, or its page for any address that names no file and isn't the API's
+  handler: websiteFiles in service/src/website/hosting.ts
+  trust: browser
+  control: none — it answers only files of the build folder the image holds, looked up by name in a list read from that folder, never a path the request spells; it reads no row and no secret, and every HTML answer carries the policy of contentSecurityPolicy, which lets the page load only its own code
 - route POST /api/query/*: the website reads one of the route table's reads, named by its former Convex path, for the member the request signs in as
   handler: apiTransport in service/src/website/api/transport.ts
   trust: browser
