@@ -19,7 +19,7 @@ import { serviceRegistry } from "../registry.ts";
 import type { EventKind } from "./frontDoor.ts";
 import type { MemberId } from "../workspace/directory.ts";
 import { setHugBudget as setHugBudgetOf } from "../workspace/settings.ts";
-import { useTestBackend, type LogLine, type TestBackend } from "../../testing/backend.ts";
+import { useTestBackend, type BackendOptions, type LogLine, type TestBackend } from "../../testing/backend.ts";
 import type { Stack } from "../../testing/waiting.ts";
 import { flagsFromPostHog, onForEveryone } from "../../testing/flags.ts";
 import { flagsKey, postHogHost, projectToken, type FlagDefinition } from "../../testing/fakePostHog.ts";
@@ -46,8 +46,8 @@ export function slackTs(at: number) {
  * `Date` at `now`), and a backend per test whose app clock starts at `Date.now()`: a test that sets the system time
  * before it starts its backend starts the app's clock there, as Convex's test backend followed the faked time.
  */
-export function useHugsBackend(now: Date): () => TestBackend {
-  const backend = useTestBackend();
+export function useHugsBackend(now: Date, options: Pick<BackendOptions, "registry"> = {}): () => TestBackend {
+  const backend = useTestBackend(options);
   beforeEach(() => {
     vi.useFakeTimers({ now, toFake: ["Date"] });
     vi.stubEnv("SLACK_BOT_TOKEN", "xoxb-test");
