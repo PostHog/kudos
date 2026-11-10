@@ -57,7 +57,7 @@ export interface TestBackend extends SlackClient {
   seed: Seeder;
   slack: FakeSlack;
   postHog: FakePostHog;
-  /** The app's HTTP routes, with the front door at `/slack`. */
+  /** The app's HTTP routes, with the front door at `/slack` and the domains' website routes, as the service boots them. */
   app: ReturnType<typeof createApp>;
   /** Every line the service logged. */
   logs: LogLine[];
@@ -70,7 +70,10 @@ export interface TestBackend extends SlackClient {
    * sees it; a job that failed any other way stays `failed` for the test's own assertions.
    */
   settle(): Promise<TimeAnswer>;
-  /** The events committed operations published, in the order they committed them. */
+  /**
+   * The events committed operations published, in the order they published them. Two operations that overlap are in
+   * the order of their publishing, which is not always the order they committed.
+   */
   published(): Promise<PublishedEvent[]>;
 }
 
@@ -86,7 +89,10 @@ class RecordingSubscribers extends Map<string, readonly Subscription[]> {
   }
 }
 
-const withoutRecorder = (answer: TimeAnswer): TimeAnswer => ({ ...answer, ran: answer.ran.filter((name) => name !== recorderName) });
+// How long a test's end waits for its worker's running jobs; a test's jobs finish well inside it.
+const stopGraceMs = 10_000;
+
+const withoutRecorder =(answer: TimeAnswer): TimeAnswer => ({ ...answer, ran: answer.ran.filter((name) => name !== recorderName) });
 
 // How the worker records a failed job's error: `<class>: <message>`, and a stub's message is `<path> is not ported yet`.
 const stubFailure = /^NotPortedError: (.+) is not ported yet$/;
@@ -95,7 +101,13 @@ const stubFailure = /^NotPortedError: (.+) is not ported yet$/;
 export function useTestBackend(defaults: BackendOptions = {}): (options?: BackendOptions) => TestBackend {
   const database = useTestDatabase();
   const db = drizzle({ client: database.pool });
-  afterEach(() => void vi.unstubAllGlobals());
+  // A job still running when its test ends finishes within that test, before the next one empties the database and
+  // before `fetch` is the real one again; otherwise it writes into the next test.
+  const started: Worker[] = [];
+  afterEach(async () => {
+    await Promise.all(started.splice(0).map((worker) => worker.stop(stopGraceMs)));
+    vi.unstubAllGlobals();
+  });
 
   return (options = {}) => {
     const { now = 1_800_000_000_000, workspace = "T1", registry = serviceRegistry } = { ...defaults, ...options };
@@ -108,6 +120,7 @@ export function useTestBackend(defaults: BackendOptions = {}): (options?: Backen
     const subscribers: Subscribers = new RecordingSubscribers(registry.subscribers);
     const operations = createOperations({ pool: database.pool, clock, log, retryDelayMs: () => 1, subscribers });
     const worker = createWorker({ operations, log, registry: new Map([...registry.jobs, [recorderName, recorder]]), pollMs: 3_600_000 });
+    started.push(worker);
     const appTime = createAppTime({ clock, worker });
     // A job reaches a stub inside the worker, which records the failure and moves on; surface the first one not yet surfaced.
     const surfaced = new Set<string>();
@@ -136,7 +149,8 @@ export function useTestBackend(defaults: BackendOptions = {}): (options?: Backen
       },
     };
     const frontDoor = createFrontDoor({ signingSecret, clock, off: false, log, operations, handlers: registry.slack });
-    const app = createApp({ commit: "test", readiness: { migrations: () => "done" }, off: false, log, clock, worker, slack: frontDoor });
+    const routes = registry.routes.map((domainRoutes) => domainRoutes({ operations, clock, log }));
+    const app = createApp({ commit: "test", readiness: { migrations: () => "done" }, off: false, log, clock, worker, slack: frontDoor, routes });
 
     const slack = new FakeSlack();
     const postHog = new FakePostHog();

@@ -1,11 +1,14 @@
 // A member's first entry through SSO runs today's sign-in effects once: the `users` row with their Slack pair, the later
 // verification when the directory doesn't know them yet, and `memberGreeted` with the welcome item. Entries after the
-// first, and a member who signed in before the move, write nothing. Today's convex/website/signIn.test.ts proves the
-// Slack sign-in around these effects (S15's), and convex/album/items/welcomeItem.test.ts what the greeting earns (S8's).
+// first, and a member who signed in before the move, write nothing; a later entry of a person the directory doesn't know
+// starts a fresh check after a failed one. Today's convex/website/signIn.test.ts, on the service's test backend; its
+// sweep of stranded verifications is verifyMember's own (S3's), and convex/album/items/welcomeItem.test.ts proves what
+// the greeting earns (S8's).
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { useTestBackend, type TestBackend } from "../../testing/backend.ts";
 import { flagsKey, postHogHost, projectToken } from "../../testing/fakePostHog.ts";
 import { definitionsStored, offForEveryone, onForEveryone } from "../../testing/flags.ts";
+import { httpStatus, rateLimitedFor } from "../../testing/fakeSlack.ts";
 import { waitsOn } from "../../testing/waiting.ts";
 import type { MemberId } from "../workspace/directory.ts";
 import { rememberSignedInMember, SignInRefused, type SignedIn } from "./signIn.ts";
@@ -72,6 +75,11 @@ describe("only the allowed workspace enters", () => {
     expect(await t.seed.all("users")).toEqual([]);
   });
 
+  test("a Slack pair with an empty user is refused and no account appears", async () => {
+    await expect(enters({ ...juno, user: "" })).rejects.toThrow(/user_id/);
+    expect(await t.seed.all("users")).toEqual([]);
+  });
+
   test("an unset SLACK_WORKSPACE_ID refuses every entry", async () => {
     vi.stubEnv("SLACK_WORKSPACE_ID", "");
 
@@ -117,12 +125,26 @@ describe("the first entry", () => {
   });
 
   waitsOn(["S3", "S8", "S15"], "greets a member once, with the welcome item they are owed", async () => {
+    await definitionsStored(t.operations, onForEveryone("website"), onForEveryone("welcome-item"), onForEveryone("hidden-items"));
     const member = await aMember("U_JUNO");
 
     await enters(juno);
 
     expect(await greetings()).toEqual([expect.objectContaining({ type: "memberGreeted", workspace: allowedWorkspace, member, owesTheWelcomeItem: true, at: t.clock.now() })]);
   });
+
+  // The welcome item is owed only while welcome-item and hidden-items are both on (convex/album/items/welcome.ts).
+  for (const off of ["welcome-item", "hidden-items"]) {
+    waitsOn(["S3", "S8", "S15"], `greets a member owed no welcome item while ${off} is off`, async () => {
+      const on = ["welcome-item", "hidden-items"].filter((key) => key !== off);
+      await definitionsStored(t.operations, onForEveryone("website"), offForEveryone(off), ...on.map(onForEveryone));
+      await aMember("U_JUNO");
+
+      await enters(juno);
+
+      expect(await greetings()).toEqual([expect.objectContaining({ type: "memberGreeted", owesTheWelcomeItem: false })]);
+    });
+  }
 
   waitsOn(["S3", "S8", "S15"], "a second entry finds the same users row and greets nobody again", async () => {
     await aMember("U_JUNO");
@@ -160,5 +182,95 @@ describe("the first entry", () => {
     expect(refused).toMatchObject({ reason: "closed" });
     expect(await t.seed.all("users")).toEqual([]);
     expect(await t.published()).toEqual([]);
+  });
+});
+
+// WS8. Today's test read the outcome off the profile page; this one reads the verification and the directory row the page
+// reads, since the page is 17.2's.
+describe("WS8: a person the directory doesn't know yet is verified with users.info", () => {
+  const verification = async () => (await t.seed.all("memberVerifications"))[0];
+  const directory = () => t.seed.all("members");
+  // Runs the verification's tries as they come due, as today's `settleInTimeOrder`; a try waits a minute at most here.
+  async function settleTheChecks() {
+    for (let step = 0; step < 20; step += 1) {
+      await t.settle();
+      if ((await verification())?.state !== "pending") return;
+      t.time.advance(60_000);
+    }
+  }
+
+  waitsOn(["S3", "S15"], "they read verifying, then member once users.info answers, with the directory filled", async () => {
+    t.slack.withMember("U_JUNO", { tz: "Europe/London" });
+    await enters(juno);
+    expect(await verification()).toMatchObject({ state: "pending" });
+
+    await t.settle();
+
+    expect(await directory()).toEqual([expect.objectContaining({ workspace: allowedWorkspace, user: "U_JUNO", kind: "member" })]);
+    expect(t.slack.callsTo("users.info")).toEqual([{ user: "U_JUNO" }]);
+  });
+
+  waitsOn(["S3", "S15"], "a person users.info knows as deleted reads not-a-member", async () => {
+    t.slack.withMember("U_JUNO", { deleted: true });
+    await enters(juno);
+
+    await t.settle();
+
+    expect(await directory()).toEqual([expect.objectContaining({ user: "U_JUNO", kind: "not-a-member" })]);
+  });
+
+  waitsOn(["S3", "S15"], "after 3 failed lookups, each waiting the Retry-After Slack asked for, they read unverified and the directory stays empty", async () => {
+    t.slack.withMember("U_JUNO").answering("users.info", rateLimitedFor(30), rateLimitedFor(30), httpStatus(500));
+    const start = t.clock.now();
+    await enters(juno);
+
+    await settleTheChecks();
+
+    expect(await verification()).toMatchObject({ state: "failed" });
+    expect(t.slack.timesOf("users.info").map((at) => (at - start) / 1000)).toEqual([0, 30, 60]);
+    expect(await directory()).toEqual([]);
+  });
+
+  waitsOn(["S3", "S15"], "a person users.info keeps answering ok without a user for reads unverified after the retries", async () => {
+    const okWithoutUser = () => Response.json({ ok: true });
+    t.slack.withMember("U_JUNO").answering("users.info", okWithoutUser, okWithoutUser, okWithoutUser);
+    await enters(juno);
+
+    await settleTheChecks();
+
+    expect(await verification()).toMatchObject({ state: "failed" });
+    expect(t.slack.callsTo("users.info")).toHaveLength(3);
+  });
+
+  waitsOn(["S3", "S15"], "entering again after a failed verification starts a fresh check", async () => {
+    t.slack.withMember("U_JUNO").answering("users.info", httpStatus(500), httpStatus(500), httpStatus(500));
+    const user = await enters(juno);
+    await settleTheChecks();
+    expect(await verification()).toMatchObject({ state: "failed" });
+
+    expect(await enters(juno)).toBe(user);
+    expect(await verification()).toMatchObject({ state: "pending" });
+    await settleTheChecks();
+
+    expect(await directory()).toEqual([expect.objectContaining({ user: "U_JUNO", kind: "member" })]);
+    expect(t.slack.callsTo("users.info")).toHaveLength(4);
+  });
+
+  waitsOn(["S3", "S15"], "entering again while a check is pending asks Slack once", async () => {
+    t.slack.withMember("U_JUNO");
+    await enters(juno);
+    await enters(juno);
+
+    await t.settle();
+
+    expect(t.slack.callsTo("users.info")).toHaveLength(1);
+  });
+
+  waitsOn(["S3", "S15"], "a member the directory already knows is not looked up", async () => {
+    await aMember("U_JUNO");
+    await enters(juno);
+    await t.settle();
+
+    expect(t.slack.callsTo("users.info")).toEqual([]);
   });
 });
