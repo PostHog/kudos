@@ -36,3 +36,17 @@ export function thawed(ctx: QueryCtx) {
 }
 
 export const mixed = internalQuery({ args: {}, handler: (): Promise<string> | number => 1 });
+
+// A class that extends one over a context is over a context too.
+export class Base {
+  constructor(ctx: QueryCtx) {}
+}
+export class Derived extends Base {}
+
+// Flags that only look like a registration's, and args fields named like a validator's own.
+function make() {
+  return { isConvexFunction: false, isQuery: false };
+}
+export const config = make();
+
+export const impostor = internalMutation({ args: { isConvexValidator: v.boolean(), type: v.string() }, handler: async () => null });

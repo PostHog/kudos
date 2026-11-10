@@ -515,12 +515,24 @@ function registrationOf(checker: ts.TypeChecker, statement: ts.Statement): Regis
   const property = definition.properties.find((p) => (ts.isPropertyAssignment(p) || ts.isShorthandPropertyAssignment(p)) && p.name.getText() === "args");
   const args = property && (ts.isPropertyAssignment(property) ? property.initializer : (property as ts.ShorthandPropertyAssignment).name);
   if (args) {
-    // A wrapper may register other args than it is given (adding a token, say): the fields must be the registered ones.
+    // A wrapper may register other args than it is given (adding a token, retyping a field): what the definition's
+    // validators accept must be the registered args type, field by field.
     const given = checker.getTypeAtLocation(args);
-    const validated = given.getProperty("isConvexValidator") ? given.getProperty("type") : undefined;
-    const fields = validated ? checker.getTypeOfSymbolAtLocation(validated, args) : given;
-    const names = (type: ts.Type | undefined) => (type?.getProperties() ?? []).map((field) => field.name).sort().join();
-    if (names(fields) !== names(registration.argsType)) return { ...registration, unreadable: "registers other args than its definition gives" };
+    const accepted = (validator: ts.Type) => {
+      const type = validator.getProperty("type");
+      return type && checker.getTypeOfSymbolAtLocation(type, args);
+    };
+    const same = (a: ts.Type | undefined, b: ts.Type | undefined) => a !== undefined && b !== undefined && checker.isTypeAssignableTo(a, b) && checker.isTypeAssignableTo(b, a);
+    const registered = registration.argsType;
+    const names = (type: ts.Type) => type.getProperties().map((field) => field.name).sort().join();
+    const agrees = validatorClassOf(given)
+      ? same(accepted(given), registered)
+      : names(given) === names(registered) &&
+        given.getProperties().every((field) => {
+          const own = registered.getProperty(field.name);
+          return own !== undefined && same(accepted(checker.getTypeOfSymbolAtLocation(field, args)), checker.getTypeOfSymbolAtLocation(own, args));
+        });
+    if (!agrees) return { ...registration, unreadable: "registers other args than its definition gives" };
   }
   return { ...registration, args };
 }
@@ -535,8 +547,12 @@ function registeredCall(checker: ts.TypeChecker, call: ts.CallExpression): { cal
     return { call, registration: { kind: match[1]!.toLowerCase() as Registration["kind"], argsType, returns } };
   }
   // `type M = RegisteredMutation<…>` renames the alias: the shape still says it registers, but no longer what.
-  if (!type.getProperty("isConvexFunction")) return undefined;
-  const kind = (["query", "mutation", "action"] as const).find((kind) => type.getProperty(`is${kind[0]!.toUpperCase()}${kind.slice(1)}`));
+  const isTrue = (name: string) => {
+    const property = type.getProperty(name);
+    return property !== undefined && checker.typeToString(checker.getTypeOfSymbolAtLocation(property, call)) === "true";
+  };
+  if (!isTrue("isConvexFunction")) return undefined;
+  const kind = (["query", "mutation", "action"] as const).find((kind) => isTrue(`is${kind[0]!.toUpperCase()}${kind.slice(1)}`));
   return kind && { call, registration: { kind, argsType: type, returns: type, unreadable: "registers through a type that hides Convex's args and return" } };
 }
 
@@ -903,7 +919,9 @@ function isPropertyName(node: ts.Identifier): boolean {
 /** Visits every node, saying whether it sits in a type. */
 function walk(root: ts.Node, visit: (node: ts.Node, inType: boolean) => void): void {
   const go = (node: ts.Node, inType: boolean): void => {
-    const typed = inType || ts.isTypeNode(node);
+    // `class A extends B` reads `B` as a value, though the parser types the heritage expression as a type node.
+    const extendsValue = ts.isExpressionWithTypeArguments(node) && ts.isHeritageClause(node.parent) && node.parent.token === ts.SyntaxKind.ExtendsKeyword && ts.isClassLike(node.parent.parent);
+    const typed = inType || (ts.isTypeNode(node) && !extendsValue);
     visit(node, typed);
     ts.forEachChild(node, (child) => go(child, typed));
   };

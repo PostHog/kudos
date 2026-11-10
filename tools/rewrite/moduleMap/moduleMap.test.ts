@@ -285,6 +285,8 @@ describe("the skeleton generator", () => {
       "skeleton.refused.hidden": ["job"],
       "skeleton.refused.tokened": ["job"],
       "skeleton.wrapped.mixed": ["job"],
+      "skeleton.wrapped.impostor": ["job"],
+      "skeleton.refused.retyped": ["job"],
       "skeleton.awards.memberOf": ["run"],
       "skeleton.awards.recordAward": ["run"],
     });
@@ -548,8 +550,21 @@ export const mixedArgs = z.strictObject({});
 export async function mixed(ctx: QueryContext, args: z.infer<typeof mixedArgs>): Promise<string | number> {
   throw notPorted("skeleton.wrapped.mixed");
 }
+
+// Flags that only look like a registration's, and args fields named like a validator's own.
+function make() {
+  return { isConvexFunction: false, isQuery: false };
+}
+export const config = make();
+
+export const impostorArgs = z.strictObject({ isConvexValidator: z.boolean(), type: z.string() });
+export async function impostor(ctx: MutationContext, args: z.infer<typeof impostorArgs>): Promise<null> {
+  throw notPorted("skeleton.wrapped.impostor");
+}
+export const impostorJob = mutationJob("skeleton.wrapped.impostor", impostorArgs, impostor);
 `);
-    expect(wrapped.omitted).toEqual([]);
+    // A class over a context, and one that extends it, are ported whole by their stack.
+    expect(wrapped.omitted).toEqual(["Base: a class over a context, which its stack ports whole", "Derived: a class over a context, which its stack ports whole"]);
   });
 
   test("imports a service helper only where a stub writes it, not for a module's own of the same name", () => {
@@ -576,6 +591,7 @@ export function notPorted() {
         "convex/skeleton/refused.ts:39: declares saveTwo, extra in one statement over a context; declare each on its own",
         "convex/skeleton/refused.ts:43: hidden registers through a type that hides Convex's args and return, so its args can't be read; write them out",
         "convex/skeleton/refused.ts:48: tokened registers other args than its definition gives, so its args can't be read; write them out",
+        "convex/skeleton/refused.ts:53: retyped registers other args than its definition gives, so its args can't be read; write them out",
         "convex/skeleton/refused.ts:25: declares the enum Mode, which the service's erasableSyntaxOnly forbids; port it as a union of literals",
         "convex/skeleton/refused.ts: declares or imports QueryContext, a name the skeleton writes for the service's own",
         "convex/skeleton/refused.ts:30: declares notPorted, a name the skeleton writes for the service's own",
@@ -644,6 +660,7 @@ export function notPorted() {
       expect(wrappedModule.saveJob).toMatchObject({ name: "skeleton.wrapped.save", kind: "mutation" }); // a local wrapper's registration
       expect(wrappedModule.saveJob.args.safeParse({ note: "x", extra: 1 }).success).toBe(false);
       expect(wrappedModule.entry).toEqual({ value: "ok" }); // a type named like a context helper carries no context
+      expect(wrappedModule.config).toEqual({ isConvexFunction: false, isQuery: false }); // false flags register nothing
     });
   });
 });

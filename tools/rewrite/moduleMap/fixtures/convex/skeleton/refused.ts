@@ -46,3 +46,8 @@ function addToken<Args extends PropertyValidators>(definition: { args: Args; han
   return internalMutation({ args: { ...definition.args, token: v.string() }, handler: definition.handler as never });
 }
 export const tokened = addToken({ args: { note: v.string() }, handler: async () => null });
+
+function retype(definition: { args: PropertyValidators; handler: () => Promise<null> }) {
+  return internalMutation({ args: { note: v.number() }, handler: definition.handler });
+}
+export const retyped = retype({ args: { note: v.string() }, handler: async () => null });
