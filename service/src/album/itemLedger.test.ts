@@ -31,6 +31,7 @@ import {
   firstPackGrantedFor,
   grantedKudosBetween,
   grantThoughtfulPacks,
+  grantThoughtfulPacksArgs,
   isFirstPackFor,
   isFirstPackGrantedFor,
   packsEarnedBetween,
@@ -106,7 +107,7 @@ describe("LP5: an item is earned once per member, source and key", () => {
     await t.seed.insert("items", thanks(alice, bob));
     await t.seed.insert("items", thanks(alice, bob));
 
-    await expect(t.query((ctx) => earnedItemOf(ctx, alice, "hoggie", `thoughtful:${bob}`))).rejects.toThrow("more than one hoggie item");
+    await expect(t.query((ctx) => earnedItemOf(ctx, alice, "hoggie", `thoughtful:${bob}`))).rejects.toThrow("unique() query returned more than one result from table items:");
   });
 });
 
@@ -297,11 +298,11 @@ describe("waiting packs and the packs a giver earned", () => {
     expect((await t.query((ctx) => packsEarnedBetween(ctx, alice, { from: at, to: at + 4 }, 1))).map(({ at: earned }) => earned)).toEqual([at]);
   });
 
-  test("the first pack for a person is the first one written, and only its message is the first granted", async () => {
+  test("the first pack for a person is the first one written, not the one earned first, and only its message is the first granted", async () => {
     const t = backend();
     const [alice, bob, carol] = [await t.member("U_ALICE"), await t.member("U_BOB"), await t.member("U_CAROL")];
-    const first = await pack(t, { giver: alice, recipient: bob, message: message(1), week: "2026-10-12" });
-    const second = await pack(t, { giver: alice, recipient: bob, message: message(2), week: "2026-10-19" });
+    const first = await pack(t, { giver: alice, recipient: bob, message: message(1), week: "2026-10-19", at: at + 1 });
+    const second = await pack(t, { giver: alice, recipient: bob, message: message(2), week: "2026-10-12", at });
 
     expect((await t.query((ctx) => firstPackGrantedFor(ctx, alice, bob)))?._id).toBe(first);
     expect(await t.query((ctx) => firstPackGrantedFor(ctx, alice, carol))).toBeNull();
@@ -406,22 +407,43 @@ describe("AL4 AL5: a grant in a week that already earned the pack", () => {
     for (const recipient of recipients) await pack(t, { giver: alice, recipient });
     const event = kudosGiven(alice, recipients);
 
-    await t.mutation((ctx) => grantThoughtfulPacks(ctx, { event }));
-    expect((await t.seed.all("grantRecords")).length).toBe(50);
-    expect((await t.scheduled("album.packs.grantThoughtfulPacks")).map(({ args }) => args.from)).toEqual([50]);
-    expect(await t.published()).toEqual([]);
+    // Each later page runs from the args its job was queued with, as the worker runs them.
+    const queued = async () => (await t.scheduled("album.packs.grantThoughtfulPacks")).map(({ args }) => grantThoughtfulPacksArgs.parse(args));
+    const told = async () => ({ records: (await t.seed.all("grantRecords")).length, told: (await t.seed.all("grantsTold")).length, published: (await t.published()).length });
 
-    await t.mutation((ctx) => grantThoughtfulPacks(ctx, { event, from: 50 }));
-    await t.mutation((ctx) => grantThoughtfulPacks(ctx, { event, from: 100 }));
-    await t.mutation((ctx) => grantThoughtfulPacks(ctx, { event, from: 100 }));
+    await t.mutation((ctx) => grantThoughtfulPacks(ctx, { event }));
+    expect(await queued()).toEqual([{ event, from: 50 }]);
+    expect(await told()).toEqual({ records: 50, told: 0, published: 0 });
+
+    const [second] = await queued();
+    await t.mutation((ctx) => grantThoughtfulPacks(ctx, second!));
+    expect(await queued()).toEqual([{ event, from: 50 }, { event, from: 100 }]);
+    expect(await told()).toEqual({ records: 100, told: 0, published: 0 });
+
+    const third = (await queued())[1]!;
+    await t.mutation((ctx) => grantThoughtfulPacks(ctx, third));
+    await t.mutation((ctx) => grantThoughtfulPacks(ctx, third));
 
     expect((await t.seed.all("grantRecords")).length).toBe(120);
-    expect((await t.scheduled("album.packs.grantThoughtfulPacks")).map(({ args }) => args.from)).toEqual([50, 100]);
+    expect((await queued()).map(({ from }) => from)).toEqual([50, 100]);
     expect((await t.published()).map(({ outcomes }) => (outcomes as unknown[]).length)).toEqual([120]);
     expect((await t.seed.all("grantsTold")).map(({ recipients: told }) => told)).toEqual([120]);
   });
 
   test("the album subscribes the grant to kudosGiven", () => {
     expect(serviceRegistry.subscribers.get("kudosGiven")?.map(({ job }) => job.name)).toContain("album.packs.grantThoughtfulPacks");
+  });
+});
+
+describe("a grant's records and its telling are read as unique() read them", () => {
+  test("two records for one recipient, or two tellings of one message, fail the grant with Convex's refusal", async () => {
+    const t = backend();
+    const [alice, bob] = [await t.member("U_ALICE"), await t.member("U_BOB")];
+    for (let again = 0; again < 2; again++) await t.seed.insert("grantRecords", { giver: alice, message: message(8), recipient: bob, outcome: "nextWeek" });
+    await expect(t.mutation((ctx) => grantThoughtfulPacks(ctx, { event: kudosGiven(alice, [bob], message(8)) }))).rejects.toThrow("unique() query returned more than one result from table grantRecords:");
+
+    await t.seed.insert("grantRecords", { giver: alice, message: message(7), recipient: bob, outcome: "nextWeek" });
+    for (let again = 0; again < 2; again++) await t.seed.insert("grantsTold", { message: message(7), at, recipients: 1 });
+    await expect(t.mutation((ctx) => grantThoughtfulPacks(ctx, { event: kudosGiven(alice, [bob], message(7)) }))).rejects.toThrow("unique() query returned more than one result from table grantsTold:");
   });
 });
