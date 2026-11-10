@@ -17,6 +17,7 @@ import { zv } from "../values.ts";
 import type { Id } from "../db/columns.ts";
 import { fromDocument, toDocument } from "../db/documents.ts";
 import { indexOrder } from "../db/indexOrder.ts";
+import { unique } from "../db/unique.ts";
 import { grantRecords, grantsTold, thoughtfulPacks, type Doc } from "../db/schema/index.ts";
 import type { MutationContext, QueryContext } from "../operations.ts";
 import { mutationJob } from "../jobs/define.ts";
@@ -190,8 +191,7 @@ async function grantRecordOf(ctx: QueryContext, message: MessageRef, recipient: 
     .where(and(...sameMessage(grantRecords, message), eq(grantRecords.recipient, recipient)))
     .orderBy(...recordsByMessageRecipient.orderBy())
     .limit(2);
-  if (rows.length > 1) throw new Error("unique() query returned more than one result from table grantRecords:");
-  return rows[0] ?? null;
+  return unique("grantRecords", rows);
 }
 
 async function tellOnceEveryoneIsGranted(ctx: MutationContext, event: KudosGivenEvent, recipients: MemberId[]) {
@@ -217,8 +217,7 @@ async function toldAlready(ctx: QueryContext, message: MessageRef) {
     .where(and(...sameMessage(grantsTold, message)))
     .orderBy(...toldByMessage.orderBy())
     .limit(2);
-  if (rows.length > 1) throw new Error("unique() query returned more than one result from table grantsTold:");
-  return rows.length === 1;
+  return unique("grantsTold", rows) !== null;
 }
 
 /** The message's three index fields, as `.withIndex` named them: its workspace, conversation and message. */

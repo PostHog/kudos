@@ -3,20 +3,14 @@
 // in the ported files beside this one.
 import { asc, eq } from "drizzle-orm";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { z } from "zod";
-import { useTestDatabase } from "../../testing/database.ts";
+import { useTestBackend } from "../../testing/backend.ts";
 import { definitionsStored, onForEveryone, postHogDeciding } from "../../testing/flags.ts";
-import { seeder } from "../../testing/seed.ts";
-import { subscribersOf, type Subscription } from "../bus/publish.ts";
 import type { KudosGivenEvent } from "../bus/events.ts";
-import { createClock } from "../clock.ts";
 import type { Id } from "../db/columns.ts";
 import { toDocument } from "../db/documents.ts";
 import { jobs } from "../db/schema/index.ts";
 import type { MessageRef } from "../engine/messageEvent.ts";
-import { mutationJob } from "../jobs/define.ts";
-import type { Log } from "../log.ts";
-import { createOperations, type MutationContext, type QueryContext } from "../operations.ts";
+import type { MutationContext, QueryContext } from "../operations.ts";
 import { serviceRegistry } from "../registry.ts";
 import type { MemberId } from "../workspace/directory.ts";
 import { achievementHoggiesShownTo } from "./items/achievementFlag.ts";
@@ -38,42 +32,36 @@ import {
   waitingPacksOf,
 } from "./packs.ts";
 
-const database = useTestDatabase();
-const quiet: Log = { info: () => {}, error: () => {} };
 const at = new Date("2026-10-13T10:00:00Z").getTime();
 const links = { album: "https://kudos.example/album", book: "https://kudos.example/book" } as never;
+const startBackend = useTestBackend({ now: at });
 
 afterEach(() => {
   vi.unstubAllEnvs();
-  vi.unstubAllGlobals();
 });
 
-// The one setup of this file: the operation runner on the test database, the seeder, and the events the code under test
-// published, read back from the jobs a recording subscriber got. S4's in-process backend replaces it.
-const recorder = mutationJob("test.published", z.object({ event: z.looseObject({ type: z.string() }) }), async () => {});
+// The one setup of this file, on S4's in-process backend: the operation runner, the seeder, the jobs queued, and the
+// events the code under test published.
 function backend() {
-  const clock = createClock({ real: () => at });
-  const subscriptions = [{ event: "thoughtfulPacksGranted", job: recorder }] as Subscription<any>[];
-  const operations = createOperations({ pool: database.pool, clock, log: quiet, retryDelayMs: () => 1, subscribers: subscribersOf(subscriptions) });
-  const seed = seeder(operations);
+  const t = startBackend();
   const scheduled = (name?: string) =>
-    operations.query("test.scheduled", async ({ tx }) => {
+    t.query(async ({ tx }) => {
       const rows = await tx.select().from(jobs).where(name === undefined ? undefined : eq(jobs.name, name)).orderBy(asc(jobs._creationTime), asc(jobs._id));
       return rows.map((row) => toDocument<{ name: string; args: Record<string, unknown> }>(jobs, row));
     });
   return {
-    seed,
+    seed: t.seed,
     // Flags decide only with the flags key set and a subject: the workspace's key stands in for every member.
     flagsOn: async (...keys: string[]) => {
       postHogDeciding("sandbox");
-      if ((await seed.all("workspaceKeys")).length === 0) await seed.insert("workspaceKeys", { workspace: "T1", workspaceKey: "workspace-key-T1" });
-      await definitionsStored(operations, ...keys.map(onForEveryone));
+      if ((await t.seed.all("workspaceKeys")).length === 0) await t.seed.insert("workspaceKeys", { workspace: "T1", workspaceKey: "workspace-key-T1" });
+      await definitionsStored(t.operations, ...keys.map(onForEveryone));
     },
-    mutation: <T>(handler: (ctx: MutationContext) => Promise<T>) => operations.mutation("test.mutation", handler),
-    query: <T>(handler: (ctx: QueryContext) => Promise<T>) => operations.query("test.query", handler),
+    mutation: <T>(handler: (ctx: MutationContext) => Promise<T>) => t.run(handler),
+    query: <T>(handler: (ctx: QueryContext) => Promise<T>) => t.query(handler),
     scheduled,
-    published: async () => (await scheduled(recorder.name)).map(({ args }) => args.event as Record<string, unknown>),
-    member: (user: string) => seed.insert("members", { workspace: "T1", user, kind: "member" }) as Promise<MemberId>,
+    published: () => t.published(),
+    member: (user: string) => t.seed.insert("members", { workspace: "T1", user, kind: "member" }) as Promise<MemberId>,
   };
 }
 

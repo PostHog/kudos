@@ -2,33 +2,28 @@
 // stack. An open that passes its checks reaches S10's hoggie drops and S9's tallies and random emojis; its tests are in
 // the ported files beside this one.
 import { describe, expect, test } from "vitest";
-import { useTestDatabase } from "../../testing/database.ts";
-import { seeder } from "../../testing/seed.ts";
-import { createClock } from "../clock.ts";
+import { useTestBackend } from "../../testing/backend.ts";
 import type { Id } from "../db/columns.ts";
 import type { Doc } from "../db/schema/index.ts";
 import type { MessageRef } from "../engine/messageEvent.ts";
-import type { Log } from "../log.ts";
-import { createOperations, type MutationContext, type QueryContext } from "../operations.ts";
+import type { MutationContext, QueryContext } from "../operations.ts";
 import type { MemberId } from "../workspace/directory.ts";
 import { earnItem, markTurned } from "./items/ledger.ts";
 import { earnTrayItem, openThePackOnceAllTurned, openThoughtfulPack, trayItemKeyed, trayKeyOf, trayOf } from "./opening.ts";
 import { crateKeyOf, thanksEarningOf } from "./packs.ts";
 
-const database = useTestDatabase();
-const quiet: Log = { info: () => {}, error: () => {} };
 const at = new Date("2026-10-13T10:00:00Z").getTime();
 const ref: MessageRef = { workspace: "T1", conversation: "C1", message: "1760000000.000001" };
+const startBackend = useTestBackend({ now: at });
 
-// The one setup of this file: the operation runner on the test database and the seeder. S4's in-process backend
-// replaces it.
+// The one setup of this file, on S4's in-process backend: the operation runner and the seeder.
 function backend() {
-  const operations = createOperations({ pool: database.pool, clock: createClock({ real: () => at }), log: quiet, retryDelayMs: () => 1 });
-  const seed = seeder(operations);
+  const t = startBackend();
+  const seed = t.seed;
   return {
     seed,
-    mutation: <T>(handler: (ctx: MutationContext) => Promise<T>) => operations.mutation("test.mutation", handler),
-    query: <T>(handler: (ctx: QueryContext) => Promise<T>) => operations.query("test.query", handler),
+    mutation: <T>(handler: (ctx: MutationContext) => Promise<T>) => t.run(handler),
+    query: <T>(handler: (ctx: QueryContext) => Promise<T>) => t.query(handler),
     member: (user: string) => seed.insert("members", { workspace: "T1", user, kind: "member" }) as Promise<MemberId>,
     pack: (giver: MemberId, recipient: MemberId, extra: { holdsSticker?: boolean; openedAt?: number } = {}) =>
       seed.insert("thoughtfulPacks", { workspace: "T1", giver, recipient, week: "2026-10-12", message: ref, holdsSticker: extra.holdsSticker ?? false, at, ...(extra.openedAt === undefined ? {} : { openedAt: extra.openedAt }) }),
