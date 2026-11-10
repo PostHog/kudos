@@ -13,7 +13,8 @@ import { disagreements } from "./equivalence.ts";
 import ts from "typescript5";
 import { contracts } from "./contracts.ts";
 import { convexRoot, parse, servicePathOf } from "./imports.ts";
-import { landed } from "./landed.ts";
+import { landed, partlyPorted } from "./landed.ts";
+import { siblingOf } from "./skeleton.ts";
 
 const repo = fileURLToPath(new URL("../../..", import.meta.url));
 const read = (path: string) => readFileSync(join(repo, path), "utf8");
@@ -68,6 +69,17 @@ test("nothing the module map wrote is registered yet", async () => {
   expect(jobs.filter((job) => registered.get(job.name) === job).map(({ name }) => name)).toEqual([]);
 });
 
+test("every sibling in the service stands beside a module S1 ported in part", () => {
+  // A stack that ports the rest of a module deletes its entry; a sibling left behind would keep re-exporting stubs.
+  const siblings = (folder: string): string[] =>
+    readdirSync(join(repo, folder), { withFileTypes: true }).flatMap((entry) => {
+      const path = `${folder}/${entry.name}`;
+      return entry.isDirectory() ? siblings(path) : entry.name.endsWith(".map.ts") ? [path] : [];
+    });
+  const expected = new Set(partlyPorted.map((convexPath) => siblingOf(servicePathOf(convexPath))));
+  expect(siblings("service/src").filter((path) => !expected.has(path))).toEqual([]);
+});
+
 test("every contract stands for an export of a module the map holds", () => {
   expect(Object.keys(contracts).filter((convexPath) => !landed.includes(convexPath))).toEqual([]);
 });
@@ -77,6 +89,7 @@ const leftOut: Record<string, string> = {
   "convex/analytics/boundary.ts:observedAction": "a builder of Convex actions: each stack ports its actions as jobs, whose worker owns their failures",
   "convex/auth.ts:auth": "Convex Auth's wiring; the website platform's sign-in replaces it",
   "convex/bus/publish.ts:subscribers": "Convex's subscriber table; S1's registry holds each domain's subscriptions",
+  "convex/schema.ts:default": "Convex's schema, which never lands; the service's tables are service/src/db/schema/index.ts",
   "convex/slack/commands.ts:slackCommands": "an HTTP action of Convex's router; S1's front door routes Slack's commands",
   "convex/slack/interactivity.ts:slackInteractivity": "an HTTP action of Convex's router; S1's front door routes Slack's interactions",
   "convex/website/hosting.ts:registerWebsite": "it registers routes on Convex's router; the website platform serves the website",
@@ -84,7 +97,17 @@ const leftOut: Record<string, string> = {
   "convex/website/memberQuery.ts:memberQuery": "a builder of Convex queries: the website's routes port onto the service's operations",
 };
 
-test("every import between convex/ modules names an export of the landed module, or one left out for a reason", () => {
+const importedNames = ({ importClause }: ts.ImportDeclaration): string[] => {
+  const bindings = importClause?.namedBindings;
+  return [
+    ...(importClause?.name ? ["default"] : []),
+    ...(bindings === undefined ? [] : ts.isNamespaceImport(bindings) ? ["*"] : bindings.elements.map((element) => (element.propertyName ?? element.name).text)),
+  ];
+};
+const reexportedNames = ({ exportClause }: ts.ExportDeclaration): string[] =>
+  exportClause === undefined || ts.isNamespaceExport(exportClause) ? ["*"] : exportClause.elements.map((element) => (element.propertyName ?? element.name).text);
+
+test("every import or re-export between convex/ modules names an export of the landed module, or one left out for a reason", () => {
   const batch = new Map(modules.map(({ servicePath, text }) => [servicePath, text]));
   const exportsOf = (servicePath: string): Set<string> | undefined => {
     const text = batch.get(servicePath) ?? (existsSync(join(repo, servicePath)) ? read(servicePath) : undefined);
@@ -92,8 +115,10 @@ test("every import between convex/ modules names an export of the landed module,
     const names = new Set<string>();
     for (const statement of parse(servicePath, text).statements) {
       if (ts.isExportDeclaration(statement) && statement.exportClause && ts.isNamedExports(statement.exportClause)) statement.exportClause.elements.forEach((element) => names.add(element.name.text));
+      else if (ts.isExportAssignment(statement)) names.add("default");
       else if (ts.canHaveModifiers(statement) && ts.getModifiers(statement)?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)) {
         if (ts.isVariableStatement(statement)) statement.declarationList.declarations.forEach((declaration) => ts.isIdentifier(declaration.name) && names.add(declaration.name.text));
+        else if (ts.getModifiers(statement)?.some((modifier) => modifier.kind === ts.SyntaxKind.DefaultKeyword)) names.add("default");
         else if ((statement as ts.DeclarationStatement).name) names.add((statement as ts.DeclarationStatement).name!.getText());
       }
     }
@@ -108,14 +133,15 @@ test("every import between convex/ modules names an export of the landed module,
   const missing = new Set<string>();
   for (const importer of walk(convexRoot)) {
     for (const statement of parse(importer, read(importer)).statements) {
-      if (!ts.isImportDeclaration(statement)) continue;
-      const specifier = (statement.moduleSpecifier as ts.StringLiteral).text;
+      // An import or a re-export, by the names it takes: `default` for a default import, `*` for a whole module.
+      const reference = ts.isImportDeclaration(statement) ? { names: importedNames(statement), from: statement.moduleSpecifier } : ts.isExportDeclaration(statement) && statement.moduleSpecifier ? { names: reexportedNames(statement), from: statement.moduleSpecifier } : undefined;
+      if (reference === undefined) continue;
+      const { names } = reference;
+      const specifier = (reference.from as ts.StringLiteral).text;
       if (!specifier.startsWith(".") || specifier.includes("_generated")) continue;
       const target = posix.normalize(posix.join(posix.dirname(importer), specifier)).replace(/(\.ts)?$/, ".ts");
-      const bindings = statement.importClause?.namedBindings;
-      const names = bindings && ts.isNamedImports(bindings) ? bindings.elements.map((element) => (element.propertyName ?? element.name).text) : [];
       const exported = exportsOf(servicePathOf(target));
-      for (const name of names) if (!exported?.has(name)) missing.add(`${target}:${name}`);
+      for (const name of names) if (name === "*" ? exported === undefined : !exported?.has(name)) missing.add(`${target}:${name}`);
     }
   }
   expect([...missing].filter((key) => !(key in leftOut)).sort()).toEqual([]);

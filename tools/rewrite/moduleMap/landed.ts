@@ -412,8 +412,10 @@ export const landed = [
 ];
 
 /**
- * The convex/ modules S1 ported in part, whose service file holds S1's code: the module map appends stubs for what S1
- * left of each, which other stacks reach (`workspace/directory` follows members through `analytics/person`).
+ * The convex/ modules S1 ported in part, whose service file holds S1's code. The skeleton of what S1 left of each lands
+ * beside it as `<module>.map.ts`, which S1's module re-exports by one generated last line; other stacks reach the stubs
+ * through S1's module (`workspace/directory` follows members through `analytics/person`). A stack that ports the rest
+ * deletes the entry, the sibling and the line together.
  */
 export const partlyPorted = ["convex/analytics/flags.ts", "convex/analytics/person.ts", "convex/slack/receipts.ts"];
 
