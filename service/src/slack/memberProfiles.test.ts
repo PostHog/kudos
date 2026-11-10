@@ -1,8 +1,7 @@
 // Ports today's convex/slack/memberProfiles.test.ts onto the service's test backend: Slack's member events and
 // users.info keep a member's profile and picture in the directory, only a member holds one, and no Slack answer that can
 // hold a profile is logged. A member event reaches S5's App Home republish and, for a person the directory doesn't
-// know, S11's group reconcile; a kudos that mentions someone new reaches S4's engine; member verification is 3.3's. Those
-// cases wait on them. The F3 backfill (`fillMemberProfiles`) is a one-off the module map leaves out, so its cases run
+// know, S11's group reconcile; a kudos that mentions someone new reaches S4's engine. Those cases wait on them. The F3 backfill (`fillMemberProfiles`) is a one-off the module map leaves out, so its cases run
 // against `fillProfiles`, the directory's write the backfill made, with the page it would have given.
 import { afterEach, beforeEach, describe, expect, test, vi, type MockInstance } from "vitest";
 import { useTestBackend, type TestBackend } from "../../testing/backend.ts";
@@ -13,7 +12,7 @@ import { notPorted } from "../notPorted.ts";
 import { serviceRegistry } from "../registry.ts";
 import { fillProfiles } from "../workspace/directory.ts";
 import type { EventKind } from "./frontDoor.ts";
-import { verifyMember } from "./verifyMember.ts";
+import { verificationOf, verifyMember } from "./verifyMember.ts";
 import type { MemberProfile } from "../workspace/memberProfile.ts";
 
 const now = new Date("2026-10-13T10:00:00Z").getTime();
@@ -310,18 +309,20 @@ describe("F6: a Slack answer that can hold a profile is never logged", () => {
     expect(everythingLogged(t)).not.toMatch(/dave|baker/i);
   });
 
-  waitsOn(["S3"], "a users.info refusal carrying a retry delay that isn't a number fails verification without quoting it", async () => {
+  test("a users.info refusal carrying a retry delay that isn't a number fails verification without quoting it", async () => {
     const t = backend();
     t.slack.answering("users.info", () => Response.json({ ok: false, error: "user_not_found", retryAfterMs: "dave@example.com" }));
+    await t.seed.insert("memberVerifications", { workspace: "T1", user: "U_DAVE", attempts: 0, state: "pending", nextTryAt: now });
 
     const failure = await t.operations.action("slack.verifyMember.verifyMember", (ctx) => verifyMember(ctx, { workspace: "T1", user: "U_DAVE" })).then(
       () => null,
-      (error: unknown) => {
-        if (error instanceof Error && error.name === "NotPortedError") throw error;
-        return String(error);
-      },
+      (error: unknown) => String(error),
     );
 
+    expect(t.slack.callsTo("users.info")).toEqual([{ user: "U_DAVE" }]);
+    // The delay that isn't a number is dropped, so the first backoff stands.
+    const verification = await t.query((ctx) => verificationOf(ctx, "T1", "U_DAVE"));
+    expect(verification).toMatchObject({ state: "pending", attempts: 1, nextTryAt: now + 1_000 });
     expect(failure ?? "").not.toMatch(/dave@/i);
     expect(everythingLogged(t)).not.toMatch(/dave@/i);
   });

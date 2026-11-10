@@ -62,3 +62,8 @@ export async function replaceRow(ctx: MutationContext, table: Keyed, id: string,
     .set(replaced)
     .where(eq(table._id, id));
 }
+
+/** Deletes the row `id`, as Convex's `delete` did. */
+export async function deleteRow(ctx: MutationContext, table: Keyed, id: string): Promise<void> {
+  await ctx.tx.delete(table as PgTable).where(eq(table._id, id));
+}
