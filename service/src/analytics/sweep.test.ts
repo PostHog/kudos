@@ -106,6 +106,20 @@ describe("O22: the failed-job sweep", () => {
     ]);
   });
 
+  test("a unique() refusal sends the table it names when the app has that table, and is withheld when it hasn't", async () => {
+    const t = backend();
+    await failedJob(t, welcomeNewMembers.name, "Error: unique() query returned more than one result from table welcomes:");
+    await failedJob(t, deleteExpired.name, "Error: unique() query returned more than one result from table Marmalade:");
+
+    await sweepAfter(t, minutes(15));
+
+    const sent = exceptions(t).map(({ properties }) => [properties.function_path, properties.$exception_list]);
+    expect(sent.toSorted(([a], [b]) => String(a).localeCompare(String(b)))).toEqual([
+      ["slack/receipts:deleteExpired", [expect.objectContaining({ type: "Error", value: "unexpected error" })]],
+      ["welcome/welcome:welcomeNewMembers", [expect.objectContaining({ type: "Error", value: "unique() query returned more than one result from table welcomes" })]],
+    ]);
+  });
+
   test("records a job that was still pending at one sweep and failed before the next", async () => {
     const t = backend();
     await enqueue(t, welcomeNewMembers, minutes(25));
