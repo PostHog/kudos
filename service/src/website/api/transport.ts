@@ -18,18 +18,21 @@ export const apiHeader = "x-hedgehug-api";
 /** The largest body a request may send, read before anything parses it; the website's arguments are a few fields. */
 export const maxBodyBytes = 64 * 1024;
 
-/** Who a request says it is, once the edge's identity is mapped to a chat identity; null when it names nobody. */
+/** Who a request says it is, once the edge's identity is mapped to a chat identity. */
 export type SignedIn = Omit<VerifiedMember, "member">;
 
+/** The person a request signs in as, or why it names nobody: no one signed in, or someone the workspace doesn't have. */
+export type Identity = SignedIn | Extract<Denial, { kind: "signed-out" | "not-a-member" }>;
+
 /** Maps a request to the person it signs in as, outside any transaction (it may ask Slack). */
-export type Identify = (request: Request) => Promise<SignedIn | null>;
+export type Identify = (request: Request) => Promise<Identity>;
 
 /** Today's member check, in the route's own operation. */
 export interface MemberCheck {
   /** For a read: the member, or the denial a read answers. */
-  read(ctx: QueryContext, signedIn: SignedIn | null): Promise<Verified | Denial>;
+  read(ctx: QueryContext, identity: Identity): Promise<Verified | Denial>;
   /** For a command: the member the website admits, or the denial a command answers. */
-  command(ctx: MutationContext, signedIn: SignedIn | null): Promise<Verified | Denial>;
+  command(ctx: MutationContext, identity: Identity): Promise<Verified | Denial>;
 }
 
 export interface TransportOptions {
@@ -65,18 +68,18 @@ export function apiTransport({ operations, log, routes, identify, check }: Trans
     const body: unknown = await c.req.json().catch(() => undefined);
     const args = route.args.safeParse(body);
     if (!args.success) return refused(c, 400, "the arguments don't fit the route");
-    const signedIn = await identify(c.req.raw);
+    const identity = await identify(c.req.raw);
     // Set where the check denies, never read off the result: a handler may answer `{ kind: "closed" }` itself.
     let denied: Denial | undefined;
     const result =
       route.kind === "query"
         ? await operations.query(route.name, async (ctx) => {
-            const verified = await check.read(ctx, signedIn);
+            const verified = await check.read(ctx, identity);
             if ("kind" in verified) return (denied = verified);
             return route.handler(ctx, verified.me, args.data);
           })
         : await operations.mutation(route.name, async (ctx) => {
-            const verified = await check.command(ctx, signedIn);
+            const verified = await check.command(ctx, identity);
             if ("kind" in verified) return (denied = verified);
             return route.handler(ctx, verified.me, verified.person as HomeMember, args.data);
           });
