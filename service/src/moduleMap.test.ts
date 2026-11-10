@@ -4,15 +4,15 @@
 import { describe, expect, test } from "vitest";
 import type { Id } from "./db/columns.ts";
 import { recomputeSpotlightOfJob } from "./engine/spotlight.ts";
-import { republishAdminsIn } from "./feedback/homes.ts";
 import { tellBatchSummariesJob } from "./feedback/tierNotices.ts";
+import { startBackfillUnlessStarted } from "./stickers/backfill.ts";
 import type { Job } from "./jobs/define.ts";
 import { NotPortedError } from "./notPorted.ts";
 import type { ActionContext, MutationContext } from "./operations.ts";
 
-// An action runs another stack's mutation: the feedback's republish of the admins' homes.
+// An action runs another stack's mutation: the stickers' backfill of a workspace.
 async function checkChannel(ctx: ActionContext) {
-  return ctx.run.mutation("feedback.homes.republishAdminsIn", (tx) => republishAdminsIn(tx, { workspace: "T1" }));
+  return ctx.run.mutation("stickers.backfill.startBackfillUnlessStarted", (tx) => startBackfillUnlessStarted(tx, "T1"));
 }
 
 // The leaderboard's visibility change and the achievements replay schedule the engine's and the feedback's jobs.
@@ -29,7 +29,7 @@ describe("the module map across stacks", () => {
     const refusal = await checkChannel(ctx).catch((error: unknown) => error);
 
     expect(refusal).toBeInstanceOf(NotPortedError);
-    expect((refusal as Error).message).toContain("feedback.homes.republishAdminsIn");
+    expect((refusal as Error).message).toContain("stickers.backfill.startBackfillUnlessStarted");
   });
 
   test("another stack's jobs enqueue by their Convex names, their args checked by their schemas", async () => {

@@ -191,10 +191,12 @@ async function rowsByDue(ctx: MutationContext, state: OutboxRow["state"], dueBy:
   return rows.map(asRow);
 }
 
+/** The rows still in the outbox, in the order of `ids`, as Convex's reads by ID gave them: the order the batch was claimed in. */
 async function outboxRows(ctx: MutationContext, ids: Array<Id<"analyticsOutbox">>): Promise<OutboxRow[]> {
   if (ids.length === 0) return [];
   const rows = await ctx.tx.select().from(analyticsOutbox).where(inArray(analyticsOutbox._id, ids));
-  return rows.map(asRow);
+  const byId = new Map(rows.map((row) => [row._id, asRow(row)]));
+  return ids.flatMap((id) => byId.get(id) ?? []);
 }
 
 function asRow(row: Record<string, unknown>): OutboxRow {
