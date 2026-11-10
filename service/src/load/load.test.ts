@@ -7,7 +7,8 @@ import { chunksOf, zip } from "../../testing/zip.ts";
 import { useTestDatabase, withSearchPath } from "../../testing/database.ts";
 import { decodeStored, encodeStored, printExport, type Value } from "../db/codec.ts";
 import { fromDocument, toDocument } from "../db/documents.ts";
-import { archive, files, hypeReactions, kudosMessages, members, wordDeletionRequests } from "../db/schema/index.ts";
+import { albumHistory, archive, files, hypeReactions, kudosMessages, members, wordDeletionRequests } from "../db/schema/index.ts";
+import { eq } from "drizzle-orm";
 import { createPool } from "../db/pool.ts";
 import { createApp, type Migrations } from "../http/app.ts";
 import { createClock } from "../clock.ts";
@@ -15,7 +16,23 @@ import type { Log } from "../log.ts";
 import { createLoadControl, type LoadControl } from "./control.ts";
 import { maxFileBytes } from "./loader.ts";
 import { z } from "zod";
-import { actionJob, jobRegistry, mutationJob } from "../jobs/define.ts";
+import { actionJob, jobRegistry, mutationJob, type JobRegistry } from "../jobs/define.ts";
+import { sweepJob as unlocksSweep } from "../unlocks/sweep.ts";
+import { sweepJob as newWeekSweep } from "../quests/newWeek.ts";
+import { recheckSomeoneNewJob } from "../quests/journey.ts";
+import { ensureMondayDmsJob } from "../mondayDm/mondayDm.ts";
+import { ensureMondayDmsOfHugWeeksJob } from "../mondayDm/hugWeeks.ts";
+import { republishAdminsInJob } from "../feedback/homes.ts";
+import { nudgeTheHuggedJob } from "../feedback/welcomeNudge.ts";
+import { payHugPeopleJob } from "../hugs/people.ts";
+import { catchUpJob } from "../analytics/person.map.ts";
+import { backfillWordsJob } from "../slack/backfill.ts";
+import { tellBatchSummariesJob } from "../feedback/tierNotices.ts";
+import { forgetWorkspaceWordsJob } from "../engine/kudosText.ts";
+import { recordMilestonesInWorkspaceJob } from "../album/milestones.ts";
+import { fillItemsJob } from "../album/items/fill.ts";
+import { listSlackMembersJob } from "../slack/directory.ts";
+import { argRestarts } from "./restarts.ts";
 
 const database = useTestDatabase();
 const db = drizzle({ client: database.pool });
@@ -41,13 +58,13 @@ afterEach(() => copies.splice(0).forEach((copy) => copy.load.stop()));
 
 /** One copy of the service: the app over the test database with the load's control, as boot wires them. */
 async function copy(
-  options: { adminToken?: string | undefined; rows?: number; bytes?: number; off?: boolean; migrations?: Migrations } = {},
+  options: { adminToken?: string | undefined; rows?: number; bytes?: number; off?: boolean; migrations?: Migrations; registry?: JobRegistry } = {},
 ): Promise<Copy> {
-  const { rows = 500, bytes = 1 << 20, off = false, migrations = "done" } = options;
+  const { rows = 500, bytes = 1 << 20, off = false, migrations = "done", registry = jobs } = options;
   const adminToken = "adminToken" in options ? options.adminToken : token;
   const logs: string[] = [];
   const log: Log = { info: (message) => logs.push(message), error: (message) => logs.push(message) };
-  const load = createLoadControl({ pool: database.pool, token: adminToken, log, jobs, limits: { rows, bytes }, pollMs: 50 });
+  const load = createLoadControl({ pool: database.pool, token: adminToken, log, jobs: registry, limits: { rows, bytes }, pollMs: 50 });
   await load.refresh();
   load.resume();
   const app = createApp({ commit: "test", readiness: { migrations: () => migrations }, off, log, clock: createClock(), load });
@@ -310,6 +327,8 @@ describe("the round trip", () => {
   /** Sends the load back to its round trip, as after a restart while verifying, and waits for the answer. */
   const reverify = async (service: Copy): Promise<Status> => {
     await database.pool.query(`update "loadState" set phase = 'verifying', "roundTrip" = null, error = null`);
+    await service.load.refresh(); // a copy stops reading the state once the load is done
+
     await waitFor(async () => (await status(service)).roundTrip !== null);
     return status(service);
   };
@@ -581,6 +600,76 @@ describe("recovery", () => {
     const rows = (await database.pool.query(`select key, definitions, "fetchedAt" from "flagDefinitions"`)).rows;
     expect(rows.map((row) => ({ ...row, definitions: JSON.parse(row.definitions) })), "the one row, as the component kept it").toStrictEqual([
       { key: "posthog", definitions, fetchedAt: 6_000 },
+    ]);
+  });
+
+  test("each workflow carrying a Convex paging cursor starts over, in its args and in its row; other cursors stay", async () => {
+    const ref = { workspace: "T1", conversation: "C1", message: "1.0" };
+    const hug = { type: "hugGiven", workspace: "T1", giver: "m1", message: ref, onKudos: true, at: 5, day: "2026-11-09" };
+    // Each restarted workflow's args as Convex scheduled them, mid-run, and as the job runs them after the move.
+    const fixtures: Array<[string, Doc, Doc]> = [
+      ["unlocks.sweep.sweep", { cursor: "convex-c" }, {}],
+      ["quests.newWeek.sweep", { cursor: "convex-c" }, {}],
+      ["quests.journey.recheckSomeoneNew", { event: { type: "memberLeft", workspace: "T1", member: "m1", at: 5 }, cursor: "convex-c" }, { event: { type: "memberLeft", workspace: "T1", member: "m1", at: 5 } }],
+      ["mondayDm.mondayDm.ensureMondayDms", { cursor: "convex-c" }, {}],
+      ["mondayDm.hugWeeks.ensureMondayDmsOfHugWeeks", { cursor: "convex-c" }, {}],
+      ["feedback.homes.republishAdminsIn", { workspace: "T1", cursor: "convex-c" }, { workspace: "T1" }],
+      ["feedback.welcomeNudge.nudgeTheHugged", { event: hug, cursor: "convex-c" }, { event: hug }],
+      ["hugs.people.payHugPeople", { event: hug, cursor: "convex-c" }, { event: hug }],
+      ["analytics.person.catchUp", { cursor: "convex-c" }, {}],
+      ["slack.backfill.backfillWords", { cursor: "convex-c", queue: [ref] }, { queue: [ref] }],
+      ["feedback.tierNotices.tellBatchSummaries", { batch: "b1", cursor: "convex-c" }, { batch: "b1", cursor: null }],
+      ["engine.kudosText.forgetWorkspaceWords", { workspace: "T1", cursor: "convex-c" }, { workspace: "T1", cursor: null }],
+      ["album.milestones.recordMilestonesInWorkspace", { workspace: "T1", cursor: "convex-c" }, { workspace: "T1", cursor: null }],
+      ["album.items.fill.fillItems", { step: { member: "m1", kind: "packs", cursor: "convex-c" } }, { step: { member: "m1", kind: "packs" } }],
+    ];
+    expect(fixtures.map(([name]) => name).sort(), "a fixture for every restarted workflow").toStrictEqual([...argRestarts.keys()].sort());
+    const kept: Array<[string, Doc]> = [["slack.directory.listSlackMembers", { cursor: "a-slack-cursor" }]];
+    const path = (name: string) => `${name.split(".").slice(0, -1).join("/")}:${name.split(".").at(-1)}`;
+    const rows = [...fixtures.map(([name, args]) => [name, args] as const), ...kept].map(([name, args], at) => scheduled(`j${String(at).padStart(2, "0")}`, path(name), { kind: "pending" }, args));
+
+    // The jobs as their modules define them, schemas and all; not every domain registers its jobs yet.
+    const workflows = [unlocksSweep, newWeekSweep, recheckSomeoneNewJob, ensureMondayDmsJob, ensureMondayDmsOfHugWeeksJob, republishAdminsInJob, nudgeTheHuggedJob, payHugPeopleJob];
+    const more = [catchUpJob, backfillWordsJob, tellBatchSummariesJob, forgetWorkspaceWordsJob, recordMilestonesInWorkspaceJob, fillItemsJob, listSlackMembersJob];
+    const service = await copy({ registry: jobRegistry([...workflows, ...more]) });
+    await finish(
+      service,
+      zip({
+        "_scheduled_functions/documents.jsonl": jsonl(rows),
+        "effectsBackfill/documents.jsonl": jsonl([
+          { _id: "e1", _creationTime: 1, before: 100, cursor: "convex-c", isDone: false },
+          { _id: "e2", _creationTime: 2, before: 100, cursor: "convex-c", isDone: true },
+        ]),
+        "stickerBackfills/documents.jsonl": jsonl([{ _id: "s1", _creationTime: 1, workspace: "T1", cursor: "convex-c", isDone: false }]),
+        "albumHistory/documents.jsonl": jsonl([{ _id: "a1", _creationTime: 1, workspace: "T1", startedAt: 3, phase: "hugs", cursor: "convex-c", hug: "h1", hugPeopleAfter: "m2", done: false }]),
+        "bookReplays/documents.jsonl": jsonl([
+          { _id: "r1", _creationTime: 1, workspace: "T1", batch: "b1", ladder: "generosity", tiers: [], countsLadder: true, isDone: false },
+          { _id: "r2", _creationTime: 2, workspace: "T1", batch: "b1", ladder: "generosity", tiers: [], countsLadder: true, isDone: true },
+        ]),
+        "bookReplayCursors/documents.jsonl": jsonl([
+          { _id: "c1", _creationTime: 1, replay: "r1", cursor: "convex-c" },
+          { _id: "c2", _creationTime: 2, replay: "r2", cursor: "convex-c" },
+        ]),
+      }),
+    );
+    expect(await settled(service), "the load is done").toMatchObject({ phase: "done", error: null });
+
+    const recovered = new Map((await jobsNow()).map((job) => [job.name as string, job.args]));
+    for (const [name, , after] of fixtures) expect(recovered.get(name), name).toStrictEqual(after);
+    expect(recovered.get("slack.directory.listSlackMembers"), "a Slack cursor stays").toStrictEqual({ cursor: "a-slack-cursor" });
+
+    const cursorsOf = async (table: string) => (await database.pool.query(`select _id, cursor from "${table}" order by _id`)).rows.map((row) => [row._id, row.cursor]);
+    expect(await cursorsOf("effectsBackfill"), "an unfinished run starts over, a finished one stays").toStrictEqual([["e1", null], ["e2", "convex-c"]]);
+    expect(await cursorsOf("stickerBackfills")).toStrictEqual([["s1", null]]);
+    expect((await documents(albumHistory))[0], "the history keeps its phase and inner bookmark").toMatchObject({ phase: "hugs", hug: "h1", hugPeopleAfter: "m2", done: false });
+    expect(await cursorsOf("albumHistory")).toStrictEqual([["a1", null]]);
+    expect(await cursorsOf("bookReplayCursors"), "an unfinished replay starts with no cursor row").toStrictEqual([["c2", "convex-c"]]);
+    const archived = await db.select({ table: archive.table, _id: archive._id }).from(archive).where(eq(archive.source, "recovery"));
+    expect(archived.sort((a, b) => `${a.table}${a._id}`.localeCompare(`${b.table}${b._id}`)), "each row recovery changed, kept as loaded").toStrictEqual([
+      { table: "albumHistory", _id: "a1" },
+      { table: "bookReplayCursors", _id: "c1" },
+      { table: "effectsBackfill", _id: "e1" },
+      { table: "stickerBackfills", _id: "s1" },
     ]);
   });
 

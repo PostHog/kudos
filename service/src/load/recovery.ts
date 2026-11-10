@@ -7,7 +7,8 @@
 // component's path in front. A name maps to a registered job or to the retirement list; any other name stops
 // recovery, finished rows included, so nothing is guessed. A retired row that would still run is canceled on the
 // record. A pending row's args must pass its job's schema. A running mutation never committed, so it is pending again;
-// a running action may have done its work, and an action runs at most once, so it failed.
+// a running action may have done its work, and an action runs at most once, so it failed. A workflow that carries a
+// Convex paging cursor starts over (./restarts.ts).
 import { and, eq } from "drizzle-orm";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import type pg from "pg";
@@ -15,6 +16,7 @@ import { decodeStored, encodeStored, type Value } from "../db/codec.ts";
 import { archive, flagDefinitions, jobs } from "../db/schema/index.ts";
 import type { JobRegistry } from "../jobs/define.ts";
 import { LoadError } from "./loader.ts";
+import { restartArgs, restartTables } from "./restarts.ts";
 import { retiredJobs } from "./retired.ts";
 
 type Kind = "mutation" | "action";
@@ -33,7 +35,7 @@ export function jobName(source: string, path: string): string {
 }
 
 /** Turns the loaded copy's scheduled functions into jobs, seeds the flag definitions, and marks the load done. */
-export async function recover(client: pg.PoolClient, registry: JobRegistry, now: number): Promise<{ jobs: number }> {
+export async function recover(client: pg.PoolClient, registry: JobRegistry, now: number): Promise<{ jobs: number; restarted: number }> {
   const db = drizzle({ client });
   await client.query("begin");
   try {
@@ -65,10 +67,11 @@ export async function recover(client: pg.PoolClient, registry: JobRegistry, now:
       throw new LoadError(`Recovery found scheduled functions no job or retirement maps: ${listed(names)}`);
     }
     if (refused.length > 0) throw new LoadError(`Recovery found pending args their job refuses: ${listed(refused)}`);
+    const restarted = await restartTables(db);
     await seedFlagDefinitions(db);
     await client.query(`update "loadState" set phase = 'done' where key = 'load'`);
     await client.query("commit");
-    return { jobs: written };
+    return { jobs: written, restarted };
   } catch (error) {
     await client.query("rollback").catch(() => {});
     throw error;
@@ -92,7 +95,8 @@ function recovered(source: string, doc: { [field: string]: Value }, registry: Jo
   const state = (doc.state as { kind: string; error?: string }).kind;
   const error = (doc.state as { error?: string }).error ?? null;
   const completedAt = typeof doc.completedTime === "number" ? doc.completedTime : null;
-  const args = Array.isArray(doc.args) && doc.args.length === 1 && isObject(doc.args[0]) ? doc.args[0] : undefined;
+  // Any Convex cursor restarted, on every row: a finished job's args can be replayed too.
+  const args = Array.isArray(doc.args) && doc.args.length === 1 && isObject(doc.args[0]) ? restartArgs(name, doc.args[0]) : undefined;
   const row = { _id, _creationTime: doc._creationTime as number, name, args: encodeStored(args ?? {}), runAt: doc.scheduledTime as number, kind, deadline: null };
 
   const runs = state === "pending" || (state === "inProgress" && kind === "mutation");
