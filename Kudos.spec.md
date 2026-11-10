@@ -88,5 +88,9 @@ Peer recognition for Slack on one Convex deployment per workspace; the product r
   handler: apiTransport in service/src/website/api/transport.ts
   trust: browser
   control: none — the same guard as the reads: no cross-site form or link can send the header or the JSON, so no other site runs a command; the person is the one the edge names, as for the reads, and only a member the website admits reaches the command, in one transaction that writes nothing on a denial (service/src/website/api/transport.test.ts, service/src/website/identity.test.ts)
+- route POST /api/entry: the website signs the person in once per page load, running today's sign-in effects when they're due
+  handler: apiTransport in service/src/website/api/transport.ts
+  trust: browser
+  control: none — the same guard as the reads and commands, and any argument gets 400, before anyone is looked up; the person is the one the edge names, as for the reads, and a closed website, a signed-out request or someone who isn't a member gets the denial and writes nothing, while the users row, the greeting and a verification are written only on a first entry or while the person is being verified (service/src/website/entry.test.ts)
 
 ## invariants
