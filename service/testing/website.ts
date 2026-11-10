@@ -22,7 +22,9 @@ import { definitionsStored, offForEveryone, onForEveryone } from "./flags.ts";
 
 /**
  * Sets the sign-in workspace and the flag settings, and opens the website flag to everyone in it, or closes it; the
- * flag decides on the workspace's key, which this makes. Undo the settings with `vi.unstubAllEnvs()`.
+ * flag decides on the workspace's key, which this makes. Undo the settings with `vi.unstubAllEnvs()`. It leaves
+ * `fetch` alone: the test backend already routes it to the fake PostHog and the fake Slack, and stubbing it again, as
+ * `postHogDeciding` does, would cut the fake Slack off.
  */
 export async function websiteOpenIn(t: TestBackend, { workspace = "T1", open = true }: { workspace?: string; open?: boolean } = {}): Promise<void> {
   vi.stubEnv("SLACK_WORKSPACE_ID", workspace);
