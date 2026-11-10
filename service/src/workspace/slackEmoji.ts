@@ -1,7 +1,7 @@
 // The module map's skeleton of convex/workspace/slackEmoji.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
 // notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
-import { type Flag } from "../analytics/flags.ts";
-import { type ListedEmoji } from "./customEmoji.ts";
+import type { Flag } from "../analytics/flags.ts";
+import type { ListedEmoji } from "./customEmoji.ts";
 import type { MemberId } from "./directory.ts";
 import type { QueryContext } from "../operations.ts";
 import { notPorted } from "../notPorted.ts";

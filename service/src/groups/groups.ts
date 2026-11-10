@@ -1,6 +1,6 @@
 // The module map's skeleton of convex/groups/groups.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
 // notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
-import { type MemberId, type People } from "../workspace/directory.ts";
+import type { MemberId, People } from "../workspace/directory.ts";
 import { keepsMembers } from "../workspace/userGroups.ts";
 import type { GroupModeKind } from "./mode.ts";
 import type { Id } from "../db/columns.ts";

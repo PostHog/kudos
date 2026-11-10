@@ -2,11 +2,11 @@
 // notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
 import type { ViewedBoard } from "../analytics/projections.ts";
 import type { CompanyFace } from "../companyProfiles/faces.ts";
-import { type TeamCrestArt } from "../companyProfiles/teams.ts";
-import { type DayKey } from "../engine/allowance.ts";
-import { type RecognitionCounts } from "./counts.ts";
-import { type Period } from "./periods.ts";
-import { type MemberId } from "../workspace/directory.ts";
+import type { TeamCrestArt } from "../companyProfiles/teams.ts";
+import type { DayKey } from "../engine/allowance.ts";
+import type { RecognitionCounts } from "./counts.ts";
+import type { Period } from "./periods.ts";
+import type { MemberId } from "../workspace/directory.ts";
 import type { QueryContext } from "../operations.ts";
 import { notPorted } from "../notPorted.ts";
 

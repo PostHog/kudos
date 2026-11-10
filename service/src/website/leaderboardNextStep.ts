@@ -2,7 +2,7 @@
 // notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
 import type { Nudge } from "../album/hypeReactions.ts";
 import type { Week } from "../engine/allowance.ts";
-import { type AlbumPersonFace } from "./albumPages.ts";
+import type { AlbumPersonFace } from "./albumPages.ts";
 import type { VerifiedMember } from "./memberQuery.ts";
 import type { QueryContext } from "../operations.ts";
 import { notPorted } from "../notPorted.ts";
