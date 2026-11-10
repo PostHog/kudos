@@ -21,13 +21,22 @@ async function fileOf(text: string) {
 
 describe("a target file", () => {
   test("names the rewrite, signed in to through the edge, and reads back as it was written", async () => {
-    expect(targetOf(await fileOf(targetLines(rewrite)))).toEqual({ ...rewrite, timeUrl: "http://127.0.0.1:1/testing/time" });
+    expect(targetOf(await fileOf(targetLines(rewrite)))).toEqual({ ...rewrite, timeUrl: "http://127.0.0.1:1/testing/time", hosted: false, edgeSignInUrl: undefined });
   });
 
   test("that names no kind is today's app, the oracle", async () => {
     const { kind, ...withoutKind } = rewrite;
 
     expect(targetOf(await fileOf(targetLines({ ...withoutKind, signIn: "slack-openid" } as Target))).kind).toBe("oracle");
+  });
+
+  test("on the hosting platform needs no fakes, and says it is hosted", async () => {
+    const { fakesUrl, testSecret, ...hosted } = rewrite;
+    const file = await fileOf(targetLines({ ...hosted, fakesUrl: "", hosted: true, edgeSignInUrl: "https://sso.example/start" }));
+
+    expect(targetOf(file)).toMatchObject({ hosted: true, fakesUrl: "", testSecret: undefined, edgeSignInUrl: "https://sso.example/start" });
+    await writeFile(file, targetLines({ ...hosted, fakesUrl: "" }));
+    expect(() => targetOf(file), "a target off the platform").toThrow(/sets no KUDOS_FAKES_URL/);
   });
 
   test("that names a kind the suite doesn't know is refused", async () => {

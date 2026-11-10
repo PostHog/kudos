@@ -15,10 +15,18 @@ Peer recognition for Slack on one Convex deployment per workspace; the product r
   handler: slack-app/render-manifest.ts
   trust: operator
   control: none — it reads only its two arguments and prints a manifest that holds no secret; it reaches no deployment
+- change slack manifest: CI moves the sandbox Slack app to the manifest rendered for its app's URL on a push to main, and the production app only by a run started by hand that names it
+  handler: tools/release/slackManifest.ts
+  trust: operator
+  control: none — maintainers start it by pushing to main or by hand, and it runs only while the repository variable HEDGEHUG_MANIFEST_UPDATES is set, for production only at `production`; it never drops a scope or an event, and sends nothing until the new events URL answers Slack's check signed with the app's secret
 - run e2e: a maintainer or CI runs the E2E suite against today's app on a disposable local backend
   handler: e2e/local/run.ts
   trust: operator
   control: none — it starts its own local backend and fakes on loopback ports with fresh synthetic secrets, and reaches no other deployment
+- promote to production: CI moves the production branch forward to a commit of main once the sandbox serves it and the journeys tagged @sandbox pass there
+  handler: tools/release/promote.ts
+  trust: operator
+  control: none — maintainers start it by pushing to main, and it runs only while the repository variable HEDGEHUG_PROMOTION is set; it pushes only with that variable at `production`, and only a fast-forward of an existing production branch to the commit the gate passed on
 - action signIn: a browser starts a Slack sign-in, redeems the one-time code with its verifier, or refreshes a session
   handler: signIn in convex/auth.ts
   trust: browser
