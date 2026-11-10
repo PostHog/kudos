@@ -250,13 +250,14 @@ describe("the equivalence check", () => {
 });
 
 describe("the skeleton generator", () => {
-  const modules = ["convex/skeleton/awards.ts", "convex/skeleton/caller.ts", "convex/skeleton/tangled.ts", "convex/skeleton/edges.ts", "convex/skeleton/refused.ts", "convex/skeleton/inline.ts", "convex/skeleton/shadowed.ts"];
+  const modules = ["convex/skeleton/awards.ts", "convex/skeleton/caller.ts", "convex/skeleton/tangled.ts", "convex/skeleton/edges.ts", "convex/skeleton/refused.ts", "convex/skeleton/inline.ts", "convex/skeleton/shadowed.ts", "convex/skeleton/appTypes.ts"];
   const program = ts.createProgram(modules.map(onDisk), compilerOptions);
   const sourceFiles = modules.map((module) => program.getSourceFile(onDisk(module))!);
   const reached = reachedByName(sourceFiles);
   const skeleton = (index: number) => skeletonModule(program, sourceFiles[index]!, modules[index]!, reached, exists);
   const awards = landed(skeleton(0));
   const edges = landed(skeleton(3));
+  const appTypes = landed(skeleton(7));
 
   test("finds every function reached by name: run in place by an action, or later by the scheduler, a cron or the bus", () => {
     expect(Object.fromEntries([...reached].map(([path, how]) => [path, [...how]]))).toEqual({
@@ -265,6 +266,7 @@ describe("the skeleton generator", () => {
       "skeleton.edges.byValidator": ["job"],
       "skeleton.edges.byShorthand": ["job"],
       "skeleton.edges.viaAlias": ["job"],
+      "skeleton.appTypes.noArgs": ["job"],
       "skeleton.awards.memberOf": ["run"],
       "skeleton.awards.recordAward": ["run"],
     });
@@ -427,6 +429,51 @@ export async function viaAlias(ctx: QueryContext, args: z.infer<typeof viaAliasA
     ]);
   });
 
+  test("tells the app's own types from Convex's, and keeps overloads, tuples, body-local types and a handler's own args", () => {
+    expect(appTypes.text).toBe(`// The module map's skeleton of convex/skeleton/appTypes.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
+// notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
+import { z } from "zod";
+import type { MutationContext, QueryContext } from "../operations.ts";
+import { notPorted } from "../notPorted.ts";
+import { mutationJob } from "../jobs/define.ts";
+
+type Id<T> = { value: T };
+type QueryCtx = { value: string };
+
+export function plainRead(ctx: QueryCtx): string {
+  return ctx.value;
+}
+
+export async function wrapped(ctx: QueryContext): Promise<Id<"members">> {
+  throw notPorted("skeleton.appTypes.wrapped");
+}
+
+export async function local(ctx: QueryContext): Promise<{ n: number }> {
+  throw notPorted("skeleton.appTypes.local");
+}
+
+export function tupled(ctx: QueryContext): readonly [string, (boolean | undefined)?, ...number[]] {
+  throw notPorted("skeleton.appTypes.tupled");
+}
+
+export function pick(ctx: QueryContext, key: string): Promise<string>;
+export function pick(ctx: QueryContext, key: number): Promise<number>;
+export async function pick(ctx: QueryContext, key: string | number): Promise<string | number> {
+  throw notPorted("skeleton.appTypes.pick");
+}
+
+export const settings: Record<string, boolean> = {};
+const ready = Object.assign(settings, { ready: true });
+
+export const noArgsArgs = z.custom<{ note: string }>();
+export async function noArgs(ctx: MutationContext, args: z.infer<typeof noArgsArgs>): Promise<string> {
+  throw notPorted("skeleton.appTypes.noArgs");
+}
+export const noArgsJob = mutationJob("skeleton.appTypes.noArgs", noArgsArgs, noArgs);
+`);
+    expect(appTypes.omitted).toEqual([]);
+  });
+
   test("refuses what it can't stub without changing what other modules see, and any way of reaching Convex in what it writes", () => {
     expect(skeleton(4)).toEqual({
       refusals: [
@@ -453,7 +500,7 @@ export async function viaAlias(ctx: QueryContext, args: z.infer<typeof viaAliasA
 
   describe("its output in the service", () => {
     const serviceModules = ["values.ts", "notPorted.ts", "operations.ts", "jobs/define.ts", "db/columns.ts", "db/schema/index.ts", "db/page.ts"];
-    const scratch = scratchService(serviceModules, [awards, edges]);
+    const scratch = scratchService(serviceModules, [awards, edges, appTypes]);
 
     test("typechecks under the service's compiler options", () => {
       expect(scratch.diagnostics()).toEqual([]);
@@ -488,6 +535,11 @@ export async function viaAlias(ctx: QueryContext, args: z.infer<typeof viaAliasA
       expect(edgesModule.answer).toBe(42); // a local function named like a builder is no builder
       await expect(edgesModule.viaAlias({}, {})).rejects.toThrow(new NotPortedError("skeleton.edges.viaAlias")); // a builder through a local alias is one
       expect(edgesModule.viaAliasJob).toBeUndefined();
+
+      const appModule = await import(scratch.path(appTypes.servicePath));
+      expect(appModule.plainRead({ value: "x" })).toBe("x"); // an app type named QueryCtx is no context
+      expect(appModule.settings).toEqual({ ready: true }); // Object.assign on a module value still ran
+      expect(appModule.noArgsJob.args.safeParse({ note: "x", more: 1 }).success).toBe(true); // Convex checks no args it wasn't given
     });
   });
 });

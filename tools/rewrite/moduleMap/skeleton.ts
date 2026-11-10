@@ -64,11 +64,18 @@ export const dottedPath = (convexPath: string, name: string) => `${convexPath.sl
 export function reachedByName(sourceFiles: readonly ts.SourceFile[]): Map<string, Set<Reach>> {
   const reached = new Map<string, Set<Reach>>();
   for (const sourceFile of sourceFiles) {
+    // `internal` however the module names it: `import { internal as refs } from "../_generated/api"`.
+    const internalNames = new Set<string>();
+    for (const statement of sourceFile.statements) {
+      if (!ts.isImportDeclaration(statement) || !/(^|\/)_generated\/api(\.[jt]s)?$/.test((statement.moduleSpecifier as ts.StringLiteral).text)) continue;
+      const named = statement.importClause?.namedBindings;
+      if (named && ts.isNamedImports(named)) for (const element of named.elements) if ((element.propertyName ?? element.name).text === "internal") internalNames.add(element.name.text);
+    }
     // Parents passed down: a program's files carry none until something binds them.
     const visit = (node: ts.Node, parent: ts.Node): void => {
       if (ts.isPropertyAccessExpression(node) && !ts.isPropertyAccessExpression(parent)) {
         const chain = node.getText(sourceFile).replace(/\s/g, "").split(".");
-        if (chain[0] === "internal" && chain.length > 2) {
+        if (internalNames.has(chain[0]!) && chain.length > 2) {
           const call = parent;
           const runs = ts.isCallExpression(call) && call.arguments[0] === node && /\.run(Query|Mutation|Action)$/.test(call.expression.getText(sourceFile));
           const path = chain.slice(1).join(".");
@@ -391,7 +398,8 @@ export function skeletonModule(program: ts.Program, sourceFile: ts.SourceFile, c
   return { servicePath, text: output, omitted: [...new Set(omitted)] };
 
   function helperStub(fn: ts.SignatureDeclaration & { body?: ts.Node }, statement: ts.Statement, path: string): string {
-    if (!fn.body) throw new Error("no body to replace");
+    // An overload keeps its signature in the service's types; only the implementation throws.
+    if (!fn.body) return textOf(statement.getFullStart(), statement.getEnd());
     let head: string;
     if (fn.type) head = textOf(statement.getFullStart(), fn.body.getStart(sourceFile));
     else {
@@ -413,8 +421,15 @@ export function skeletonModule(program: ts.Program, sourceFile: ts.SourceFile, c
     const argsName = fresh(`${name}Args`);
     const returns = printed.unwrapPromise(printed.returnOfType(checker.getTypeAtLocation(handler)));
     // Args are a map of fields, or already a validator (`v.object(…)`), which the codemod made a schema of.
-    const argsText = args ? textOf(args.getStart(sourceFile), args.getEnd()) : "{}";
-    const schema = args && validatorClassOf(checker.getTypeAtLocation(args)) ? argsText : `z.strictObject(${argsText})`;
+    let schema: string;
+    if (args) {
+      const argsText = textOf(args.getStart(sourceFile), args.getEnd());
+      schema = validatorClassOf(checker.getTypeAtLocation(args)) ? argsText : `z.strictObject(${argsText})`;
+    } else {
+      // Convex checks nothing for a registration that declares no args: the handler's own type is the whole contract.
+      const second = checker.getTypeAtLocation(handler).getCallSignatures()[0]?.parameters[1];
+      schema = `z.custom<${second ? printed.print(checker.getTypeOfSymbolAtLocation(second, handler)) : "Record<string, unknown>"}>()`;
+    }
     generated.add("notPorted").add(contexts[kind]);
     if (reach.has("job") && kind !== "query") generated.add(`${kind}Job`);
     const lines = [
@@ -507,7 +522,10 @@ function registrationOf(statement: ts.Statement, builderOf: (node: ts.Identifier
 function isContext(type: ts.Type): boolean {
   if (type.isUnionOrIntersection()) return type.types.some(isContext);
   const context = /^(Generic)?(Query|Mutation|Action)Ctx$/;
-  return context.test(type.aliasSymbol?.name ?? "") || context.test(type.getSymbol()?.name ?? "");
+  // Convex's or the generated server's, not an app's type of the same name.
+  const convexOwn = (symbol: ts.Symbol | undefined) =>
+    symbol !== undefined && context.test(symbol.name) && (symbol.declarations ?? []).some((declaration) => /\/node_modules\/convex\/|\/_generated\/server(\.d)?\.ts$/.test(declaration.getSourceFile().fileName));
+  return convexOwn(type.aliasSymbol) || convexOwn(type.getSymbol());
 }
 
 function functionOf(statement: ts.Statement): (ts.SignatureDeclaration & { body?: ts.Node }) | undefined {
@@ -562,6 +580,8 @@ function typePrinter(checker: ts.TypeChecker, servicePath: string, localNames: R
     return name;
   };
   const fromConvexModule = (declaration: ts.Declaration | undefined) => {
+    // A type declared inside a function lives only in its body, which a stub replaces: it is spelled out instead.
+    if (declaration && !ts.isSourceFile(declaration.parent)) return undefined;
     const file = declaration?.getSourceFile().fileName;
     const at = file?.lastIndexOf(`/${convexRoot}/`);
     if (!file || at === undefined || at < 0 || file.includes("/node_modules/") || file.includes("/_generated/")) return undefined;
@@ -596,7 +616,8 @@ function typePrinter(checker: ts.TypeChecker, servicePath: string, localNames: R
       return checker.typeToString(type);
     }
     const alias = type.aliasSymbol;
-    if (alias && (alias.name === "Id" || alias.name === "GenericId") && type.aliasTypeArguments?.length === 1) return `${want("db/columns.ts", "Id")}<${print(type.aliasTypeArguments[0]!)}>`;
+    const fromConvex = (symbol: ts.Symbol) => symbol.declarations?.some((declaration) => /\/node_modules\/convex\/|\/_generated\/dataModel(\.d)?\.ts$/.test(declaration.getSourceFile().fileName)) ?? false;
+    if (alias && (alias.name === "Id" || alias.name === "GenericId") && fromConvex(alias) && type.aliasTypeArguments?.length === 1) return `${want("db/columns.ts", "Id")}<${print(type.aliasTypeArguments[0]!)}>`;
     if (type.isUnion()) return printUnion(type.types);
     if (type.isIntersection()) return type.types.map((member) => parenthesize(print(member))).join(" & ");
     if (alias) {
@@ -606,7 +627,18 @@ function typePrinter(checker: ts.TypeChecker, servicePath: string, localNames: R
     }
     const symbol = type.getSymbol();
     if (symbol?.name === "Promise") return `Promise<${print(checker.getTypeArguments(type as ts.TypeReference)[0]!)}>`;
-    if (checker.isTupleType(type)) return `[${checker.getTypeArguments(type as ts.TypeReference).map(print).join(", ")}]`;
+    if (checker.isTupleType(type)) {
+      // Each element keeps its flag: `T?`, `...T[]`, `...T`; the tuple keeps `readonly`.
+      const target = (type as ts.TypeReference).target as ts.TupleType;
+      const elements = checker.getTypeArguments(type as ts.TypeReference).map((element, index) => {
+        const flag = target.elementFlags[index]!;
+        if (flag & ts.ElementFlags.Optional) return `${parenthesize(print(element))}?`;
+        if (flag & ts.ElementFlags.Rest) return `...${parenthesize(print(element))}[]`;
+        if (flag & ts.ElementFlags.Variadic) return `...${print(element)}`;
+        return print(element);
+      });
+      return `${target.readonly ? "readonly " : ""}[${elements.join(", ")}]`;
+    }
     if (checker.isArrayType(type)) return `${parenthesize(print(checker.getTypeArguments(type as ts.TypeReference)[0]!))}[]`;
     if (symbol && (symbol.flags & (ts.SymbolFlags.Interface | ts.SymbolFlags.Class)) !== 0) {
       if (symbol.name in serverTypes && symbol.declarations?.[0]?.getSourceFile().fileName.includes("/convex/dist/")) {
@@ -746,7 +778,9 @@ function hasEffects(statement: ts.Statement, moduleValue: (node: ts.Identifier) 
       return;
     }
     const callee = ts.isCallExpression(node) || ts.isNewExpression(node) ? rootOf(node.expression) : ts.isTaggedTemplateExpression(node) ? rootOf(node.tag) : undefined;
-    if (callee && ts.isIdentifier(callee) && moduleValue(callee)) found = true;
+    const passes = (ts.isCallExpression(node) || ts.isNewExpression(node)) && (node.arguments ?? []).some((argument) => ts.isIdentifier(argument) && moduleValue(argument));
+    // A module value passed to a call may be changed by it: `Object.assign(cache, …)`.
+    if ((callee && ts.isIdentifier(callee) && moduleValue(callee)) || passes) found = true;
     else if (ts.isAwaitExpression(node) || ts.isDeleteExpression(node)) found = true;
     else if (ts.isBinaryExpression(node) && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment) found = true;
     else if ((ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) && (node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken)) found = true;
