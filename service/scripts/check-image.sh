@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Proves the root Dockerfile's image boots as the host runs it: as user 1000, on $PORT, under the host's memory and CPU
-# limits, with and without a database, serving the commit it was built from, and sending fetch through HTTPS_PROXY.
+# limits, with and without a database, serving the commit it was built from, answering Slack while cards draw and a job
+# runs, and sending fetch through HTTPS_PROXY.
 # Usage: service/scripts/check-image.sh <image> <expected commit>
 set -euo pipefail
 
@@ -8,7 +9,8 @@ image="$1"
 commit="$2"
 postgres_image="postgres:18.6@sha256:e3d24f6906d0760bf4da0dae872415391ededefad23fd471c47dc53b0ddf3c42"
 run_id="hedgehug-check-$$"
-limits=(--memory 512m --cpus 0.5)
+# Swap capped with memory, so a container past its memory is ended rather than paged out, as on the host.
+limits=(--memory 512m --memory-swap 512m --cpus 0.5)
 
 cleanup() {
   docker rm -f "$run_id-db" "$run_id-app" "$run_id-bare" >/dev/null 2>&1 || true
@@ -67,6 +69,14 @@ asset="$(curl -fsS "http://127.0.0.1:$app_port/" | grep -o '/assets/index-[A-Za-
 [[ "$(curl -fsS -D - -o /dev/null "http://127.0.0.1:$app_port$asset")" == *"cache-control: public, max-age=31536000, immutable"* ]] || fail "$asset is not cached for good"
 echo "ok: serves the website's build with its policy and cache headers"
 docker stats --no-stream --format 'memory after boot: {{.MemUsage}}' "$run_id-app"
+
+# The resource proof, under the same limits: the service answers Slack within its ack deadline while cards draw on the
+# renderer thread and a job works through a backlog, and the container stays inside its memory
+# (service/scripts/resourceProof.ts). It gets a database of its own, so the app above can't take its job.
+docker exec "$run_id-db" psql -U postgres -qc "create database proof" >/dev/null || fail "could not create the proof's database"
+proof="$(docker run --rm "${limits[@]}" --network "$run_id" -e DATABASE_URL="postgres://postgres:check@$run_id-db:5432/proof" "$image" node scripts/resourceProof.ts)" \
+  || fail "the resource proof failed: $proof"
+echo "ok: acks Slack while cards draw and a job works through a backlog, under --memory 512m without swap and --cpus 0.5: $proof"
 
 # fetch goes through HTTPS_PROXY: a proxy that refuses connections makes a public fetch fail on the proxy's port.
 proxied="$(docker run --rm "${limits[@]}" -e HTTPS_PROXY=http://127.0.0.1:9 "$image" node -e \
