@@ -18,9 +18,11 @@ import { createOperations, type ActionContext } from "../operations.ts";
 import { serviceRegistry } from "../registry.ts";
 import {
   attemptArgs,
+  attemptCall,
   deliverIndicatorJob,
   deliverPrivateReplyJob,
   enqueueAt,
+  failedAttempt,
   sendAtMostOnce,
   sendBesideOrAsDirectMessage,
   sendOnce,
@@ -126,6 +128,24 @@ describe("R35: Retry-After", () => {
     expect(later.every((at) => at >= limitedAt + 30_000), "every later post waits out the Retry-After").toBe(true);
     expect(timesOf("chat.postEphemeral"), "the ephemeral isn't held").toEqual([limitedAt + 10_000]);
     expect(slack.messagesIn("C1").map(({ text }) => text).sort()).toEqual(["first", "second"]);
+  });
+
+  test("a delivery held back by a hold keeps its try: one on its last try is still sent once the hold ends", async () => {
+    const t = setUp();
+    await t.operations.mutation("slack.rateLimits.hold", (ctx) => hold(ctx, { workspace: "T1", method: "chat.postMessage", until: start + 30_000 }));
+
+    await t.deliver({ ...post("last try"), attempt: 3 });
+    await t.settle();
+
+    expect(timesOf("chat.postMessage"), "sent once, when the hold ends").toEqual([start + 30_000]);
+    expect(slack.messagesIn("C1").map(({ text }) => text)).toEqual(["last try"]);
+  });
+
+  test("a failure that names its own delay retries after it, from the app's clock", () => {
+    const now = start + hour;
+
+    expect(failedAttempt(1, now, 45_000), "Slack's delay").toEqual({ at: now + 45_000, attempt: 2 });
+    expect(failedAttempt(2, now), "the backoff").toEqual({ at: now + 4_000, attempt: 3 });
   });
 
   test("a later, shorter Retry-After never cuts a longer hold short", async () => {
@@ -252,6 +272,27 @@ describe("R35: a delivery whose message or channel is gone stops for good", () =
     await t.settle();
 
     expect(timesOf("chat.postMessage")).toHaveLength(1);
+  });
+});
+
+describe("R35: a reaction that can never show is gone, not failed", () => {
+  test.each(["is_archived", "not_reactable", "invalid_name", "message_not_found"])("reactions.add answering %s is gone after one call", async (error) => {
+    const { operations } = setUp();
+    slack.answering("reactions.add", ...repeated(10, slackError(error)));
+
+    const result = await operations.action("test.react", (ctx) => attemptCall(ctx, "T1", "reactions.add", { channel: "C1", timestamp: "1.0", name: "taco" }));
+
+    expect(result).toEqual({ kind: "gone", error });
+    expect(timesOf("reactions.add")).toHaveLength(1);
+  });
+
+  test("already_reacted counts as delivered when the caller says the reaction already shows", async () => {
+    const { operations } = setUp();
+    slack.answering("reactions.add", slackError("already_reacted"));
+
+    const result = await operations.action("test.react", (ctx) => attemptCall(ctx, "T1", "reactions.add", { channel: "C1", timestamp: "1.0", name: "taco" }, new Set(["already_reacted"])));
+
+    expect(result.kind).toBe("delivered");
   });
 });
 
