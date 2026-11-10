@@ -7,7 +7,8 @@
 // The transaction is the runner's: a handler can't begin, commit or roll it back, only use savepoints inside it.
 // A failure is logged with the operation's name; never its message, which may quote SQL.
 // A mutation or query never reaches the network either: it may run again, and it holds its transaction while it waits.
-// Any fetch or http(s) request made while one runs throws, and fails the operation even when its handler catches it.
+// Any fetch or http(s) request made while one runs throws, and fails the operation even when its handler catches it,
+// unless it ran behind the operation's one `fence`, which undoes everything behind it and lets the operation go on.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import http from "node:http";
@@ -76,8 +77,22 @@ const retryable = new Set(["40001", "40P01"]);
 // and a statement's first words decide whether it begins or ends a transaction.
 
 // The mutation or query whose transaction is open, so another one started inside it is refused. Work its handler
-// left behind keeps the store after the operation ends; `open` turns false then, and nothing is refused.
-const running = new AsyncLocalStorage<{ name: string; open: boolean; network?: Error }>();
+// left behind keeps the store after the operation ends; `open` turns false then, and nothing is refused. Code behind
+// the fence runs in a scope of its own, whose `parent` is the operation's.
+interface Scope {
+  name: string;
+  open: boolean;
+  network?: Error;
+  /** A refusal behind the operation's fence: it fails the operation unless the fence undoes it. Apart from `network`, so
+   *  the fence never clears a refusal of the operation's own. */
+  networkBehind?: Error;
+  parent?: Scope;
+  /** A fence's scope once the fence undid it: whatever it left running writes nothing more. */
+  undone?: boolean;
+  /** The operation's fence, until it is taken; a fence's own scope has none. */
+  fence?: <T>(inner: () => Promise<T>) => Promise<T>;
+}
+const running = new AsyncLocalStorage<Scope>();
 
 /**
  * Throws when a mutation or query is running, and marks it failed, so a handler that catches the error still fails.
@@ -89,7 +104,27 @@ export function refuseNetworkInOperation(what: string): void {
   const error = new Error(`${what} inside "${scope.name}": a mutation or query never reaches the network; do it in an action, outside its mutations and queries`);
   error.name = "NetworkInOperationError";
   scope.network ??= error;
+  // Behind the fence, the operation fails too, unless the fence undoes it first: a stray refusal after that fails it.
+  if (scope.parent) scope.parent.networkBehind ??= error;
   throw error;
+}
+
+/**
+ * Runs `inner` behind a savepoint only the runner can name. When `inner` fails, or reaches for the network even if it
+ * catches the refusal, everything it did is rolled back and the failure is its answer; the operation goes on, and
+ * nothing `inner` left running writes in it again. One fence per attempt, never nested: the job worker takes it before
+ * a job's handler runs (jobs/worker.ts), so a handler can't.
+ */
+export function fence<T>(inner: () => Promise<T>): Promise<T> {
+  const scope = running.getStore();
+  if (!scope?.open || !scope.fence) {
+    const error = new Error("A fence runs inside a mutation or query, once per attempt, and never inside another");
+    error.name = "FenceTakenError";
+    return Promise.reject(error);
+  }
+  const taken = scope.fence;
+  scope.fence = undefined;
+  return taken(inner);
 }
 
 /** Whether `error` is a network call an operation refused. */
@@ -156,13 +191,18 @@ export function createOperations({ pool, clock, log, maxAttempts = 10, retryDela
     // refusals, such as a prepared statement's name used twice, never reach Postgres and abort nothing.
     let aborted: unknown;
     // Open while the handler runs; work it left behind then finds its transaction gone, never a pooled connection.
-    const scope: { name: string; open: boolean; network?: Error } = { name, open: true };
+    const scope: Scope = { name, open: true, fence: fenced };
     const tracked = {
       query: (...args: Parameters<pg.PoolClient["query"]>) => {
         if (!scope.open) return Promise.reject(operationEnded(name));
         // After a refused network call nothing more runs in the attempt, not even a rollback to a savepoint, so no
-        // write of it commits however the handler goes on; a mutation job's failure is marked apart (worker.ts).
-        if (scope.network !== undefined) return Promise.reject(scope.network);
+        // write of it commits however the handler goes on. Behind a fence that undid it, only the fenced code stays
+        // refused.
+        const current = running.getStore();
+        const behind = current?.parent === scope ? current : undefined;
+        const refused = scope.network ?? scope.networkBehind ?? behind?.network;
+        if (refused !== undefined) return Promise.reject(refused);
+        if (behind?.undone) return Promise.reject(operationEnded(name));
         const [query, values] = args as unknown as [string | pg.QueryConfig, unknown[] | undefined];
         const config: pg.QueryConfig = typeof query === "string" ? { text: query } : { ...query };
         if (values !== undefined) config.values = values;
@@ -184,6 +224,35 @@ export function createOperations({ pool, clock, log, maxAttempts = 10, retryDela
         );
       },
     };
+    async function fenced<T>(inner: () => Promise<T>): Promise<T> {
+      const savepoint = `fence_${randomUUID().replaceAll("-", "")}`;
+      // Tracked like any statement: after a failure the handler swallowed, it answers with that failure's code.
+      await (tracked.query as (text: string) => Promise<unknown>)(`savepoint ${savepoint}`);
+      const behind: Scope = {
+        name,
+        get open() {
+          return scope.open;
+        },
+        parent: scope,
+      };
+      let failure: { error: unknown } | undefined;
+      let result: T | undefined;
+      try {
+        result = await running.run(behind, inner);
+      } catch (error) {
+        failure = { error };
+      }
+      if (behind.network) failure = { error: behind.network };
+      if (failure === undefined) return result as T;
+      // Straight to the client: the refusal stops every other statement. If it fails too, the transaction is lost and
+      // the operation fails with it. Once the operation has ended, the connection may be another's: it is left alone.
+      behind.undone = true;
+      if (!scope.open) throw failure.error;
+      await client.query(`rollback to savepoint ${savepoint}`);
+      aborted = undefined;
+      scope.networkBehind = undefined;
+      throw failure.error;
+    }
     try {
       await client.query(begin).catch((error: unknown) => {
         broken ??= error;
@@ -192,11 +261,12 @@ export function createOperations({ pool, clock, log, maxAttempts = 10, retryDela
       let result: T;
       try {
         result = await running.run(scope, () => handler(drizzle({ client: tracked as unknown as pg.PoolClient })));
-        if (scope.network) throw scope.network;
+        const refused = scope.network ?? scope.networkBehind;
+        if (refused) throw refused;
       } catch (error) {
         scope.open = false;
         await client.query("ROLLBACK").catch((rollbackError: unknown) => (broken ??= rollbackError));
-        throw scope.network ?? error;
+        throw scope.network ?? scope.networkBehind ?? error;
       }
       scope.open = false;
       const commit = await client.query("COMMIT").catch((error: unknown) => {
