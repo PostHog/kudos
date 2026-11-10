@@ -86,7 +86,7 @@ describe("a kudos message that gave", () => {
     await t.settle();
 
     const [sent] = t.slack.ephemeralsTo("U_ALICE");
-    expect(sent?.text).toMatch(/^You gave 1 kudos to <@U_BOB>\. You have 4 kudos left today\.\n\+5 XP/);
+    expect(sent?.text).toMatch(/^<@U_BOB> got 1 kudos from you\. You have 4 kudos left today\.\n\+10 XP/);
   });
 
   waitsOn(["S5", "S6"], "a member is told what they gave, unless their message settings turn the reply off", async () => {
@@ -161,7 +161,9 @@ describe("a reply held for its quests", () => {
     const oneReply = await seedOneReply(t, held, { awaitsQuests: true, awaitsItems: true });
 
     await t.run((ctx) => releaseSuccessReply(ctx, kudos, [], []));
+    await t.settle();
 
+    expect(t.slack.calls, "nothing is sent while the item hasn't come").toEqual([]);
     expect(await t.seed.get("privateReplies", held)).toMatchObject({ held: true, gains: { xp: 10 } });
     const row = await t.seed.get("oneReplies", oneReply);
     expect(row).toMatchObject({ awaitsItems: true });
@@ -206,7 +208,9 @@ describe("a reply waiting for its item", () => {
     const oneReply = await seedOneReply(t, held, { awaitsQuests: true, awaitsItems: true });
 
     expect(await t.run((ctx) => tellItemsInTheReply(ctx, granted(1) as never))).toBe(true);
+    await t.settle();
 
+    expect(t.slack.calls, "nothing is sent while the quests haven't come").toEqual([]);
     expect(await t.seed.get("oneReplies", oneReply)).toMatchObject({ awaitsQuests: true, items: { outcomes: outcomes(1), more: 0 } });
     expect(await t.seed.get("privateReplies", held)).toMatchObject({ held: true });
   });
@@ -220,6 +224,38 @@ describe("a reply waiting for its item", () => {
     expect(await t.run((ctx) => tellItemsInTheReply(ctx, granted(1) as never))).toBe(false);
     expect(await t.run((ctx) => tellItemsInTheReply(ctx, { ...granted(1), message: { ...kudos, message: "1700000000.000300" } } as never))).toBe(false);
     expect(await t.seed.get("oneReplies", oneReply)).toEqual(before);
+  });
+});
+
+describe("a reply held for both its quests and its item", () => {
+  const granted = { type: "thoughtfulPacksGranted" as const, fact: "fact-1", workspace: "T1", message: kudos, outcomes: [{ recipient: "member-0" as Id<"members">, outcome: "nextWeek" as const }], at: 0 };
+
+  waitsOn(["S6", "S17"], "is sent once, when the item comes after the quests", async () => {
+    const t = backend();
+    const held = await seedReply(t, { held: true });
+    await seedOneReply(t, held, { awaitsQuests: true, awaitsItems: true });
+    await t.run((ctx) => releaseSuccessReply(ctx, kudos, [questDone], []));
+    await t.settle();
+    expect(t.slack.calls, "nothing is sent before the item").toEqual([]);
+
+    await t.run((ctx) => tellItemsInTheReply(ctx, granted as never));
+    await t.settle();
+
+    expect(t.slack.ephemeralsTo("U_ALICE")).toHaveLength(1);
+  });
+
+  waitsOn(["S6", "S17"], "is sent once, when the quests come after the item", async () => {
+    const t = backend();
+    const held = await seedReply(t, { held: true });
+    await seedOneReply(t, held, { awaitsQuests: true, awaitsItems: true });
+    await t.run((ctx) => tellItemsInTheReply(ctx, granted as never));
+    await t.settle();
+    expect(t.slack.calls, "nothing is sent before the quests").toEqual([]);
+
+    await t.run((ctx) => releaseSuccessReply(ctx, kudos, [questDone], []));
+    await t.settle();
+
+    expect(t.slack.ephemeralsTo("U_ALICE")).toHaveLength(1);
   });
 });
 
