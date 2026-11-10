@@ -2,13 +2,13 @@
 // notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
 import type { KudosGivenEvent } from "../bus/events.ts";
 import { awardIdValidator } from "../engine/awards.ts";
-import { type MemberId } from "../workspace/directory.ts";
+import type { MemberId } from "../workspace/directory.ts";
 import { rewardValidator } from "./journey.ts";
 import { isPaidOnTheMondayPath } from "./mondayCatalogue.ts";
 import { feasibleBecauseValidator, questIdValidator } from "./pool.ts";
-import { type Moved, type MovedQuest, type ProgressRead } from "./progress.ts";
+import type { Moved, MovedQuest, ProgressRead } from "./progress.ts";
 import type { WeeklyQuest } from "./step.ts";
-import { type WeekKey } from "./week.ts";
+import type { WeekKey } from "./week.ts";
 import { z } from "zod";
 import { zv } from "../values.ts";
 import type { Doc } from "../db/schema/index.ts";
