@@ -12,7 +12,7 @@ import { emojiWorld } from "./testing/emojiWorld.ts";
 import { replaceCompanyProfiles } from "../companyProfiles/sync.ts";
 import { serviceRegistry } from "../registry.ts";
 import type { MemberId } from "../workspace/directory.ts";
-import { emojiNameOf, giveEmojiASecondName, nameHypeEmojiOf, reserveSharedEmojiNames, reserveTeamNamesAfterTheSync, type EarnedEmojiId } from "./emojiNames.ts";
+import { emojiNameOf, giveEmojiASecondName, giveEmojiTheName, nameHypeEmojiOf, reserveSharedEmojiNames, reserveTeamNamesAfterTheSync, type EarnedEmojiId } from "./emojiNames.ts";
 
 vi.mock("../workspace/directory.ts", async (original) => (await import("./testing/emojiWorld.ts")).standIn(original, "directory"));
 vi.mock("../workspace/slackEmoji.ts", async (original) => (await import("./testing/emojiWorld.ts")).standIn(original, "slackEmoji"));
@@ -54,6 +54,18 @@ describe("an earned emoji's name never moves", () => {
     await thanks(first);
 
     expect([await hypeNameOf(first), await hypeNameOf(second), await hypeNameOf(third)]).toEqual(["sam-rivera-hype", "sam-rivera-2-hype", null]);
+  });
+
+  test("a numbered name stays used once its holder maps their emoji elsewhere: the next namesake takes the number after it", async () => {
+    const first = aMember("m_sam_1", "Sam Rivera");
+    const second = aMember("m_sam_2", "Sam Rivera");
+    await thanks(first, second);
+    await t.run((ctx) => giveEmojiTheName(ctx, "T1", `hype:${second}`, "sam-the-otter", { member: second, as: "member" }));
+    const third = aMember("m_sam_3", "Sam Rivera");
+
+    await thanks(third);
+
+    expect([await hypeNameOf(first), await hypeNameOf(second), await hypeNameOf(third)]).toEqual(["sam-rivera-hype", "sam-the-otter", "sam-rivera-3-hype"]);
   });
 
   test("a hype name is the slug of the person's full name, not their Slack display name", async () => {
