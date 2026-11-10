@@ -74,7 +74,6 @@ export const landed = [
   "convex/album/thoughtfulGivers.ts",
   "convex/analytics/boundary.ts",
   "convex/analytics/browser.ts",
-  "convex/analytics/exceptions.ts",
   "convex/analytics/failures.ts",
   "convex/analytics/isolatedUsage.ts",
   "convex/analytics/projections.ts",
