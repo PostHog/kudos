@@ -4,9 +4,10 @@
 //
 // It lives outside `service/` because the service may import nothing of Convex (`service/src/noConvex.test.ts`), and
 // it goes when Convex does. Two shapes are the same when each takes every value of the other, no `any` hides anywhere,
-// and they name the same fields at every depth, each as optional: a dropped field, optional or not, a field that turned
-// optional, a string the website matches spelled otherwise, or an `any` anywhere fails the typecheck with the route's
-// name. Two unions that hold the same values pass however they are split, as `{ groups: boolean }` and
+// and each member of a union has a twin on the other side with the same fields at every depth, each as optional. A
+// dropped field, optional or not, a field that turned optional, a field moved from one member of a union to another,
+// a string the website matches spelled otherwise, or an `any` anywhere fails the typecheck with the route's name. Two
+// unions that hold the same values pass however they are split, as `{ groups: boolean }` and
 // `{ groups: true } | { groups: false }` do.
 import type { FunctionArgs, FunctionReference, FunctionReturnType } from "convex/server";
 import type { GenericId } from "convex/values";
@@ -57,25 +58,48 @@ type HasAny<T> =
 
 type IsOptional<T, K extends keyof T> = {} extends Pick<T, K> ? true : false;
 
-/** Every field T names at every depth, across its union's members, each spelled with `?` when it is optional. */
-type Fields<T, At extends string = ""> = T extends Primitive
-  ? never
-  : T extends (...args: never[]) => unknown
-    ? never
-    : T extends readonly unknown[]
-      ? `${At}[]` | Fields<T[number], `${At}[]`>
-      : { [Key in Extract<keyof T, string | number>]-?: `${At}.${Key}${IsOptional<T, Key> extends true ? "?" : ""}` | Fields<T[Key], `${At}.${Key}`> }[Extract<keyof T, string | number>];
+type Leaf = Primitive | ((...args: never[]) => unknown);
+
+/** The fields of one object, each spelled with `?` when it is optional. */
+type Keys<T> = { [Key in Extract<keyof T, string | number>]-?: `${Key}${IsOptional<T, Key> extends true ? "?" : ""}` }[Extract<keyof T, string | number>];
 
 type Takes<A, B> = [B] extends [A] ? true : false;
 
-/** True when A and B are the same shape: each takes every value of the other, with the same fields, each as optional, and no `any`. */
+/**
+ * True when each member of either union has a twin in the other: a member with the same fields, each as optional,
+ * whose fields' values are twins in turn at every depth. Values themselves are assignability's to judge, so a value
+ * that one side splits across members, as `{ groups: true } | { groups: false }` splits `{ groups: boolean }`, has a
+ * twin on each side.
+ */
+type Structure<A, B> = Twins<A, B> extends true ? Twins<B, A> : false;
+type Twins<A, B> = false extends (A extends unknown ? HasTwin<A, B> : never) ? false : true;
+type HasTwin<One, B> = true extends (B extends unknown ? IsTwin<One, B> : never) ? true : false;
+type IsTwin<A, B> = A extends Leaf
+  ? B extends Leaf
+    ? true
+    : false
+  : B extends Leaf
+    ? false
+    : A extends readonly unknown[]
+      ? B extends readonly unknown[]
+        ? Structure<A[number], B[number]>
+        : false
+      : B extends readonly unknown[]
+        ? false
+        : Takes<Keys<A>, Keys<B>> extends true
+          ? Takes<Keys<B>, Keys<A>> extends true
+            ? false extends { [Key in keyof A & keyof B]-?: Structure<A[Key], B[Key]> }[keyof A & keyof B]
+              ? false
+              : true
+            : false
+          : false;
+
+/** True when A and B are the same shape: each takes every value of the other, no `any` hides in either, and each member has a twin of the same fields at every depth. */
 export type Same<A, B> = true extends HasAny<A> | HasAny<B>
   ? false
   : Takes<Plain<A>, Plain<B>> extends true
     ? Takes<Plain<B>, Plain<A>> extends true
-      ? Takes<Fields<Plain<A>>, Fields<Plain<B>>> extends true
-        ? Takes<Fields<Plain<B>>, Fields<Plain<A>>>
-        : false
+      ? Structure<Plain<A>, Plain<B>>
       : false
     : false;
 
@@ -174,3 +198,7 @@ export type LengthensATuple = Holds<Same<[string], [string, string]>>;
 export type UnknownForEmpty = Holds<Same<unknown, {}>>;
 export type SplitsABoolean = Holds<Same<{ name: string; groups: boolean }, { name: string; groups: true } | { name: string; groups: false }>>;
 export type SpellsARecordOtherwise = Holds<Same<Record<string, { x: number }>, { [key: string]: { x: number } }>>;
+// @ts-expect-error a field moved between members: the route takes { g: "x" }, which the function refused
+export type MovesAFieldBetweenMembers = Holds<Same<{ f?: number } | { f: number; g?: string }, { f: number } | { f?: number; g?: string }>>;
+// @ts-expect-error a field moved between members one field down
+export type MovesAFieldOneDown = Holds<Same<{ card: { f?: number } | { f: number; g?: string } }, { card: { f: number } | { f?: number; g?: string } }>>;
