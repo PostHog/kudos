@@ -452,6 +452,29 @@ describe("action jobs", () => {
     expect((await jobRows())[0]!.state).toBe("failed");
   });
 
+  test("one whose mutation loses its connection before COMMIT completes once, and its next booking lands", async () => {
+    let runs = 0;
+    const post = actionJob("leaderboard.weeklyPost.post", z.object({}), async ({ run }) => {
+      await run.mutation("book next", async (ctx) => {
+        runs += 1;
+        await effect(ctx, "booked");
+        if (runs === 1) {
+          // The server ends the session, as a restart or a failover does, before the booking commits.
+          const { rows } = await ctx.tx.execute<{ pid: number }>(sql`select pg_backend_pid() as pid`);
+          await database.pool.query("select pg_terminate_backend($1, 5000)", [rows[0]!.pid]);
+          await ctx.tx.execute(sql`select 1`);
+        }
+      });
+    });
+    const { worker, enqueue } = setUp([post]);
+    await enqueue(post, {});
+
+    expect(await worker().settle(5_000)).toEqual({ ran: ["leaderboard.weeklyPost.post"], done: true });
+    expect(await jobRows()).toEqual([{ name: "leaderboard.weeklyPost.post", state: "success", error: null }]);
+    expect(await effects("booked"), "booked once").toBe(1);
+    expect(runs, "the mutation ran again on a new connection").toBe(2);
+  });
+
   test("one that throws is marked failed with its error", async () => {
     const send = actionJob("slack.delivery.send", z.object({}), async () => {
       throw new Error("channel_not_found");
