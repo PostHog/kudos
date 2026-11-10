@@ -42,8 +42,9 @@ export interface TransportOptions {
   routes: readonly Route[];
   identify: Identify;
   check: MemberCheck;
-  /** The page load that signs the person in, run by `POST /api/entry` in one command of its own. */
-  enter: Enter;
+  /** The page load that signs the person in, run by `POST /api/entry` in one command of its own. The website's
+   *  registration always gives it; a transport without it, as a route test may build, has no entry route. */
+  enter?: Enter;
 }
 
 /** Runs a person's entry: their sign-in effects when they're due, or the denial that writes nothing. */
@@ -66,7 +67,7 @@ export function apiTransport({ operations, log, routes, identify, check, enter }
   const limited = bodyLimit({ maxSize: maxBodyBytes, onError: (c) => c.json({ error: "the request is too large" }, 413, { "cache-control": "no-store" }) });
   api.post("/api/query/:name", limited, (c) => answer(c, reads.get(c.req.param("name"))));
   api.post("/api/mutation/:name", limited, (c) => answer(c, commands.get(c.req.param("name"))));
-  api.post("/api/entry", limited, entry);
+  if (enter !== undefined) api.post("/api/entry", limited, (c) => entry(c, enter));
   // Every other API path, and any other method on these, is no route: never the website's page.
   api.all("/api", (c) => c.json({ error: "no such route" }, 404));
   api.all("/api/*", (c) => c.json({ error: "no such route" }, 404));
@@ -96,7 +97,7 @@ export function apiTransport({ operations, log, routes, identify, check, enter }
     return c.json(result === undefined ? null : result, 200, { "cache-control": "no-store" });
   }
 
-  async function entry(c: Context): Promise<Response> {
+  async function entry(c: Context, enter: Enter): Promise<Response> {
     const args = await argumentsOf(c, noArguments);
     if (args instanceof Response) return args;
     const identity = await identify(c.req.raw);
