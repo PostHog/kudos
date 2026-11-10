@@ -14,3 +14,6 @@ const keys = { string: () => v.union(v.literal("a"), v.literal("b")) };
 export const finiteKeys = v.record(keys.string(), v.boolean());
 export type Constrained<T extends typeof anything> = T["fields"];
 export const throughParameter = <T extends typeof anything>(validator: T) => validator.isOptional;
+export const throughUnion = <T extends typeof anything>(validator: T | typeof anything) => validator.isOptional;
+export const throughIntersection = <T extends typeof anything & { tag: string }>(validator: T) => validator.isOptional;
+export const maybeValidator = (validator?: typeof anything) => validator?.isOptional;
