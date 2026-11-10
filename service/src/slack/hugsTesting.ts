@@ -19,7 +19,7 @@ import { serviceRegistry } from "../registry.ts";
 import type { EventKind } from "./frontDoor.ts";
 import type { MemberId } from "../workspace/directory.ts";
 import { setHugBudget as setHugBudgetOf } from "../workspace/settings.ts";
-import { useTestBackend, type TestBackend } from "../../testing/backend.ts";
+import { useTestBackend, type LogLine, type TestBackend } from "../../testing/backend.ts";
 import type { Stack } from "../../testing/waiting.ts";
 import { flagsFromPostHog, onForEveryone } from "../../testing/flags.ts";
 import { flagsKey, postHogHost, projectToken, type FlagDefinition } from "../../testing/fakePostHog.ts";
@@ -103,14 +103,24 @@ export async function memberChanged(t: TestBackend, ...event: Parameters<typeof 
 // A kind nobody registered is acked and dropped at the front door, which would let a test go on past a step that did
 // nothing; it ends at the handler's stub instead, as a test that waits on its stack must. A registered handler that
 // reaches another stack's stub answers 500 and logs only the error's class, so the step ends at a stub then too, not at
-// a later assertion. Any other failure answers as it is.
+// a later assertion. The log names no request, and sends may run at once: a 500 ends at a stub only when every failure
+// logged while it ran was a stub, so another request's stub never hides a real failure.
 async function sentTo(t: TestBackend, kind: EventKind, path: string, body: string) {
   if (!Object.hasOwn(serviceRegistry.slack.events ?? {}, kind)) throw notPorted(path);
   const logged = t.logs.length;
   const response = await t.send("/events", body);
-  const reachedAStub = t.logs.slice(logged).some(({ message, fields }) => message === "slack request failed" && fields.error === "NotPortedError");
-  if (response.status === 500 && reachedAStub) throw notPorted(`a stub behind ${path}`);
+  const failure = failureOf(response.status, t.logs.slice(logged), path);
+  if (failure !== null) throw failure;
   return response;
+}
+
+/** What a send ends in: `null` when it answered, a stub's `NotPortedError`, or the real failure logged while it ran. */
+export function failureOf(status: number, loggedWhileItRan: readonly LogLine[], path: string): Error | null {
+  if (status !== 500) return null;
+  const failures = loggedWhileItRan.filter(({ message }) => message === "slack request failed");
+  const real = failures.find(({ fields }) => fields.error !== "NotPortedError");
+  if (real !== undefined) return new Error(`The front door answered 500 while ${String(real.fields.error)} failed a request`);
+  return failures.length > 0 ? notPorted(`a stub behind ${path}`) : null;
 }
 
 export async function kudosMessage(t: TestBackend, giver: string, recipients: string[], ts: string) {
