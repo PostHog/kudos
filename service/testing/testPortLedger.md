@@ -62,7 +62,7 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/analytics/coreLoopFacts.test.ts | S14 | | |
 | convex/analytics/darkFeatures.test.ts | S14 | | |
 | convex/analytics/deliveredTwice.test.ts | S14 | | |
-| convex/analytics/drain.test.ts | S14 | | |
+| convex/analytics/drain.test.ts | S14 | service/src/analytics/drain.test.ts | |
 | convex/analytics/errors.test.ts | S14 | | |
 | convex/analytics/flags.test.ts | S14 | service/src/analytics/flags.test.ts | |
 | convex/analytics/hoggieDropped.test.ts | S14 | | |
@@ -82,7 +82,7 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/companyProfiles/faces.test.ts | S12 | | |
 | convex/companyProfiles/matcher.test.ts | S12 | | |
 | convex/companyProfiles/storedFaces.test.ts | S12 | | |
-| convex/companyProfiles/sync.test.ts | S12 | | |
+| convex/companyProfiles/sync.test.ts | S12 | service/src/companyProfiles/sync.test.ts | |
 | convex/engine/awardsInsertOnly.test.ts | S4 | | |
 | convex/engine/engine.test.ts | S4 | | |
 | convex/engine/home.test.ts | S4 | | |
@@ -288,7 +288,7 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/website/weeklyPost.test.ts | S17 | | |
 | convex/website/xpMoment.test.ts | S17 | | |
 | convex/welcome/welcome.test.ts | S5 | | |
-| convex/workspace/workspaceSettings.test.ts | S3 | | |
+| convex/workspace/workspaceSettings.test.ts | S3 | service/src/workspace/workspaceSettings.test.ts | S4 S17 |
 | e2e/edgeSignIn.test.ts | S20 | | |
 | e2e/fakes/server.test.ts | S20 | | |
 | e2e/local/edge.test.ts | S20 | | |
