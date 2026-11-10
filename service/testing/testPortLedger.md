@@ -83,7 +83,7 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/companyProfiles/matcher.test.ts | S12 | | |
 | convex/companyProfiles/storedFaces.test.ts | S12 | | |
 | convex/companyProfiles/sync.test.ts | S12 | service/src/companyProfiles/sync.test.ts | |
-| convex/engine/awardsInsertOnly.test.ts | S4 | | |
+| convex/engine/awardsInsertOnly.test.ts | S4 | service/src/engine/awardsInsertOnly.test.ts | |
 | convex/engine/engine.test.ts | S4 | | |
 | convex/engine/home.test.ts | S4 | | |
 | convex/feedback/albumMoments.test.ts | S5 | | |
@@ -92,17 +92,17 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/feedback/normLine.test.ts | S5 | | |
 | convex/feedback/oneReply.test.ts | S5 | | |
 | convex/feedback/questsHold.test.ts | S5 | | |
-| convex/feedback/replies.test.ts | S5 | | |
+| convex/feedback/replies.test.ts | S5 | service/src/feedback/replies.test.ts | |
 | convex/feedback/republishAdmins.test.ts | S5 | | |
 | convex/feedback/teaser.test.ts | S5 | | |
 | convex/feedback/welcomeNudge.test.ts | S5 | | |
 | convex/groups/attribution.test.ts | S11 | | |
-| convex/groups/attributionInsertOnly.test.ts | S11 | | |
+| convex/groups/attributionInsertOnly.test.ts | S11 | service/src/groups/groups.test.ts | |
 | convex/groups/attributionScale.test.ts | S11 | | |
 | convex/groups/groupMode.test.ts | S11 | | |
-| convex/groups/historyInsertOnly.test.ts | S11 | | |
+| convex/groups/historyInsertOnly.test.ts | S11 | service/src/groups/groups.test.ts | |
 | convex/groups/primaryGroups.test.ts | S11 | | |
-| convex/groups/transitionsInsertOnly.test.ts | S11 | | |
+| convex/groups/transitionsInsertOnly.test.ts | S11 | service/src/groups/groups.test.ts | |
 | convex/leaderboard/backfill.test.ts | S11 | | |
 | convex/leaderboard/board.test.ts | S2 | service/src/leaderboard/board.test.ts | |
 | convex/leaderboard/boards.test.ts | S11 | | |
@@ -167,7 +167,7 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/slack/events.test.ts | S4 | | |
 | convex/slack/everyoneBoardFlag.test.ts | S11 | | |
 | convex/slack/failedDirectoryCheck.test.ts | S3 | | |
-| convex/slack/firstHugReply.test.ts | S13 | | |
+| convex/slack/firstHugReply.test.ts | S13 | service/src/slack/firstHugReply.test.ts | S3 S4 S5 S6 S7 S8 S9 S11 S14 |
 | convex/slack/firstThanksTopUp.test.ts | S6 | | |
 | convex/slack/frontDoor.test.ts | S17 | service/src/slack/appHomeFrontDoor.test.ts | S3 S4 S5 S6 S7 S8 S9 S10 S11 S12 S13 S14 S15 S16 |
 | convex/slack/gainsLine.test.ts | S5 | | |
@@ -177,9 +177,9 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/slack/hoggieAvatarGate.test.ts | S10 | | |
 | convex/slack/hoggiesHome.test.ts | S10 | | |
 | convex/slack/homeTabBar.test.ts | S17 | service/src/slack/homeTabBar.test.ts | S3 S4 S5 S6 S7 S8 S9 S10 S11 S12 S13 S14 |
-| convex/slack/hugFacts.test.ts | S13 | | |
-| convex/slack/hugRewards.test.ts | S13 | | |
-| convex/slack/hugs.test.ts | S13 | | |
+| convex/slack/hugFacts.test.ts | S13 | service/src/slack/hugFacts.test.ts | S3 S4 S5 S6 S7 S8 S9 S11 S14 |
+| convex/slack/hugRewards.test.ts | S13 | service/src/slack/hugRewards.test.ts | S3 S4 S5 S6 S7 S8 S9 S11 S14 |
+| convex/slack/hugs.test.ts | S13 | service/src/slack/hugs.test.ts | S3 S4 S5 S6 S7 S8 S9 S10 S11 S14 |
 | convex/slack/hugsGate.test.ts | S13 | | |
 | convex/slack/inventory.test.ts | S8 | | |
 | convex/slack/kudosGivenScale.test.ts | S4 | | |

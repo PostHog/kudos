@@ -24,6 +24,7 @@ import { lookup, type MemberId } from "../workspace/directory.ts";
 import { getAlbum, type AlbumAnswer, type AlbumRead, type TurnAnswer } from "./album.ts";
 import type { VerifiedMember } from "./memberQuery.ts";
 import { closeHowItWorks } from "./onboarding.ts";
+import { commandByRoute } from "./routesTesting.ts";
 
 const tuesday = new Date("2026-10-13T10:00:00Z");
 const minuteMs = 60_000;
@@ -285,10 +286,9 @@ describe("LP76: getAlbum answers the onboarding steps, each done from one read",
   );
 });
 
-// S16's turn command, which has no route yet: website commands get no module-map stubs, so until S16 registers
-// `website.album.turnItem` a turn ends here, as at its stub.
-async function turnItem(_ctx: MutationContext, _me: VerifiedMember, _args: { item: string }): Promise<TurnAnswer> {
-  throw notPorted("website.album.turnItem");
+// S16's turn command, by its route name: it ends in `notPorted` until S16 registers `website.album.turnItem`.
+function turnItem(ctx: MutationContext, me: VerifiedMember, args: { item: string }) {
+  return commandByRoute<TurnAnswer>("website.album.turnItem", ctx, me, args);
 }
 
 // Today's `switchWebsite(t, postHog, true, ...flags)`: the website open, these flags on for everyone, and the workspace's key made.

@@ -27,7 +27,6 @@ import * as loadTables from "../db/schema/load.ts";
 import * as serviceTables from "../db/schema/service.ts";
 import { jobs } from "../db/schema/service.ts";
 import type { HomeMember } from "../feedback/homes.ts";
-import { notPorted } from "../notPorted.ts";
 import type { MutationContext, QueryContext } from "../operations.ts";
 import { recordReward } from "../progression/progression.ts";
 import { receiveHomeClick } from "../slack/receipts.ts";
@@ -39,6 +38,7 @@ import { lookup, type MemberId } from "../workspace/directory.ts";
 import type { CollectionAnswer } from "./collection.ts";
 import type { CrateOpenAnswer } from "./commands.ts";
 import type { VerifiedMember } from "./memberQuery.ts";
+import { commandByRoute, readByRoute } from "./routesTesting.ts";
 import { buyCrate as buyCrateCommand } from "./storeCommands.ts";
 
 const allowedWorkspace = "T1";
@@ -134,15 +134,14 @@ async function opens(member: MemberId, feature: Feature) {
   expect(await t.run((ctx) => openUnlock(ctx, member, feature, "slack"))).toBe("done");
 }
 
-// The website handlers the service doesn't have yet, S16's collection read and S15's crate opening: website handlers
-// get no module-map stubs, so until their stacks register `website.collection.getCollection` and
-// `website.commands.openCrate` each ends here, as at its stub.
-async function getCollection(_ctx: QueryContext, _me: VerifiedMember): Promise<CollectionAnswer> {
-  throw notPorted("website.collection.getCollection");
+// S16's collection read and S15's crate opening, by their route names: each ends in `notPorted` until its stack
+// registers `website.collection.getCollection` or `website.commands.openCrate`.
+function getCollection(ctx: QueryContext, me: VerifiedMember) {
+  return readByRoute<CollectionAnswer>("website.collection.getCollection", ctx, me);
 }
 
-async function openCrateCommand(_ctx: MutationContext, _me: VerifiedMember, _person: HomeMember, _args: { crate: string }): Promise<CrateOpenAnswer> {
-  throw notPorted("website.commands.openCrate");
+function openCrateCommand(ctx: MutationContext, me: VerifiedMember, _person: HomeMember, args: { crate: string }) {
+  return commandByRoute<CrateOpenAnswer>("website.commands.openCrate", ctx, me, args);
 }
 
 /** Runs the purchase as the website's route does: the member check's `me`, and the directory's facts of them. */

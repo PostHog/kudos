@@ -24,6 +24,7 @@ import { lookup, type MemberId } from "../workspace/directory.ts";
 import { getAlbum, type AlbumAnswer, type AlbumRead, type TurnAnswer } from "./album.ts";
 import type { VerifiedMember } from "./memberQuery.ts";
 import { getQuests, viewQuests, type GettingStartedStep, type MondayQuests } from "./quests.ts";
+import { commandByRoute } from "./routesTesting.ts";
 
 const tuesday = new Date("2026-10-13T10:00:00Z");
 const minuteMs = 60_000;
@@ -259,10 +260,9 @@ describe("MQ41: viewing the quests records quests viewed", () => {
   }, 60_000);
 });
 
-// S16's turn command, which has no route yet: website commands get no module-map stubs, so until S16 registers
-// `website.album.turnItem` a turn ends here, as at its stub.
-async function turnItem(_ctx: MutationContext, _me: VerifiedMember, _args: { item: string }): Promise<TurnAnswer> {
-  throw notPorted("website.album.turnItem");
+// S16's turn command, by its route name: it ends in `notPorted` until S16 registers `website.album.turnItem`.
+function turnItem(ctx: MutationContext, me: VerifiedMember, args: { item: string }) {
+  return commandByRoute<TurnAnswer>("website.album.turnItem", ctx, me, args);
 }
 
 // The front door acknowledges an event no domain registered a handler for and takes nothing in, so a kudos, a hug or a
