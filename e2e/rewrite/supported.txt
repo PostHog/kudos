@@ -8,3 +8,4 @@
 journeys/health.e2e.ts
 journeys/frontDoor.e2e.ts
 journeys/sandbox.e2e.ts
+journeys/channels.e2e.ts

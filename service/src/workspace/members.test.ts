@@ -1,16 +1,13 @@
 // The workspace's settings, its members and its URL on the service's transaction: the reads every other domain makes
 // of the directory, the defaults a workspace without a row has, the welcome nudge switch, the celebrations switch and
 // the one pending request for the workspace's URL.
-import { and, asc, eq, ne } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { useTestBackend, type TestBackend } from "../../testing/backend.ts";
-import type { FlagDefinition } from "../../testing/fakePostHog.ts";
-import { definitionsStored, offForEveryone, onForEveryone, postHogDeciding } from "../../testing/flags.ts";
-import { toDocument } from "../db/documents.ts";
-import { jobs } from "../db/schema/service.ts";
+import { offForEveryone, onForEveryone, postHogDeciding } from "../../testing/flags.ts";
 import { publicCelebrationsOn, celebrationsSwitchReadIn, celebrationsSwitchShownTo, setPublicCelebrations } from "./celebrationsSwitch.ts";
 import { customEmojiImageOf, originalCustomEmojiOf } from "./customEmoji.ts";
 import {
+  adminsPageIn,
   chatUserOf,
   currentMemberOfUser,
   currentMembersNamedIn,
@@ -22,6 +19,7 @@ import {
   isAPersonOf,
   isMember,
   lookup,
+  membersPageIn,
   nameAndPictureOf,
   peopleIn,
   personFactsOf,
@@ -52,18 +50,6 @@ afterEach(() => {
 // The directory's member row for `user` in T1, as Slack's events would keep it.
 const member = (user: string, fields: { admin?: boolean; name?: string; kind?: "member" | "bot" | "not-a-member" } = {}) =>
   t.seed.insert("members", { workspace: "T1", user, kind: "member", asOf: 0, ...fields }) as Promise<MemberId>;
-
-// Flag definitions stored as PostHog would serve them.
-const flags = (...definitions: FlagDefinition[]) => definitionsStored(t.operations, ...definitions);
-
-// The jobs operations enqueued and none has run yet, besides the backend's own recorder of published events.
-const scheduled = () =>
-  t.query(async ({ tx }) =>
-    (await tx.select().from(jobs).where(and(eq(jobs.state, "pending"), ne(jobs.name, "testing.published"))).orderBy(asc(jobs._creationTime), asc(jobs._id))).map((row) => {
-      const { name, args } = toDocument<{ name: string; args: unknown }>(jobs, row);
-      return { name, args };
-    }),
-  );
 
 describe("a workspace's settings", () => {
   test("a workspace with no row has today's defaults", async () => {
@@ -238,11 +224,76 @@ describe("the directory's members", () => {
   });
 });
 
+describe("the directory's pages", () => {
+  // Every page a walk reads, from the first until the read answers no cursor, as App Home's republish and the
+  // milestones' walk page through the directory.
+  async function walk<Item>(read: (cursor: string | null) => Promise<{ items: Item[]; continueCursor: string | null }>) {
+    const pages: Item[][] = [];
+    let cursor: string | null = null;
+    do {
+      const { items, continueCursor }: { items: Item[]; continueCursor: string | null } = await read(cursor);
+      pages.push(items);
+      cursor = continueCursor;
+    } while (cursor !== null);
+    return pages;
+  }
+
+  test("the admins' pages hold the workspace's admins who are members, in the order they joined the directory", async () => {
+    await member("U_ADMIN_FIRST", { admin: true });
+    await member("U_PLAIN");
+    await member("U_BOT", { kind: "bot", admin: true });
+    await member("U_ADMIN_SECOND", { admin: true });
+    await member("U_NOT_ADMIN", { admin: false });
+    await member("U_GONE", { kind: "not-a-member", admin: true });
+    await t.seed.insert("members", { workspace: "T2", user: "U_ELSEWHERE", kind: "member", asOf: 0, admin: true });
+
+    const pages = await walk(async (cursor) => {
+      const { admins, continueCursor } = await t.query((ctx) => adminsPageIn(ctx, "T1", cursor, 2));
+      return { items: admins, continueCursor };
+    });
+
+    expect(pages).toEqual([["U_ADMIN_FIRST"], ["U_ADMIN_SECOND"]]);
+  });
+
+  test("a workspace without admins has one empty page", async () => {
+    await member("U_PLAIN");
+
+    expect(await t.query((ctx) => adminsPageIn(ctx, "T1", null, 2))).toEqual({ admins: [], continueCursor: null });
+  });
+
+  test("the members' pages hold every row of the workspace, bots and former members too, by Slack user", async () => {
+    const carol = await member("U_CAROL");
+    const alice = await member("U_ALICE");
+    const bot = await member("U_BOT", { kind: "bot" });
+    const bob = await member("U_BOB", { kind: "not-a-member" });
+    await t.seed.insert("members", { workspace: "T2", user: "U_ANNA", kind: "member", asOf: 0 });
+
+    const pages = await walk(async (cursor) => {
+      const { members, continueCursor } = await t.query((ctx) => membersPageIn(ctx, "T1", cursor, 2));
+      return { items: members, continueCursor };
+    });
+
+    expect(pages).toEqual([[alice, bob], [bot, carol]]);
+  });
+
+  test("a member who joins between two pages is read on a later page when their user comes after the cursor", async () => {
+    const alice = await member("U_ALICE");
+    const carol = await member("U_CAROL");
+    const first = await t.query((ctx) => membersPageIn(ctx, "T1", null, 1));
+    const bob = await member("U_BOB");
+
+    const rest = await t.query((ctx) => membersPageIn(ctx, "T1", first.continueCursor, 5));
+
+    expect(first.members).toEqual([alice]);
+    expect(rest).toEqual({ members: [bob, carol], continueCursor: null });
+  });
+});
+
 describe("the celebrations switch", () => {
   const switching = (on: boolean, person: { member: MemberId; admin: boolean }) => t.run((ctx) => setPublicCelebrations(ctx, "T1", person, on));
 
   test("while celebrations-switch is off, celebrations are public and nobody switches them", async () => {
-    await flags(offForEveryone("celebrations-switch"));
+    await t.flags(offForEveryone("celebrations-switch"));
     const admin = await member("U_ADMIN", { admin: true });
 
     expect(await switching(false, { member: admin, admin: true })).toBe(false);
@@ -252,7 +303,7 @@ describe("the celebrations switch", () => {
   });
 
   test("an admin turns public celebrations off and on, once each, with one stored switch", async () => {
-    await flags(onForEveryone("celebrations-switch"));
+    await t.flags(onForEveryone("celebrations-switch"));
     const admin = await member("U_ADMIN", { admin: true });
 
     expect(await t.run((ctx) => celebrationsSwitchShownTo(ctx, "T1", { member: admin, admin: true }))).toBe(true);
@@ -268,7 +319,7 @@ describe("the celebrations switch", () => {
   });
 
   test("a member who is neither an admin nor the maintainer switches nothing", async () => {
-    await flags(onForEveryone("celebrations-switch"), onForEveryone("workspace-settings"));
+    await t.flags(onForEveryone("celebrations-switch"), onForEveryone("workspace-settings"));
     vi.stubEnv("KUDOS_MAINTAINER", "U_MAINTAINER");
     const alice = await member("U_ALICE");
 
@@ -278,7 +329,7 @@ describe("the celebrations switch", () => {
   });
 
   test("the maintainer switches them while workspace-settings is on for them", async () => {
-    await flags(onForEveryone("celebrations-switch"), onForEveryone("workspace-settings"));
+    await t.flags(onForEveryone("celebrations-switch"), onForEveryone("workspace-settings"));
     vi.stubEnv("KUDOS_MAINTAINER", "U_MAINTAINER");
     const owner = await member("U_MAINTAINER");
 
@@ -332,6 +383,6 @@ describe("the workspace's URL", () => {
     await t.run((ctx) => fillWorkspaceUrlLater(ctx, "T1"));
     await t.run((ctx) => fillWorkspaceUrlLater(ctx, "T1"));
 
-    expect(await scheduled()).toEqual([{ name: "slack.workspaceUrl.fillWorkspaceUrl", args: { workspace: "T1" } }]);
+    expect(await t.scheduled()).toEqual([{ name: "slack.workspaceUrl.fillWorkspaceUrl", args: { workspace: "T1" } }]);
   });
 });

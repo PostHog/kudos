@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { useTestBackend, type TestBackend } from "../../testing/backend.ts";
 import { rateLimitedFor } from "../../testing/fakeSlack.ts";
 import { jobs } from "../db/schema/service.ts";
+import { listSlackMembersJob } from "../slack/directory.ts";
 import { listedMembersIn, unknownListedMembersIn } from "./listedMembers.ts";
 
 const now = new Date("2026-10-13T04:20:00Z").getTime();
@@ -79,6 +80,23 @@ describe("the daily users.list keeps the workspace's listed members", () => {
       { user: "U_BOB", name: "bob" },
     ]);
     expect(t.slack.callsTo("users.list").map(({ cursor }) => cursor ?? "")).toEqual(["", "page-2"]);
+  });
+
+  test("a page listed twice, as recovery starts the run again from its cursor, keeps each member once", async () => {
+    const t = backend();
+    const firstPage = () => Response.json({ ok: true, members: [{ id: "U_ANN", team_id: "T1", name: "ann" }], response_metadata: { next_cursor: "page-2" } });
+    const secondPage = () => Response.json({ ok: true, members: [{ id: "U_BOB", team_id: "T1", name: "bob" }], response_metadata: { next_cursor: "" } });
+    t.slack.answering("users.list", firstPage, secondPage, secondPage);
+    await t.time.runCron(listCron);
+
+    await t.run((ctx) => ctx.jobs.enqueue(listSlackMembersJob, { cursor: "page-2" }));
+    await t.settle();
+
+    expect(await listed(t)).toEqual([
+      { user: "U_ANN", name: "ann" },
+      { user: "U_BOB", name: "bob" },
+    ]);
+    expect(await t.seed.all("listedMembers")).toHaveLength(2);
   });
 
   test("a rate-limited page is asked for again after Slack's Retry-After, from the same cursor", async () => {

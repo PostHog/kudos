@@ -39,7 +39,15 @@ export async function startRewrite(signal?: AbortSignal): Promise<RewriteTarget>
     stops.push(fakes.stop);
     const signingSecret = randomBytes(24).toString("hex");
     const testSecret = randomBytes(24).toString("hex");
-    const service = await startServiceProcess({ DATABASE_URL: postgres.url, SLACK_SIGNING_SECRET: signingSecret, HEDGEHUG_TEST_SECRET: testSecret, HEDGEHUG_COMMIT: head() });
+    // Slack's Web API is the fakes', as today's app's is in run.ts, so a journey sees what the service asked of Slack.
+    const service = await startServiceProcess({
+      DATABASE_URL: postgres.url,
+      SLACK_SIGNING_SECRET: signingSecret,
+      SLACK_API_URL: `${fakes.url}/api`,
+      SLACK_BOT_TOKEN: "xoxb-e2e",
+      HEDGEHUG_TEST_SECRET: testSecret,
+      HEDGEHUG_COMMIT: head(),
+    });
     stops.push(() => stopped(service));
     await migrated(service.url, signal);
     const edge = await startEdge(service.url);

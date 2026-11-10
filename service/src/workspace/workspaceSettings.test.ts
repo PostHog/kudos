@@ -4,8 +4,7 @@
 // bodies, and join this file through the test-port ledger's waiting column.
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { useTestBackend, type TestBackend } from "../../testing/backend.ts";
-import type { FlagDefinition } from "../../testing/fakePostHog.ts";
-import { definitionsStored, offForEveryone, onForEveryone, postHogDeciding } from "../../testing/flags.ts";
+import { offForEveryone, onForEveryone, postHogDeciding } from "../../testing/flags.ts";
 import { analyticsIdOf } from "../analytics/person.ts";
 import type { MemberId } from "./directory.ts";
 import { changeWorkspaceSettings, workspaceSettingsPartOf, workspaceSettingsShownTo, type EditableSettings } from "./workspaceSettings.ts";
@@ -34,12 +33,8 @@ afterEach(() => {
 const memberRow = (user: string, fields: { admin?: boolean; name?: string; kind?: "member" | "bot" | "not-a-member" } = {}) =>
   t.seed.insert("members", { workspace: "T1", user, kind: "member", asOf: 0, ...fields }) as Promise<MemberId>;
 
-// Flag definitions stored as PostHog would serve them.
-const flags = (...definitions: FlagDefinition[]) => definitionsStored(t.operations, ...definitions);
-
-
-const workspaceSettingsOn = () => flags(onForEveryone(workspaceSettings));
-const workspaceSettingsOff = () => flags(offForEveryone(workspaceSettings));
+const workspaceSettingsOn = () => t.flags(onForEveryone(workspaceSettings));
+const workspaceSettingsOff = () => t.flags(offForEveryone(workspaceSettings));
 
 // The website's read: the workspace part only for the member it is shown to, and the command's outcome.
 async function aTeammate(user: string, { admin = false } = {}) {
