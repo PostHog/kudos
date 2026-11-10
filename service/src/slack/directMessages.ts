@@ -3,7 +3,8 @@
 // notice that more notices follow waits for them a moment, so they go out together.
 import { messageRefValidator } from "../engine/messageEvent.ts";
 import { placeBesideTheKudos } from "../feedback/beside.ts";
-import { followersAwaitedUntil, linesStillWanted, notificationValidator, purchaseReplyStillWanted, type NotificationLine } from "../feedback/notify.ts";
+import { followersAwaitedUntil, linesStillWanted, purchaseReplyStillWanted, type NotificationLine } from "../feedback/notify.ts";
+import { notificationValidator } from "../feedback/notification.ts";
 import { purchaseOutcomeValidator } from "../progression/purchases.ts";
 import { settingsFooterText } from "./appHomeLinks.ts";
 import { buttonOf, mrkdwn } from "./blocks.ts";

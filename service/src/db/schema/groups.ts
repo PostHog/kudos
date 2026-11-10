@@ -1,9 +1,9 @@
 // Generated once from convex/schema.ts by tools/rewrite/drizzle; owned by hand from here on.
-import { index, pgTable } from "drizzle-orm/pg-core";
-import { bool, creationTime, f64, i64, id, str, value, type Id } from "../columns.ts";
+import { index } from "drizzle-orm/pg-core";
+import { bool, creationTime, documentTable, f64, i64, id, type Id, str, value } from "../columns.ts";
 import { nullValued } from "../documents.ts";
 
-export const userGroupDepartures = pgTable(
+export const userGroupDepartures = documentTable(
   "userGroupDepartures",
   {
     _id: id(),
@@ -19,7 +19,7 @@ export const userGroupDepartures = pgTable(
   ],
 );
 
-export const groupCountingChanges = pgTable(
+export const groupCountingChanges = documentTable(
   "groupCountingChanges",
   {
     _id: id(),
@@ -34,7 +34,7 @@ export const groupCountingChanges = pgTable(
   ],
 );
 
-export const memberGroups = pgTable(
+export const memberGroups = documentTable(
   "memberGroups",
   {
     _id: id(),
@@ -52,7 +52,7 @@ export const memberGroups = pgTable(
 );
 nullValued(memberGroups, ["primary"]);
 
-export const groupSettings = pgTable(
+export const groupSettings = documentTable(
   "groupSettings",
   {
     _id: id(),
@@ -66,7 +66,7 @@ export const groupSettings = pgTable(
   ],
 );
 
-export const primaryGroupHistory = pgTable(
+export const primaryGroupHistory = documentTable(
   "primaryGroupHistory",
   {
     _id: id(),
@@ -84,7 +84,7 @@ export const primaryGroupHistory = pgTable(
 );
 nullValued(primaryGroupHistory, ["from","group"]);
 
-export const attributions = pgTable(
+export const attributions = documentTable(
   "attributions",
   {
     _id: id(),

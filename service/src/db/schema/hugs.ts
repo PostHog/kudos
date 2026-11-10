@@ -1,8 +1,8 @@
 // Generated once from convex/schema.ts by tools/rewrite/drizzle; owned by hand from here on.
-import { index, pgTable } from "drizzle-orm/pg-core";
-import { bool, creationTime, f64, i64, id, str, value, type Id } from "../columns.ts";
+import { index } from "drizzle-orm/pg-core";
+import { bool, creationTime, documentTable, f64, i64, id, type Id, str, value } from "../columns.ts";
 
-export const hugWeeks = pgTable(
+export const hugWeeks = documentTable(
   "hugWeeks",
   {
     _id: id(),
@@ -22,7 +22,7 @@ export const hugWeeks = pgTable(
   ],
 );
 
-export const hugWeekMessages = pgTable(
+export const hugWeekMessages = documentTable(
   "hugWeekMessages",
   {
     _id: id(),
@@ -39,7 +39,7 @@ export const hugWeekMessages = pgTable(
   ],
 );
 
-export const hugCounts = pgTable(
+export const hugCounts = documentTable(
   "hugCounts",
   {
     _id: id(),
@@ -54,7 +54,7 @@ export const hugCounts = pgTable(
   ],
 );
 
-export const hugs = pgTable(
+export const hugs = documentTable(
   "hugs",
   {
     _id: id(),
@@ -76,7 +76,7 @@ export const hugs = pgTable(
   ],
 );
 
-export const hugPeople = pgTable(
+export const hugPeople = documentTable(
   "hugPeople",
   {
     _id: id(),
@@ -91,7 +91,7 @@ export const hugPeople = pgTable(
   ],
 );
 
-export const hugsReceived = pgTable(
+export const hugsReceived = documentTable(
   "hugsReceived",
   {
     _id: id(),
