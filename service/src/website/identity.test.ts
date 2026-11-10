@@ -2,7 +2,7 @@
 // `x-auth-request-email`, on the API's paths only; the service maps that email to the member it is, through the
 // directory or else Slack, and today's member check answers. Ports convex/slack/signIn.test.ts's concern, who a
 // signed-in browser is, from Slack's sign-in claims to the email the edge asserts. Every case asks the real app.
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { useTestBackend, type TestBackend } from "../../testing/backend.ts";
 import { slackError } from "../../testing/fakeSlack.ts";
@@ -20,9 +20,11 @@ import { websiteApi } from "./registration.ts";
 const whoAmI = memberRead("website.test.whoAmI", {}, async (_ctx, me) => me);
 const touch = memberCommand("website.test.touch", {}, async (_ctx, me, person) => ({ touchedBy: me.user, admin: person.admin }));
 
-// A route of no API path that answers which identity headers reached it, as any public page or Slack's routes would see them.
+// Routes that answer which identity headers reached them: at a public path, as any page or Slack's routes would see
+// them, and at the API's own read and command paths, mounted ahead of the API so they answer there.
+const seenHeaders = (c: Context) => c.json(Object.fromEntries([...c.req.raw.headers].filter(([name]) => /^x[-_]auth[-_]request/i.test(name))));
 const headersProbe: Routes = () =>
-  new Hono().all("/probe/*", (c) => c.json(Object.fromEntries([...c.req.raw.headers].filter(([name]) => /^x[-_]auth[-_]request/i.test(name)))));
+  new Hono().all("/probe/*", seenHeaders).post("/api/query/website.test.headers", seenHeaders).post("/api/mutation/website.test.headers", seenHeaders);
 
 // The HTTP layer answers a stub's NotPortedError with a bare 500; the operations the API runs hand it to the test.
 let reached: NotPortedError | undefined;
@@ -39,7 +41,7 @@ function handingOn(operations: Operations): Operations {
   return { ...operations, query: (name, handler) => noting(() => operations.query(name, handler)), mutation: (name, handler) => noting(() => operations.mutation(name, handler)) };
 }
 
-const registry: Registry = { ...serviceRegistry, routes: [handingOnStubs(websiteApi([whoAmI, touch])), headersProbe] };
+const registry: Registry = { ...serviceRegistry, routes: [headersProbe, handingOnStubs(websiteApi([whoAmI, touch]))] };
 const backend = useTestBackend({ registry });
 
 beforeEach(() => {
@@ -67,12 +69,14 @@ async function asked(t: TestBackend, route: string, headers: Record<string, stri
 }
 
 const as = (email: string) => ({ "x-auth-request-email": email });
-const lookups = (t: TestBackend) => t.slack.calls.filter(({ method }) => method === "users.lookupByEmail").map(({ args }) => args.email);
+// Slack failing every lookup: a case that answers anything but a 500 never needed Slack.
+const slackDown = (t: TestBackend) => t.slack.answering("users.lookupByEmail", ...Array.from({ length: 5 }, () => slackError("internal_error")));
 
 describe("the email the edge asserts", () => {
-  test("names the member whose directory entry holds it, in any case, with the display fields of their users row, and asks Slack nothing", async () => {
+  test("names the member whose directory entry holds it, in any case, with the display fields of their users row, while Slack is down", async () => {
     const t = backend();
     await websiteOpen(t);
+    slackDown(t);
     const member = await juno(t);
     await t.seed.insert("users", { chatIdentity: { workspace: "T1", user: "U_JUNO" }, name: "Juno Whitlock", givenName: "Juno", image: "https://example.com/juno.png" });
 
@@ -84,7 +88,6 @@ describe("the email the edge asserts", () => {
       givenName: "Juno",
       image: "https://example.com/juno.png",
     });
-    expect(lookups(t), "the directory knew the email").toEqual([]);
   });
 
   test("names a member who has no users row yet by their chat identity alone", async () => {
@@ -98,12 +101,12 @@ describe("the email the edge asserts", () => {
   test("a request the edge named nobody in is signed out, and so is one whose only email header is spelled with underscores", async () => {
     const t = backend();
     await websiteOpen(t);
+    slackDown(t);
     await juno(t);
 
     expect(await asked(t, whoAmI.name)).toEqual({ kind: "signed-out" });
     expect(await asked(t, whoAmI.name, as("  "))).toEqual({ kind: "signed-out" });
     expect(await asked(t, whoAmI.name, { x_auth_request_email: "juno.whitlock@example.com" })).toEqual({ kind: "signed-out" });
-    expect(lookups(t), "nobody to look up").toEqual([]);
   });
 
   test("with no sign-in workspace set, nobody is signed in", async () => {
@@ -115,13 +118,21 @@ describe("the email the edge asserts", () => {
     expect(await asked(t, whoAmI.name, as("juno.whitlock@example.com"))).toEqual({ kind: "closed" });
   });
 
+  test("an email the directory lacks names the member Slack says it is", async () => {
+    const t = backend();
+    await websiteOpen(t);
+    const ravi = await t.seed.insert("members", { workspace: "T1", user: "U_RAVI", kind: "member" });
+    t.slack.withMember("U_RAVI", { profile: { email: "Ravi.Okafor@example.com" } });
+
+    expect(await asked(t, whoAmI.name, as("ravi.okafor@example.com"))).toEqual({ member: ravi, workspace: "T1", user: "U_RAVI" });
+  });
+
   test("an email the directory lacks and Slack doesn't know is not a member's", async () => {
     const t = backend();
     await websiteOpen(t);
     await juno(t);
 
     expect(await asked(t, whoAmI.name, as("stranger@example.com"))).toEqual({ kind: "not-a-member" });
-    expect(lookups(t), "Slack was asked").toEqual(["stranger@example.com"]);
   });
 
   test("an email Slack knows for a person of another workspace is not a member's", async () => {
@@ -144,13 +155,14 @@ describe("the email the edge asserts", () => {
     expect(JSON.stringify(t.logs), "no email in any log line").not.toMatch(/example\.com/);
   });
 
-  test("a directory entry of someone who isn't a member is not a member's, and Slack isn't asked", async () => {
+  test("a directory entry of someone who isn't a member is not a member's, whoever Slack would say holds the email", async () => {
     const t = backend();
     await websiteOpen(t);
     await juno(t, { kind: "not-a-member" });
+    await t.seed.insert("members", { workspace: "T1", user: "U_RAVI", kind: "member" });
+    t.slack.withMember("U_RAVI", { profile: { email: "juno.whitlock@example.com" } });
 
     expect(await asked(t, whoAmI.name, as("juno.whitlock@example.com"))).toEqual({ kind: "not-a-member" });
-    expect(lookups(t)).toEqual([]);
   });
 
   test("Slack failing to answer fails the request, and the handler never runs", async () => {
@@ -209,12 +221,24 @@ describe("the website flag", () => {
 });
 
 describe("the edge's identity headers", () => {
-  test("reach no path but the API's reads and commands, in either spelling", async () => {
+  const headers = { "x-auth-request-email": "juno.whitlock@example.com", "x-auth-request-user": "juno", x_auth_request_email: "juno.whitlock@example.com", "x-auth_request-email": "juno.whitlock@example.com" };
+
+  test("reach no path but the API's reads and commands, in any spelling", async () => {
     const t = backend();
-    const headers = { "x-auth-request-email": "juno.whitlock@example.com", "x-auth-request-user": "juno", x_auth_request_email: "juno.whitlock@example.com" };
 
     const answer = await t.app.request("/probe/page", { headers });
 
     expect(await answer.json()).toEqual({});
+  });
+
+  test("reach the API's reads and commands only as the edge spells them, with hyphens", async () => {
+    const t = backend();
+    const spelledByTheEdge = { "x-auth-request-email": "juno.whitlock@example.com", "x-auth-request-user": "juno" };
+
+    const read = await t.app.request("/api/query/website.test.headers", { method: "POST", headers });
+    const command = await t.app.request("/api/mutation/website.test.headers", { method: "POST", headers });
+
+    expect(await read.json()).toEqual(spelledByTheEdge);
+    expect(await command.json()).toEqual(spelledByTheEdge);
   });
 });
