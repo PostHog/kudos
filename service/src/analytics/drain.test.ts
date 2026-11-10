@@ -1,6 +1,6 @@
 // The analytics drain, ported from convex/analytics/drain.test.ts onto the service's runner, jobs and worker. Events
 // are recorded through the outbox's write API here, since the subscribers that record them in production are 14.3's.
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, onTestFinished, test, vi } from "vitest";
 import { useTestDatabase } from "../../testing/database.ts";
 import { FakePostHog, answersAMomentLater, answersWith, failsToConnect, neverAnswers, postHogHost, projectToken, routedFetch, stallsUntilReleased, type BatchRequest } from "../../testing/fakePostHog.ts";
@@ -416,28 +416,42 @@ describe("the drain and the requests that wake it", () => {
   // #96's oracle found requests answering 500: today's wake read the drain's singleton in the request's transaction,
   // so drains claiming the outbox ran requests out of retries. Here requests record while the real drains claim,
   // send and settle, all under SERIALIZABLE on a pool of their own.
-  test("a request recording an event reads nothing of the outbox or the jobs, the drain's state", async () => {
+  test("a request records an event and wakes a drain without reading the outbox or the jobs, the drain's state", async () => {
     const [member] = await members(1);
     await seed.insert("analyticsIds", { member: member!, analyticsId: "analytics-id-0" });
     await seed.insert("workspaceKeys", { workspace: "T1", workspaceKey: "workspace-key-1" });
-
-    // Postgres's read locks for the request's own transaction, as serializable conflict tracking holds them.
-    const read = await operations.mutation("test.request", async (ctx) => {
-      await record(ctx, "T1", [{ event: "kudos received", subject: { member: member! }, at: clock.now(), properties: {} }]);
-      const { rows } = await ctx.tx.execute<{ relation: string }>(
-        sql`select distinct c.relname as relation from pg_locks l join pg_class c on c.oid = l.relation where l.pid = pg_backend_pid() and l.mode = 'SIReadLock' order by 1`,
-      );
-      return rows.map(({ relation }) => relation);
+    // A database user that may read and write every table, but only write the outbox and the jobs.
+    const user = `recorder_${database.schema}_${Date.now()}`;
+    const admin = (statement: string) => database.pool.query(statement);
+    await admin(`create role "${user}" login password 'recorder'`);
+    await admin(`grant usage on schema "${database.schema}" to "${user}"`);
+    await admin(`grant select, insert, update, delete on all tables in schema "${database.schema}" to "${user}"`);
+    await admin(`grant usage, select, update on all sequences in schema "${database.schema}" to "${user}"`);
+    await admin(`revoke select on "${database.schema}"."analyticsOutbox", "${database.schema}"."jobs" from "${user}"`);
+    const url = new URL(database.url);
+    url.username = user;
+    url.password = "recorder";
+    const pool = createPool(url.toString());
+    onTestFinished(async () => {
+      await pool.end();
+      await admin(`drop owned by "${user}"`);
+      await admin(`drop role "${user}"`);
     });
+    const recorder = createOperations({ pool, clock, log: quiet, retryDelayMs: () => 1 });
 
-    expect(read.length, "it reads its workspace's key and its member's analytics ID").toBeGreaterThan(0);
-    expect(read.filter((relation) => relation.startsWith("analyticsOutbox") || relation.startsWith("jobs"))).toEqual([]);
+    await recorder.mutation("test.request", (ctx) =>
+      record(ctx, "T1", [{ event: "kudos received", subject: { member: member! }, at: clock.now(), properties: { request: 0 } }]),
+    );
+
+    expect((await outbox()).map(({ event, distinctId, state }) => [event, distinctId, state])).toEqual([["kudos received", "analytics-id-0", "pending"]]);
+    const woken = await database.pool.query(`select "name", "state" from "jobs"`);
+    expect(woken.rows).toEqual([{ name: "analytics.drain.drain", state: "pending" }]);
   });
 
   // A request may still retry once, and that's harmless: it is rolled back whole and runs again with the same `now`.
-  // A drain that read the outbox's due rows before the request inserted one, and whose own writes another drain or the
-  // worker read, is a pivot; when it is already committing, Postgres can't cancel it and cancels the committing
-  // request instead ("Canceled on commit attempt with conflict in from prepared pivot"). That race is narrow and
+  // A drain that read the outbox's due rows before the request inserted one (drain rw→ request), and that changed rows
+  // or a range another drain or the worker had already read (that one rw→ drain), is a pivot; when it is already
+  // committing, Postgres can't cancel it and cancels the committing request instead ("Canceled on commit attempt with conflict in from prepared pivot"). That race is narrow and
   // timing-bound: under one shared Postgres it hits about one run in many, so this test bounds retries, not forbids them.
   test("requests recording while drains claim and settle: none fails, hardly any is retried, and every event is sent once", async () => {
     const requests = 60;
