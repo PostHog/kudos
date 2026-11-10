@@ -40,7 +40,7 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/album/hoggies/rarityCaps.test.ts | S10 | | |
 | convex/album/hoggies/waitingPacks.test.ts | S8 | | |
 | convex/album/hypeByReactions.test.ts | S9 | | |
-| convex/album/hypeReactions.test.ts | S9 | | |
+| convex/album/hypeReactions.test.ts | S9 | service/src/album/hypeReactions.test.ts | |
 | convex/album/items/achievementItems.test.ts | S8 | | |
 | convex/album/items/hugFinds.test.ts | S8 | | |
 | convex/album/items/itemBoard.test.ts | S8 | | |

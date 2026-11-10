@@ -1,17 +1,18 @@
-// The module map's skeleton of convex/album/levelEmojis.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
-// notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
+// The level emojis a member is offered: the catalogue's levels, and level 2's :raised_hands: while onboarding shows to
+// them. Today's convex/album/levelEmojis.ts.
+import { onboardingShownTo } from "./items/onboardingFlag.ts";
 import type { MemberId } from "../workspace/directory.ts";
 import { standardEmojiNamed } from "../workspace/standardEmoji.ts";
-import { emojiArtPictureOf, levelTwoEmoji } from "./emojiCatalogue.ts";
+import { emojiArtPictureOf, emojiLevels, everyEmojiLevel, levelTwoEmoji } from "./emojiCatalogue.ts";
 import type { QueryContext } from "../operations.ts";
-import { notPorted } from "../notPorted.ts";
 
 export async function emojiLevelsOf(ctx: QueryContext, member: MemberId): Promise<readonly number[]> {
-  throw notPorted("album.levelEmojis.emojiLevelsOf");
+  return (await onboardingShownTo(ctx, member)) ? everyEmojiLevel : emojiLevels;
 }
 
 export async function isEmojiLevelOf(ctx: QueryContext, member: MemberId, level: number): Promise<boolean> {
-  throw notPorted("album.levelEmojis.isEmojiLevelOf");
+  if (emojiLevels.some((reward) => reward === level)) return true;
+  return level === levelTwoEmoji.level && (await onboardingShownTo(ctx, member));
 }
 
 export function levelEmojiPictureOf(level: number): string {

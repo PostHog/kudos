@@ -4,6 +4,7 @@ import type { Registration } from "../registration.ts";
 import { giveEmojiASecondNameJob, reserveSharedEmojiNamesJob, reserveTeamNamesAfterTheSyncJob } from "./emojiNames.ts";
 import { crateKindOf } from "./hoggies/crateKey.ts";
 import { recordAlbumHistoryJob, startAlbumHistoryJob } from "./history.ts";
+import { keepHypeReactionJob } from "./hypeReactions.ts";
 import {
   recordMilestonesAfterAHoggieDropJob,
   recordMilestonesAfterTheMatchesJob,
@@ -20,5 +21,6 @@ export const registration: Registration = {
     { event: "hoggieDropped", job: recordMilestonesAfterAHoggieDropJob, only: ({ crate }: HoggieDroppedEvent) => crateKindOf(crate) !== "thoughtful" },
     { event: "companyMatchesKept", job: recordMilestonesAfterTheMatchesJob },
     { event: "companyTeamsReplaced", job: reserveTeamNamesAfterTheSyncJob },
+    { event: "hypeReacted", job: keepHypeReactionJob },
   ],
 };
