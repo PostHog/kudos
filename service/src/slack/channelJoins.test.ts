@@ -98,6 +98,31 @@ describe("the channel join puts the app in every public channel it isn't in yet"
     expect(["C_FIRST", "C_SECOND", "C_THIRD"].every((channel) => t.slack.hasJoined(channel))).toBe(true);
   });
 
+  test("a step run twice, as recovery starts a run again from its last step, joins no channel twice", async () => {
+    t.slack.listingChannelsPerPage(1).withChannel("C_FIRST", { name: "first" }).withChannel("C_LAST", { name: "last" });
+    await joinPublicChannels();
+
+    const step = await stepJoining("C_LAST");
+    await t.run((ctx) => ctx.jobs.enqueue(joinPublicChannelsJob, step));
+    await settleInTimeOrder();
+
+    expect(["C_FIRST", "C_LAST"].every((channel) => t.slack.hasJoined(channel))).toBe(true);
+    expect(logged).toHaveBeenLastCalledWith("channel joins finished: joined 1, missed 0");
+  });
+
+  test("a run that finished, started again from its last step, asks Slack nothing", async () => {
+    t.slack.withChannel("C_FIRST", { name: "first" });
+    await joinPublicChannels();
+    const asked = t.slack.calls.length;
+
+    const step = (await stepsOf("slack.channelJoins.joinPublicChannels")).at(-1)!;
+    await t.run((ctx) => ctx.jobs.enqueue(joinPublicChannelsJob, step));
+    await settleInTimeOrder();
+
+    expect(t.slack.calls).toHaveLength(asked);
+    expect(logged).toHaveBeenLastCalledWith("channel joins finished: joined 1, missed 0");
+  });
+
   test("a rate-limited listing waits out the Retry-After and lists the same page again", async () => {
     t.slack.listingChannelsPerPage(1).withChannel("C_FIRST", { name: "first" }).withChannel("C_SECOND", { name: "second" });
     t.slack.answering("conversations.list", (answerAsSlackWould) => answerAsSlackWould(), rateLimitedFor(20));
@@ -273,4 +298,15 @@ async function lastTryOf(channel: string) {
     tx.select({ state: jobs.state, args: jobs.args }).from(jobs).where(eq(jobs.name, "slack.channelJoins.joinCreatedChannel")).orderBy(asc(jobs._creationTime), asc(jobs._id)),
   );
   return tries.filter(({ args }) => (decodeStored(args) as { channel?: string }).channel === channel).at(-1)?.state;
+}
+
+/** The arguments of each step a job ran, in order, as recovery would find them to start the job again. */
+async function stepsOf(name: string) {
+  const steps = await t.query(({ tx }) => tx.select({ args: jobs.args }).from(jobs).where(eq(jobs.name, name)).orderBy(asc(jobs._creationTime), asc(jobs._id)));
+  return steps.map(({ args }) => decodeStored(args) as { cursor?: string; queue?: string[]; joined?: number; missed?: number });
+}
+
+/** The step of the channel join that joined `channel`. */
+async function stepJoining(channel: string) {
+  return (await stepsOf("slack.channelJoins.joinPublicChannels")).find(({ queue }) => queue?.[0] === channel)!;
 }

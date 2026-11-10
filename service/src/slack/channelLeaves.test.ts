@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, test, vi, type MockInstance } 
 import { useTestBackend, type TestBackend } from "../../testing/backend.ts";
 import { networkFailure, rateLimitedFor, slackError } from "../../testing/fakeSlack.ts";
 import { channelRenameEvent, channelSharedEvent, kudosAppBotUser, memberJoinedChannelEvent } from "../../testing/slackMessages.ts";
+import { decodeStored } from "../db/codec.ts";
 import { jobs } from "../db/schema/service.ts";
 import { leaveOffLimitsChannelsJob } from "./channelLeaves.ts";
 
@@ -99,6 +100,31 @@ describe("the app leaves shared and customer channels", () => {
 
     expect(t.slack.callsTo("conversations.leave")).toEqual([]);
     expect(logged).toHaveBeenLastCalledWith("channel leaves finished: left 0, missed 0");
+  });
+
+  test("a step run twice, as recovery starts a run again from its last step, leaves the channel once and misses none", async () => {
+    t.slack.withChannel("C_GENERAL", { name: "general", joined: true }).withChannel("C_CUSTOMER", { name: "customer-example-internal", joined: true });
+    await leaveOffLimitsChannels();
+
+    const step = await stepLeaving("C_CUSTOMER");
+    await t.run((ctx) => ctx.jobs.enqueue(leaveOffLimitsChannelsJob, step));
+    await settleInTimeOrder();
+
+    expect(["C_GENERAL", "C_CUSTOMER"].filter((channel) => t.slack.hasJoined(channel))).toEqual(["C_GENERAL"]);
+    expect(logged).toHaveBeenLastCalledWith("channel leaves finished: left 1, missed 0");
+  });
+
+  test("a run that finished, started again from its last step, asks Slack nothing", async () => {
+    t.slack.withChannel("C_CUSTOMER", { name: "customer-example-internal", joined: true });
+    await leaveOffLimitsChannels();
+    const asked = t.slack.calls.length;
+
+    const step = (await stepsOf("slack.channelLeaves.leaveOffLimitsChannels")).at(-1)!;
+    await t.run((ctx) => ctx.jobs.enqueue(leaveOffLimitsChannelsJob, step));
+    await settleInTimeOrder();
+
+    expect(t.slack.calls).toHaveLength(asked);
+    expect(logged).toHaveBeenLastCalledWith("channel leaves finished: left 1, missed 0");
   });
 
   test("a channel the app already left by the time of its leave counts as left", async () => {
@@ -230,4 +256,15 @@ async function settleInTimeOrder() {
 
 function jobsNamed(name: string) {
   return t.query(({ tx }) => tx.select({ state: jobs.state, error: jobs.error }).from(jobs).where(eq(jobs.name, name)).orderBy(asc(jobs._creationTime), asc(jobs._id)));
+}
+
+/** The arguments of each step a job ran, in order, as recovery would find them to start the job again. */
+async function stepsOf(name: string) {
+  const steps = await t.query(({ tx }) => tx.select({ args: jobs.args }).from(jobs).where(eq(jobs.name, name)).orderBy(asc(jobs._creationTime), asc(jobs._id)));
+  return steps.map(({ args }) => decodeStored(args) as { cursor?: string; queue?: string[]; left?: number; missed?: number });
+}
+
+/** The step of the channel leave that left `channel`. */
+async function stepLeaving(channel: string) {
+  return (await stepsOf("slack.channelLeaves.leaveOffLimitsChannels")).find(({ cursor, queue }) => cursor === "" && queue?.[0] === channel)!;
 }
