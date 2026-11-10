@@ -1,7 +1,8 @@
-// A member's first entry through SSO: today's sign-in effects, run once. The website platform's identity mapping calls
-// it, in one mutation, once it knows the Slack identity behind the SSO email and finds no `users` row for it, or finds one
+// A member's first entry through SSO: today's sign-in effects, run once. The website's entry (`entry.ts`) calls it, in
+// its one mutation, once it knows the Slack identity behind the SSO email and finds no `users` row for it, or finds one
 // for a person the directory doesn't know. A member who signed in before the move has that row already, so they get no
-// second greeting. Today's convex/website/signIn.ts, which Convex Auth called on every Slack sign-in.
+// second greeting. Today's convex/website/signIn.ts, which Convex Auth called on every Slack sign-in, with the same
+// arguments: the `users` row the caller found, and the signed-in profile.
 import { and, eq } from "drizzle-orm";
 import type { Id } from "../db/columns.ts";
 import { fromDocument } from "../db/documents.ts";
@@ -19,6 +20,10 @@ import { websiteOpen, websiteShownTo } from "./flag.ts";
 /** Who entered: the Slack pair behind the SSO email, and the display fields the identity mapping found for them. */
 export type SignedIn = { workspace: string; user: string; name?: string; givenName?: string; familyName?: string; image?: string };
 
+/** What the entry hands over, as Convex Auth did: the `users` row it found for the Slack pair, if any, and the signed-in
+ * profile, whose `chatWorkspace` and `chatUser` name the pair beside the display fields. */
+export type SignIn = { existingUserId: Id<"users"> | null; profile: Record<string, unknown> };
+
 /** Why a first entry records nothing. Thrown before the member's row is written; reading the website flag may have
  * written analytics state by then, and the throw rolls the caller's whole mutation back, that included. */
 export class SignInRefused extends Error {
@@ -31,10 +36,11 @@ export class SignInRefused extends Error {
 }
 
 /** The member's `users` row, recorded with today's sign-in effects on their first entry. */
-export async function rememberSignedInMember(ctx: MutationContext, signedIn: SignedIn): Promise<Id<"users">> {
+export async function rememberSignedInMember(ctx: MutationContext, { existingUserId, profile }: SignIn): Promise<Id<"users">> {
+  const signedIn = signedInFrom(profile);
   if (signedIn.workspace !== signInWorkspace()) throw new SignInRefused("another-workspace");
   if (signedIn.user.trim() === "") throw new Error("a sign-in without a Slack user_id is not allowed");
-  const known = await userOf(ctx, signedIn.workspace, signedIn.user);
+  const known = existingUserId ?? (await userOf(ctx, signedIn.workspace, signedIn.user));
   const person = await lookup(ctx, signedIn.workspace, signedIn.user);
   if (known !== null) return enteredAgain(ctx, signedIn, known, person);
   if (!(await admitted(ctx, person))) throw new SignInRefused("closed");
@@ -75,6 +81,18 @@ async function firstSignIn(ctx: MutationContext, { workspace, user, ...display }
 async function admitted(ctx: MutationContext, person: MemberFacts | undefined) {
   const shownToMember = person?.kind === "member" && (await websiteShownTo(ctx, person.member));
   return shownToMember || (await websiteOpen(ctx));
+}
+
+function signedInFrom(profile: Record<string, unknown>): SignedIn {
+  const text = (value: unknown) => (typeof value === "string" ? value : undefined);
+  return {
+    workspace: text(profile.chatWorkspace) ?? "",
+    user: text(profile.chatUser) ?? "",
+    name: text(profile.name),
+    givenName: text(profile.givenName),
+    familyName: text(profile.familyName),
+    image: text(profile.image),
+  };
 }
 
 function present(fields: Omit<SignedIn, "workspace" | "user">) {

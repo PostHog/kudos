@@ -62,8 +62,9 @@ function aMemberWithEmail({ user, email }: { user: string; email: string }) {
   return t.seed.insert("members", { workspace: allowedWorkspace, user, kind: "member", asOf: 0, email }) as Promise<MemberId>;
 }
 
+// An entry as the website's entry makes it, leaving the users row for the sign-in to find.
 function signIn({ user, name }: { user: string; name: string }) {
-  return t.run((ctx) => rememberSignedInMember(ctx, { workspace: allowedWorkspace, user, name }));
+  return t.run((ctx) => rememberSignedInMember(ctx, { existingUserId: null, profile: { chatWorkspace: allowedWorkspace, chatUser: user, name } }));
 }
 
 // Today's website/leaderboard.ts getLeaderboard, S16's: an off leaderboard is not found, an open one is the board.
