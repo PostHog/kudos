@@ -5,7 +5,7 @@ import { messageRefValidator, type MessageRef } from "../engine/messageEvent.ts"
 import type { MemberId } from "../workspace/directory.ts";
 import { z } from "zod";
 import { zv } from "../values.ts";
-import type { Page } from "../db/page.ts";
+import { paginate, type Page } from "../db/page.ts";
 import type { Doc } from "../db/schema/index.ts";
 import type { MutationContext, QueryContext } from "../operations.ts";
 import { fromDocument, toDocument } from "../db/documents.ts";
@@ -56,33 +56,9 @@ export async function rewardOf(ctx: QueryContext, member: MemberId, key: string)
   return rows[0] ? asDocument(rows[0]) : null;
 }
 
-/** One page of every reward, in creation order; the cursor is the last document's place, opaque to the caller. */
-export async function rewardsPage(ctx: QueryContext, cursor: string | null, numItems: number): Promise<Page<Doc<"rewardRecords">>> {
-  const after = cursor === null ? undefined : cursorPlace(cursor);
-  const rows = await ctx.tx
-    .select()
-    .from(rewardRecords)
-    .where(after && byCreation.after(after))
-    .orderBy(...byCreation.orderBy())
-    .limit(numItems + 1);
-  const page = rows.slice(0, numItems).map(asDocument);
-  const last = page.at(-1);
-  return { page, isDone: rows.length <= numItems, continueCursor: last ? placeCursor(last) : (cursor ?? placeCursor(null)) };
-}
-
-// A cursor is the last document's `_creationTime` and `_id`, the default order's keys; the first page's end, when it is
-// empty, is the start.
-function placeCursor(document: Pick<Doc<"rewardRecords">, "_creationTime" | "_id"> | null): string {
-  return Buffer.from(JSON.stringify(document === null ? [] : [document._creationTime, document._id])).toString("base64url");
-}
-
-function cursorPlace(cursor: string): { _creationTime: number; _id: string } | undefined {
-  const keys: unknown = JSON.parse(Buffer.from(cursor, "base64url").toString());
-  if (!Array.isArray(keys)) throw new Error("Not a cursor of rewardsPage");
-  if (keys.length === 0) return undefined;
-  const [_creationTime, _id] = keys;
-  if (typeof _creationTime !== "number" || typeof _id !== "string") throw new Error("Not a cursor of rewardsPage");
-  return { _creationTime, _id };
+/** One page of every reward, in creation order, through the service's shared keyset paging. */
+export function rewardsPage(ctx: QueryContext, cursor: string | null, numItems: number): Promise<Page<Doc<"rewardRecords">>> {
+  return paginate(ctx.tx, { table: rewardRecords, order: byCreation }, { cursor, numItems });
 }
 
 /** Every reward of the member whose key starts with the prefix, in key order. */
