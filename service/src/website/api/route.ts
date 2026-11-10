@@ -56,15 +56,25 @@ export function memberCommand<const Name extends string, Shape extends ArgsShape
 }
 
 /**
- * Convex refused a field its validator didn't name, at any depth, and had no transforms. A nested `z.object` would drop
- * an unknown field silently, so every object inside a route's arguments must be `z.strictObject`, and only the kinds of
- * value a Convex validator could describe may appear; the service refuses to start otherwise. Unknown kinds fail closed.
+ * Convex refused a field its validator didn't name, at any depth, and never changed a value it checked. A nested
+ * `z.object` would drop an unknown field silently, so every object inside a route's arguments must be `z.strictObject`,
+ * and only the kinds of value a Convex validator could describe may appear, checked and never changed: no coercion, no
+ * default, no `.trim()` or other overwrite, no refinement, which may change what it reads. The service refuses to start
+ * otherwise. Unknown kinds fail closed.
  */
 const plainValues: ReadonlySet<string> = new Set(["string", "number", "boolean", "bigint", "null", "undefined", "literal", "enum", "nan", "template_literal"]);
+
+// Zod's checks that may change the value they check: `.overwrite()` and what it builds (`.trim()`, `.toLowerCase()`),
+// and refinements, whose callback is handed the value itself.
+const changesValues: ReadonlySet<string> = new Set(["overwrite", "custom"]);
 
 function refuseLooseObjects(schema: z.ZodType, at: string): void {
   const def = schema._zod.def as unknown as Record<string, unknown> & { type: string };
   const inner = (value: unknown, where = at) => refuseLooseObjects(value as z.ZodType, where);
+  if (def.coerce === true) throw new Error(`${at} coerces its value; a route's arguments are checked as sent, as Convex checked them`);
+  for (const check of (def.checks ?? []) as Array<{ _zod: { def: { check: string } } }>) {
+    if (changesValues.has(check._zod.def.check)) throw new Error(`${at} has a check that may change its value (${check._zod.def.check}); a route's arguments are checked as sent, as Convex checked them`);
+  }
   if (plainValues.has(def.type)) return;
   switch (def.type) {
     case "object": {
@@ -75,7 +85,6 @@ function refuseLooseObjects(schema: z.ZodType, at: string): void {
     }
     case "optional":
     case "nullable":
-    case "default":
     case "readonly":
     case "nonoptional":
       return inner(def.innerType);

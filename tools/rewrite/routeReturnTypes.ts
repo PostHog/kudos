@@ -3,67 +3,81 @@
 // included. The website's code keeps typing unchanged while the rewrite moves it from Convex to the route table.
 //
 // It lives outside `service/` because the service may import nothing of Convex (`service/src/noConvex.test.ts`), and
-// it goes when Convex does. The comparison is of shapes, member by member of each union and field by field at every
-// depth: a dropped field, optional or not, a field that turned optional, a string the website matches spelled otherwise,
-// or an `any` anywhere fails the typecheck with the route's name.
+// it goes when Convex does. Two shapes are the same when each takes every value of the other, no `any` hides anywhere,
+// and they name the same fields at every depth, each as optional: a dropped field, optional or not, a field that turned
+// optional, a string the website matches spelled otherwise, or an `any` anywhere fails the typecheck with the route's
+// name. Two unions that hold the same values pass however they are split, as `{ groups: boolean }` and
+// `{ groups: true } | { groups: false }` do.
 import type { FunctionArgs, FunctionReference, FunctionReturnType } from "convex/server";
 import type { GenericId } from "convex/values";
 import type { api } from "../../convex/_generated/api";
+import type { OpenAnswer } from "../../convex/website/album";
+import type { PlayerCardRead } from "../../convex/website/playerCard";
 import type { Id } from "../../service/src/db/columns.ts";
 import type { Denial } from "../../service/src/website/memberQuery.ts";
-import type { ArgsOf, ArgsShape, CommandRoute, ReadRoute, Route } from "../../service/src/website/api/route.ts";
+import type { ArgsShape, CommandRoute, ReadRoute, Route } from "../../service/src/website/api/route.ts";
 import type { websiteRoutes } from "../../service/src/website/api/table.ts";
 // The service owns zod; the root package has none of its own.
 import type { z } from "../../service/node_modules/zod";
 
-/** Convex's id of a table as the service writes it. */
-type AsService<T> =
-  T extends GenericId<infer Table>
-    ? Id<Table>
-    : T extends readonly (infer Item)[]
-      ? AsService<Item>[]
-      : T extends object
-        ? { [Key in keyof T]: AsService<T[Key]> }
-        : T;
-
 type IsAny<T> = 0 extends 1 & T ? true : false;
-type Primitive = string | number | boolean | bigint | null | undefined;
+type Primitive = string | number | boolean | bigint | symbol | null | undefined;
 
-/**
- * True when A and B are the same shape: each member of either union has a member of the other of the same shape, with
- * the same fields at every depth, each as optional, and no `any` anywhere, which would pass for every shape.
- */
-export type Same<A, B> = IsAny<A> extends true ? false : IsAny<B> extends true ? false : [A] extends [never] ? [B] extends [never] ? true : false : [B] extends [never] ? false : Covers<A, B> extends true ? Covers<B, A> : false;
+/** A shape as both sides write it: Convex's ids as the service's, arrays and fields not readonly. */
+type Plain<T> =
+  IsAny<T> extends true
+    ? T
+    : unknown extends T
+      ? T
+      : T extends GenericId<infer Table>
+        ? Id<Table>
+        : T extends Primitive
+          ? T
+          : T extends (...args: never[]) => unknown
+            ? T
+            : T extends readonly unknown[]
+              ? number extends T["length"]
+                ? Plain<T[number]>[]
+                : { -readonly [Index in keyof T]: Plain<T[Index]> }
+              : { -readonly [Key in keyof T]: Plain<T[Key]> };
 
-// Every member of A has a member of B of the same shape.
-type Covers<A, B> = false extends (A extends unknown ? HasMatch<A, B> : never) ? false : true;
-type HasMatch<One, B> = true extends (B extends unknown ? SameMember<One, B> : never) ? true : false;
-
-type SameMember<A, B> = IsAny<A> extends true
-  ? false
-  : IsAny<B> extends true
-    ? false
-    : A extends Primitive
-      ? B extends Primitive
-        ? [A] extends [B] ? ([B] extends [A] ? true : false) : false
-        : false
-      : B extends Primitive
+/** True somewhere in the union when `any` hides in T at any depth. */
+type HasAny<T> =
+  IsAny<T> extends true
+    ? true
+    : T extends Primitive
+      ? false
+      : T extends (...args: never[]) => unknown
         ? false
-        : A extends readonly (infer X)[]
-          ? B extends readonly (infer Y)[] ? Same<X, Y> : false
-          : B extends readonly unknown[]
-            ? false
-            : SameFields<A, B>;
+        : T extends readonly unknown[]
+          ? HasAny<T[number]>
+          : true extends { [Key in keyof T]-?: HasAny<T[Key]> }[keyof T]
+            ? true
+            : false;
 
 type IsOptional<T, K extends keyof T> = {} extends Pick<T, K> ? true : false;
 
-type SameFields<A, B> = [keyof A] extends [keyof B]
-  ? [keyof B] extends [keyof A]
-    ? false extends { [K in keyof A & keyof B]: IsOptional<A, K> extends IsOptional<B, K> ? Same<A[K], B[K]> : false }[keyof A & keyof B]
-      ? false
-      : true
-    : false
-  : false;
+/** Every field T names at every depth, across its union's members, each spelled with `?` when it is optional. */
+type Fields<T, At extends string = ""> = T extends Primitive
+  ? never
+  : T extends (...args: never[]) => unknown
+    ? never
+    : T extends readonly unknown[]
+      ? `${At}[]` | Fields<T[number], `${At}[]`>
+      : { [Key in Extract<keyof T, string | number>]-?: `${At}.${Key}${IsOptional<T, Key> extends true ? "?" : ""}` | Fields<T[Key], `${At}.${Key}`> }[Extract<keyof T, string | number>];
+
+type Takes<A, B> = [B] extends [A] ? true : false;
+
+/** True when A and B are the same shape: each takes every value of the other, with the same fields, each as optional, and no `any`. */
+export type Same<A, B> = true extends HasAny<A> | HasAny<B>
+  ? false
+  : Takes<Plain<A>, Plain<B>> extends true
+    ? Takes<Plain<B>, Plain<A>> extends true
+      ? Takes<Fields<Plain<A>>, Fields<Plain<B>>> extends true
+        ? Takes<Fields<Plain<B>>, Fields<Plain<A>>>
+        : false
+      : false
+    : false;
 
 /** Convex's arguments of a function that takes none, `Record<string, never>`, and zod's, as `{}`. */
 type NoneAsEmpty<T> = string extends keyof T ? ([T[string]] extends [never] ? {} : T) : T;
@@ -79,9 +93,10 @@ type ConvexFunction<Name> = Name extends `website.${infer Module}.${infer Functi
     : never
   : never;
 
-type Kind<R> = R extends ReadRoute ? "query" : "mutation";
-type Args<R> = R extends ReadRoute<string, infer Shape extends ArgsShape, unknown> | CommandRoute<string, infer Shape extends ArgsShape, unknown> ? NoneAsEmpty<z.input<ArgsOf<Shape>>> : never;
-type Result<R> = R extends ReadRoute<string, ArgsShape, infer Answer> | CommandRoute<string, ArgsShape, infer Answer> ? Answer : never;
+// Read off the route's own fields: a route whose handler takes required arguments is no `ReadRoute` of the default shape.
+type Kind<R extends Route> = R["kind"];
+type Args<R extends Route> = NoneAsEmpty<z.input<R["args"]>>;
+type Result<R extends Route> = R["handler"] extends (...args: never[]) => Promise<infer Answer> ? Answer : never;
 
 /** Why a route doesn't answer as its Convex function did, or never when it does. */
 export type Mismatch<R extends Route> =
@@ -89,9 +104,9 @@ export type Mismatch<R extends Route> =
     ? "no website function has this name"
     : ConvexFunction<R["name"]> extends FunctionReference<infer Type>
       ? Type extends Kind<R>
-        ? Same<Args<R>, NoneAsEmpty<AsService<FunctionArgs<ConvexFunction<R["name"]>>>>> extends false
+        ? Same<Args<R>, NoneAsEmpty<Plain<FunctionArgs<ConvexFunction<R["name"]>>>>> extends false
           ? "its arguments differ from the function's"
-          : Same<Result<R> | Denial, AsService<FunctionReturnType<ConvexFunction<R["name"]>>>> extends false
+          : Same<Result<R> | Denial, Plain<FunctionReturnType<ConvexFunction<R["name"]>>>> extends false
             ? "its answer differs from the function's"
             : never
         : `the function is a ${Type}, the route a ${Kind<R>}`
@@ -129,6 +144,13 @@ export const takesAnotherArgument: Analyses<Analytics, { member: z.ZodString }> 
 export const readsACommand: AnswersAsConvexDid<[ReadRoute<"website.commands.buyPerk", ArgsShape, unknown>]> = true;
 // @ts-expect-error no website function has the route's name
 export const namesNothing: AnswersAsConvexDid<[ReadRoute<"website.album.noSuchThing", NoArgs, null>]> = true;
+// Routes whose handlers take required arguments, a read and a command, as S16 and S17 will add them.
+export const readsWithArguments: AnswersAsConvexDid<[ReadRoute<"website.playerCard.getPlayerCard", { person: z.ZodString }, PlayerCardRead>]> = true;
+export const commandsWithArguments: AnswersAsConvexDid<[CommandRoute<"website.album.openThoughtfulPack", { pack: z.ZodString }, OpenAnswer>]> = true;
+// @ts-expect-error a command with arguments for what was a read
+export const commandsARead: AnswersAsConvexDid<[CommandRoute<"website.playerCard.getPlayerCard", { person: z.ZodString }, PlayerCardRead>]> = true;
+// @ts-expect-error a command with arguments that answers otherwise
+export const commandsWithAnotherAnswer: AnswersAsConvexDid<[CommandRoute<"website.album.openThoughtfulPack", { pack: z.ZodString }, { kind: "refused" }>]> = true;
 
 // The comparison on its own, where today's answers have no case to show it.
 type Holds<T extends true> = T;
@@ -144,3 +166,11 @@ export type DropsADeepField = Holds<Same<Card, Omit<Card, "week"> & { week?: {} 
 export type LosesAMember = Holds<Same<Card, Omit<Card, "kind"> & { kind: "player" }>>;
 // @ts-expect-error null for undefined
 export type NullForUndefined = Holds<Same<{ at: number | undefined }, { at: number | null }>>;
+// @ts-expect-error a tuple reordered
+export type ReordersATuple = Holds<Same<[string, number], [number, string]>>;
+// @ts-expect-error a tuple of another length
+export type LengthensATuple = Holds<Same<[string], [string, string]>>;
+// @ts-expect-error anything for an empty object
+export type UnknownForEmpty = Holds<Same<unknown, {}>>;
+export type SplitsABoolean = Holds<Same<{ name: string; groups: boolean }, { name: string; groups: true } | { name: string; groups: false }>>;
+export type SpellsARecordOtherwise = Holds<Same<Record<string, { x: number }>, { [key: string]: { x: number } }>>;

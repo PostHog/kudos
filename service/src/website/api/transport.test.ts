@@ -271,7 +271,7 @@ describe("arguments pass the route's shape or nothing runs", () => {
  
   });
 
-  test("a route whose arguments hold a kind of value Convex couldn't describe stops the service at boot, whatever wraps a loose object", () => {
+  test("a route whose arguments hold a kind of value Convex couldn't describe, or change a value they check, stops the service at boot", () => {
     const loose = z.object({ week: z.number() });
     const refused: Array<[string, z.ZodType]> = [
       ["pipe", z.string().transform((value) => value.length)],
@@ -281,6 +281,12 @@ describe("arguments pass the route's shape or nothing runs", () => {
       ["any", z.any()],
       ["unknown", z.unknown()],
       ["date", z.date()],
+      ["default", z.strictObject({ week: z.number() }).default({ week: 0 })],
+      ["coercion", z.coerce.string()],
+      ["trim", z.string().trim()],
+      ["overwrite inside an object", z.strictObject({ week: z.number() }).overwrite((value) => ({ ...value, member: "m_other" }))],
+      ["overwrite of a record's key", z.record(z.string().overwrite(() => "same"), z.number())],
+      ["refinement", z.string().refine((value) => value.length > 0)],
     ];
     for (const [kind, schema] of refused) {
       expect(() => memberRead("website.test.odd", { value: schema }, async () => null), kind).toThrow(/website\.test\.odd\(value\)/);
