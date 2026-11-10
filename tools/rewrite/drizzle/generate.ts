@@ -9,7 +9,8 @@
 //   `jsonb` column in the codec's stored encoding.
 // Every Convex index becomes a B-tree on its fields, then `_creationTime`, then `_id`, with every nullable column
 // ascending NULLS FIRST as Convex orders missing and null before any value. A nested index field becomes a stored
-// generated column of its scalar type.
+// generated column of its scalar type. Every table is a `documentTable`, which adds Convex's implicit index in creation
+// order, `<table>_by_creation_time` on `_creationTime`, then `_id`.
 
 export type Validator =
   | { type: "string" | "number" | "bigint" | "boolean" | "null" | "any" | "bytes" }
@@ -217,7 +218,7 @@ export function tableSource(table: ExportedTable, mixedIndexFields: string[]): {
   });
 
   const name = table.tableName;
-  let source = `export const ${name} = pgTable(\n  ${JSON.stringify(name)},\n  {\n${lines.join("\n")}\n  },\n  (t) => [\n${indexes.join("\n")}\n  ],\n);\n`;
+  let source = `export const ${name} = documentTable(\n  ${JSON.stringify(name)},\n  {\n${lines.join("\n")}\n  },\n  (t) => [\n${indexes.join("\n")}\n  ],\n);\n`;
   const nullMeansNull = columns.filter((column) => column.kind !== "value" && column.nullMeansNull).map((column) => column.field);
   if (nullMeansNull.length > 0) source += `nullValued(${name}, ${JSON.stringify(nullMeansNull)});\n`;
   const docType = `{ _id: Id<${JSON.stringify(name)}>; _creationTime: number } & (${typeOf(table.documentType)})`;
@@ -242,9 +243,9 @@ export function generate(schema: ExportedSchema, domainOf: (table: string) => st
     const body = tables.map(({ source }) => source).join("\n");
     const imports = [
       `import { sql } from "drizzle-orm";`,
-      `import { index, pgTable } from "drizzle-orm/pg-core";`,
+      `import { index } from "drizzle-orm/pg-core";`,
       `import type { Value } from "../codec.ts";`,
-      `import { bool, creationTime, f64, i64, id, str, value, type Id } from "../columns.ts";`,
+      `import { bool, creationTime, documentTable, f64, i64, id, str, value, type Id } from "../columns.ts";`,
       `import { nullValued } from "../documents.ts";`,
     ].filter((line) => {
       const names = /import (?:type )?\{ ([^}]+) \}/.exec(line)![1]!.split(", ").map((name) => name.replace(/^type /, ""));

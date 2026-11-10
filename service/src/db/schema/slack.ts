@@ -1,8 +1,8 @@
 // Generated once from convex/schema.ts by tools/rewrite/drizzle; owned by hand from here on.
-import { index, pgTable } from "drizzle-orm/pg-core";
-import { bool, creationTime, f64, i64, id, str, value, type Id } from "../columns.ts";
+import { index } from "drizzle-orm/pg-core";
+import { bool, creationTime, documentTable, f64, i64, id, type Id, str, value } from "../columns.ts";
 
-export const memberVerifications = pgTable(
+export const memberVerifications = documentTable(
   "memberVerifications",
   {
     _id: id(),
@@ -19,7 +19,7 @@ export const memberVerifications = pgTable(
   ],
 );
 
-export const firstSignIns = pgTable(
+export const firstSignIns = documentTable(
   "firstSignIns",
   {
     _id: id(),
@@ -32,7 +32,7 @@ export const firstSignIns = pgTable(
   ],
 );
 
-export const slackReceipts = pgTable(
+export const slackReceipts = documentTable(
   "slackReceipts",
   {
     _id: id(),
@@ -45,7 +45,7 @@ export const slackReceipts = pgTable(
   ],
 );
 
-export const placedReactions = pgTable(
+export const placedReactions = documentTable(
   "placedReactions",
   {
     _id: id(),
@@ -60,7 +60,7 @@ export const placedReactions = pgTable(
   ],
 );
 
-export const slackRateLimits = pgTable(
+export const slackRateLimits = documentTable(
   "slackRateLimits",
   {
     _id: id(),
@@ -74,7 +74,7 @@ export const slackRateLimits = pgTable(
   ],
 );
 
-export const cardPictures = pgTable(
+export const cardPictures = documentTable(
   "cardPictures",
   {
     _id: id(),
