@@ -1,8 +1,8 @@
 // The module map's skeleton of convex/leaderboard/flag.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
 // notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
-import { type Flag } from "../analytics/flags.ts";
-import { type MemberId } from "../workspace/directory.ts";
-import { type GivenMeasure } from "./totals.ts";
+import type { Flag } from "../analytics/flags.ts";
+import type { MemberId } from "../workspace/directory.ts";
+import type { GivenMeasure } from "./totals.ts";
 import { z } from "zod";
 import type { MutationContext, QueryContext } from "../operations.ts";
 import { notPorted } from "../notPorted.ts";

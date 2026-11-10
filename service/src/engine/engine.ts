@@ -1,8 +1,8 @@
 // The module map's skeleton of convex/engine/engine.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
 // notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
-import { type Given, type Invalid, type OverAllowance } from "../feedback/replies.ts";
-import { type Award } from "./awards.ts";
-import { type ChatUserId, type FetchedMessage, type MessageDeleted, type MessageEvent, type MessageRef } from "./messageEvent.ts";
+import type { Given, Invalid, OverAllowance } from "../feedback/replies.ts";
+import type { Award } from "./awards.ts";
+import type { ChatUserId, FetchedMessage, MessageDeleted, MessageEvent, MessageRef } from "./messageEvent.ts";
 import type { MutationContext, QueryContext } from "../operations.ts";
 import { notPorted } from "../notPorted.ts";
 
