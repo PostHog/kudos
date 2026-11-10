@@ -1,6 +1,6 @@
 // The module map's skeleton of convex/website/emojiMappings.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
 // notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
-import { type MappingTarget, type SlackEmojiMappings } from "../album/emojiMappings.ts";
+import type { MappingTarget, SlackEmojiMappings } from "../album/emojiMappings.ts";
 import { z } from "zod";
 import { zv } from "../values.ts";
 

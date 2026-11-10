@@ -1,8 +1,8 @@
 // The module map's skeleton of convex/album/hoggies/collection.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
 // notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
 import type { MemberId } from "../../workspace/directory.ts";
-import { type CatalogueHoggie, type Rarity } from "./catalogue.ts";
-import { type CrestArt, type CrestsShown, type Drop, type HoggieArt } from "./drops.ts";
+import type { CatalogueHoggie, Rarity } from "./catalogue.ts";
+import type { CrestArt, CrestsShown, Drop, HoggieArt } from "./drops.ts";
 import type { Doc } from "../../db/schema/index.ts";
 import type { QueryContext } from "../../operations.ts";
 import { notPorted } from "../../notPorted.ts";
