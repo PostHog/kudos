@@ -133,7 +133,7 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/quests/hugLadder.test.ts | S7 | | |
 | convex/quests/mondayPath.test.ts | S7 | | |
 | convex/quests/newWeek.test.ts | S7 | | |
-| convex/quests/next.test.ts | S7 | | |
+| convex/quests/next.test.ts | S7 | service/src/quests/next.test.ts | S17 |
 | convex/quests/pool.test.ts | S7 | service/src/quests/pool.test.ts | |
 | convex/quests/progress.test.ts | S7 | service/src/quests/progress.test.ts | |
 | convex/quests/recognitions.test.ts | S7 | | |
