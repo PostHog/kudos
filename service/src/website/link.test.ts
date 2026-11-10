@@ -1,10 +1,8 @@
-// SW11: one function builds every website link. Today's convex/website/link.test.ts, on the service's test backend:
-// a link reads whether the website is open, which is S15's flag, so each link built through `websiteLinkOf` waits on it.
+// SW11: one function builds every website link. Today's convex/website/link.test.ts, on the service's test backend.
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { useTestBackend } from "../../testing/backend.ts";
 import { flagsKey, postHogHost, projectToken } from "../../testing/fakePostHog.ts";
 import { definitionsStored, onForEveryone } from "../../testing/flags.ts";
-import { stillWaiting } from "../../testing/waiting.ts";
 import { workspaceKeyOf } from "../analytics/outbox.ts";
 import { websiteLinkOf } from "./link.ts";
 import { signInEntry, urlOf, type Page } from "./routes.ts";
@@ -32,9 +30,6 @@ async function linkTo(page: Page, source: VisitSource = "reply") {
   return t.query((ctx) => websiteLinkOf(ctx, { workspace: "T1", page, source }));
 }
 
-// `websiteOpen` is S15's stub; each table row below waits on it as `waitsOn` would.
-const waitingOnTheWebsiteFlag = (body: () => unknown) => stillWaiting(["S15"], body);
-
 describe("SW11: one function builds every website link", () => {
   test.each<{ page: Page; link: string }>([
     { page: { page: "home" }, link: `${siteUrl}/?src=reply` },
@@ -46,10 +41,8 @@ describe("SW11: one function builds every website link", () => {
     { page: { page: "bookCollection" }, link: `${siteUrl}/book?src=reply#hoggies` },
     { page: { page: "settings" }, link: `${siteUrl}/settings?src=reply` },
     { page: { page: "levelUp", level: 3 }, link: `${siteUrl}/book?src=reply#level-up/3` },
-  ])("AL67: $page.page links to SITE_URL plus the album address it lands on: $link (waits on S15)", async ({ page, link }) => {
-    await waitingOnTheWebsiteFlag(async () => {
-      expect(await linkTo(page)).toBe(link);
-    });
+  ])("AL67: $page.page links to SITE_URL plus the album address it lands on: $link", async ({ page, link }) => {
+    expect(await linkTo(page)).toBe(link);
   });
 
   test.each<{ page: Page; link: string }>([
@@ -69,26 +62,20 @@ describe("SW11: one function builds every website link", () => {
     { page: { page: "bookCollection", crate: "store" }, link: `${siteUrl}/book?src=reply#hoggies` },
     { page: { page: "bookEarned", crate: "book" }, link: `${siteUrl}/book?src=reply#milestones` },
     { page: { page: "quests", crate: { kind: "group", week: "2026-10-05" } }, link: `${siteUrl}/?src=reply` },
-  ])("AL67: a link carries no crate, quest, perk, panel or period, which the album has nowhere to land: $page → $link (waits on S15)", async ({ page, link }) => {
-    await waitingOnTheWebsiteFlag(async () => {
-      expect(await linkTo(page)).toBe(link);
-    });
+  ])("AL67: a link carries no crate, quest, perk, panel or period, which the album has nowhere to land: $page → $link", async ({ page, link }) => {
+    expect(await linkTo(page)).toBe(link);
   });
 
-  test.each<VisitSource>(["welcome", "monday-dm", "recap", "app-home", "reply", "monday-post", "link-card"])("HH93: a link names the surface that sends it, and nothing about the member: %s (waits on S15)", async (source) => {
-    await waitingOnTheWebsiteFlag(async () => {
-      expect(await linkTo({ page: "bookEarned" }, source)).toBe(`${siteUrl}/book?src=${source}#milestones`);
-    });
+  test.each<VisitSource>(["welcome", "monday-dm", "recap", "app-home", "reply", "monday-post", "link-card"])("HH93: a link names the surface that sends it, and nothing about the member: %s", async (source) => {
+    expect(await linkTo({ page: "bookEarned" }, source)).toBe(`${siteUrl}/book?src=${source}#milestones`);
   });
 
   test.each<{ page: Page; link: string }>([
     { page: { page: "settings", section: "visibility" }, link: `${siteUrl}/settings?section=visibility&src=reply` },
     { page: { page: "settings", section: "messages" }, link: `${siteUrl}/settings?section=messages&src=reply` },
     { page: { page: "settings", section: "group" }, link: `${siteUrl}/settings?section=group&src=reply` },
-  ])("#531: a link to a settings section carries its target: $link (waits on S15)", async ({ page, link }) => {
-    await waitingOnTheWebsiteFlag(async () => {
-      expect(await linkTo(page)).toBe(link);
-    });
+  ])("#531: a link to a settings section carries its target: $link", async ({ page, link }) => {
+    expect(await linkTo(page)).toBe(link);
   });
 
   test.each<{ page: Page; link: string }>([

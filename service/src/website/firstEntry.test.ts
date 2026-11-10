@@ -10,6 +10,7 @@ import { flagsKey, postHogHost, projectToken } from "../../testing/fakePostHog.t
 import { definitionsStored, offForEveryone, onForEveryone } from "../../testing/flags.ts";
 import { httpStatus, rateLimitedFor } from "../../testing/fakeSlack.ts";
 import { waitsOn } from "../../testing/waiting.ts";
+import type { Id } from "../db/columns.ts";
 import type { MemberId } from "../workspace/directory.ts";
 import { rememberSignedInMember, SignInRefused, type SignedIn } from "./signIn.ts";
 
@@ -40,7 +41,9 @@ beforeEach(async () => {
 
 afterEach(() => void vi.unstubAllEnvs());
 
-const enters = (signedIn: SignedIn) => t.run((ctx) => rememberSignedInMember(ctx, signedIn));
+// An entry as the website's entry makes it: the `users` row it found, and the profile of the Slack pair it signed in.
+const enters = ({ workspace, user, ...display }: SignedIn, existingUserId: Id<"users"> | null = null) =>
+  t.run((ctx) => rememberSignedInMember(ctx, { existingUserId, profile: { id: `${workspace}/${user}`, chatWorkspace: workspace, chatUser: user, ...display } }));
 const aMember = (user: string, kind: "member" | "not-a-member" = "member") =>
   t.seed.insert("members", { workspace: allowedWorkspace, user, kind, asOf: 0 }) as Promise<MemberId>;
 // The refusal an entry ends in; any other error, a stub's included, fails the test as itself.
@@ -59,7 +62,7 @@ describe("a member who signed in before the move", () => {
     await aMember("U_JUNO");
     const before = await t.seed.insert("users", { name: "Juno Whitlock", chatIdentity: { workspace: allowedWorkspace, user: "U_JUNO" } });
 
-    expect(await enters({ ...juno, name: "Juno Ashby" })).toBe(before);
+    expect(await enters({ ...juno, name: "Juno Ashby" }, before)).toBe(before);
 
     expect(await t.seed.all("users")).toEqual([expect.objectContaining({ _id: before, name: "Juno Whitlock" })]);
     expect(await t.published()).toEqual([]);
@@ -95,7 +98,7 @@ describe("only the allowed workspace enters", () => {
 });
 
 describe("the first entry", () => {
-  waitsOn(["S3", "S8", "S15"], "keeps the Slack pair and the display fields, and no email", async () => {
+  waitsOn(["S3", "S6", "S8"], "keeps the Slack pair and the display fields, and no email", async () => {
     await aMember("U_JUNO");
 
     const user = await enters(juno);
@@ -114,7 +117,7 @@ describe("the first entry", () => {
     ]);
   });
 
-  waitsOn(["S3", "S8", "S15"], "leaves out a display field that is empty", async () => {
+  waitsOn(["S3", "S6", "S8"], "leaves out a display field that is empty", async () => {
     await aMember("U_JUNO");
 
     await enters({ workspace: allowedWorkspace, user: "U_JUNO", name: "Juno", image: "" });
@@ -124,7 +127,7 @@ describe("the first entry", () => {
     expect(row).toMatchObject({ name: "Juno" });
   });
 
-  waitsOn(["S3", "S8", "S15"], "greets a member once, with the welcome item they are owed", async () => {
+  waitsOn(["S3", "S6", "S8"], "greets a member once, with the welcome item they are owed", async () => {
     await definitionsStored(t.operations, onForEveryone("website"), onForEveryone("welcome-item"), onForEveryone("hidden-items"));
     const member = await aMember("U_JUNO");
 
@@ -135,7 +138,7 @@ describe("the first entry", () => {
 
   // The welcome item is owed only while welcome-item and hidden-items are both on (convex/album/items/welcome.ts).
   for (const off of ["welcome-item", "hidden-items"]) {
-    waitsOn(["S3", "S8", "S15"], `greets a member owed no welcome item while ${off} is off`, async () => {
+    waitsOn(["S3", "S6", "S8"], `greets a member owed no welcome item while ${off} is off`, async () => {
       const on = ["welcome-item", "hidden-items"].filter((key) => key !== off);
       await definitionsStored(t.operations, onForEveryone("website"), offForEveryone(off), ...on.map(onForEveryone));
       await aMember("U_JUNO");
@@ -146,7 +149,7 @@ describe("the first entry", () => {
     });
   }
 
-  waitsOn(["S3", "S8", "S15"], "a second entry finds the same users row and greets nobody again", async () => {
+  waitsOn(["S3", "S6", "S8"], "a second entry finds the same users row and greets nobody again", async () => {
     await aMember("U_JUNO");
     const first = await enters(juno);
 
@@ -156,7 +159,7 @@ describe("the first entry", () => {
     expect(await greetings()).toHaveLength(1);
   });
 
-  waitsOn(["S3", "S15"], "a person the directory knows as not a member gets a users row and no greeting", async () => {
+  test("a person the directory knows as not a member gets a users row and no greeting", async () => {
     await aMember("U_JUNO", "not-a-member");
 
     await enters(juno);
@@ -165,7 +168,7 @@ describe("the first entry", () => {
     expect(await greetings()).toEqual([]);
   });
 
-  waitsOn(["S3", "S15"], "a person the directory doesn't know yet is verified later, with no greeting", async () => {
+  waitsOn(["S3"], "a person the directory doesn't know yet is verified later, with no greeting", async () => {
     await enters(juno);
 
     expect(await t.seed.all("memberVerifications")).toEqual([expect.objectContaining({ workspace: allowedWorkspace, user: "U_JUNO" })]);
@@ -173,7 +176,7 @@ describe("the first entry", () => {
     expect(await greetings()).toEqual([]);
   });
 
-  waitsOn(["S3", "S15"], "while the website is closed the entry is refused and no account appears", async () => {
+  test("while the website is closed the entry is refused and no account appears", async () => {
     await aMember("U_JUNO");
     await definitionsStored(t.operations, offForEveryone("website"));
 
@@ -206,7 +209,7 @@ describe("WS8: a person the directory doesn't know yet is verified with users.in
     return triedAt;
   }
 
-  waitsOn(["S3", "S8", "S15"], "they read verifying, then member once users.info answers, with the directory filled", async () => {
+  waitsOn(["S3", "S8"], "they read verifying, then member once users.info answers, with the directory filled", async () => {
     t.slack.withMember("U_JUNO", { tz: "Europe/London" });
     await enters(juno);
     expect(await verification()).toMatchObject({ state: "pending" });
@@ -217,7 +220,7 @@ describe("WS8: a person the directory doesn't know yet is verified with users.in
     expect(t.slack.callsTo("users.info")).toEqual([{ user: "U_JUNO" }]);
   });
 
-  waitsOn(["S3", "S15"], "a person users.info knows as deleted reads not-a-member", async () => {
+  waitsOn(["S3"], "a person users.info knows as deleted reads not-a-member", async () => {
     t.slack.withMember("U_JUNO", { deleted: true });
     await enters(juno);
 
@@ -226,7 +229,7 @@ describe("WS8: a person the directory doesn't know yet is verified with users.in
     expect(await directory()).toEqual([expect.objectContaining({ user: "U_JUNO", kind: "not-a-member" })]);
   });
 
-  waitsOn(["S3", "S15"], "after 3 failed lookups, each waiting the Retry-After Slack asked for, they read unverified and the directory stays empty", async () => {
+  waitsOn(["S3"], "after 3 failed lookups, each waiting the Retry-After Slack asked for, they read unverified and the directory stays empty", async () => {
     t.slack.withMember("U_JUNO").answering("users.info", rateLimitedFor(30), rateLimitedFor(30), httpStatus(500));
     const start = t.clock.now();
     await enters(juno);
@@ -238,7 +241,7 @@ describe("WS8: a person the directory doesn't know yet is verified with users.in
     expect(await directory()).toEqual([]);
   });
 
-  waitsOn(["S3", "S15"], "a person users.info keeps answering ok without a user for reads unverified after the retries", async () => {
+  waitsOn(["S3"], "a person users.info keeps answering ok without a user for reads unverified after the retries", async () => {
     const okWithoutUser = () => Response.json({ ok: true });
     t.slack.withMember("U_JUNO").answering("users.info", okWithoutUser, okWithoutUser, okWithoutUser);
     await enters(juno);
@@ -249,7 +252,7 @@ describe("WS8: a person the directory doesn't know yet is verified with users.in
     expect(t.slack.callsTo("users.info")).toHaveLength(3);
   });
 
-  waitsOn(["S3", "S8", "S15"], "entering again after a failed verification starts a fresh check", async () => {
+  waitsOn(["S3", "S8"], "entering again after a failed verification starts a fresh check", async () => {
     t.slack.withMember("U_JUNO").answering("users.info", httpStatus(500), httpStatus(500), httpStatus(500));
     const user = await enters(juno);
     await settleTheChecks();
@@ -263,7 +266,7 @@ describe("WS8: a person the directory doesn't know yet is verified with users.in
     expect(t.slack.callsTo("users.info")).toHaveLength(4);
   });
 
-  waitsOn(["S3", "S8", "S15"], "entering again while a check is pending asks Slack once", async () => {
+  waitsOn(["S3", "S8"], "entering again while a check is pending asks Slack once", async () => {
     t.slack.withMember("U_JUNO");
     await enters(juno);
     await enters(juno);
@@ -273,7 +276,7 @@ describe("WS8: a person the directory doesn't know yet is verified with users.in
     expect(t.slack.callsTo("users.info")).toHaveLength(1);
   });
 
-  waitsOn(["S3", "S8", "S15"], "a member the directory already knows is not looked up", async () => {
+  waitsOn(["S3", "S6", "S8"], "a member the directory already knows is not looked up", async () => {
     await aMember("U_JUNO");
     await enters(juno);
     await t.settle();
