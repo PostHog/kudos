@@ -4,6 +4,8 @@
 // steps that reach none of them run here.
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { useTestBackend } from "../../testing/backend.ts";
+import { definitionsStored, onForEveryone, postHogDeciding } from "../../testing/flags.ts";
+import { analyticsIdOf } from "../analytics/person.ts";
 import type { XpRecordedEvent } from "../bus/events.ts";
 import { waitsOn } from "../../testing/waiting.ts";
 import { serviceRegistry } from "../registry.ts";
@@ -19,13 +21,21 @@ type Backend = ReturnType<typeof backend>;
 
 beforeEach(() => {
   vi.stubEnv("SLACK_BOT_TOKEN", "xoxb-test");
+  postHogDeciding("sandbox");
 });
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
 });
 
-const member = (t: Backend, user: string, admin?: true) => t.seed.insert("members", { workspace: "T1", user, kind: "member", ...(admin && { admin }) }) as Promise<MemberId>;
+// Each member has an analytics ID, so a read that can't write decides their flags as a mutation would.
+const member = async (t: Backend, user: string, admin?: true) => {
+  const id = (await t.seed.insert("members", { workspace: "T1", user, kind: "member", ...(admin && { admin }) })) as MemberId;
+  await t.run((ctx) => analyticsIdOf(ctx, id));
+  return id;
+};
+const flagsOn = (t: Backend, ...keys: string[]) => definitionsStored(t.operations, ...keys.map(onForEveryone));
 const facts = (id: MemberId, admin = false): Extract<MemberFacts, { kind: "member" }> => ({ kind: "member", member: id, timeZone: undefined, admin });
 const selections = async (t: Backend) => (await t.seed.all("homeSelections")).map(({ member, tab, period }) => ({ member, tab, period }));
 const publishedTo = (t: Backend) => t.slack.callsTo("views.publish").map(({ user_id }) => user_id);
@@ -68,6 +78,7 @@ describe("the tab and period a home opens on", () => {
 
   waitsOn(["S6", "S11"], "showing a tab the home shows keeps the period, and a tab it doesn't show is refused", async () => {
     const t = backend();
+    await flagsOn(t, "xp-levels", "everyone-board", "message-settings");
     const alice = await member(t, "U_ALICE");
     await t.run((ctx) => selectLeaderboardPeriod(ctx, alice, "month"));
 
@@ -87,6 +98,7 @@ describe("the home a person gets", () => {
 
   waitsOn(["S4", "S5", "S6", "S7", "S8", "S9", "S11", "S17"], "opens on the profile, with the tabs the member's features show", async () => {
     const t = backend();
+    await flagsOn(t, "xp-levels");
     await member(t, "U_ALICE");
 
     const home = await t.run((ctx) => shownHomeOf(ctx, { workspace: "T1", user: "U_ALICE", frontDoor: false }));
@@ -98,6 +110,7 @@ describe("the home a person gets", () => {
 describe("publishing a home again", () => {
   test("a role that didn't change, or a person who was never a member, publishes nothing", async () => {
     const t = backend();
+    await flagsOn(t, "xp-levels");
     const alice = await member(t, "U_ALICE");
 
     await t.run((ctx) => republishOnRoleChange(ctx, facts(alice), facts(alice)));
@@ -122,6 +135,7 @@ describe("publishing a home again", () => {
 
   waitsOn(["S6", "S17"], "a member who becomes an admin gets their home again, while levels are on", async () => {
     const t = backend();
+    await flagsOn(t, "xp-levels");
     const alice = await member(t, "U_ALICE");
 
     await t.run((ctx) => republishOnRoleChange(ctx, facts(alice), facts(alice, true)));
@@ -132,6 +146,7 @@ describe("publishing a home again", () => {
 
   waitsOn(["S6", "S17"], "someone who becomes a member gets their home", async () => {
     const t = backend();
+    await flagsOn(t, "xp-levels");
     const alice = await member(t, "U_ALICE");
 
     await t.run((ctx) => republishOnRoleChange(ctx, { kind: "not-a-member" }, facts(alice)));
@@ -142,6 +157,7 @@ describe("publishing a home again", () => {
 
   waitsOn(["S6", "S17"], "recorded XP publishes the member's home again", async () => {
     const t = backend();
+    await flagsOn(t, "xp-levels");
     const alice = await member(t, "U_ALICE");
 
     await t.run((ctx) => {

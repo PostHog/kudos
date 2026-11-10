@@ -5,7 +5,8 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { useTestBackend } from "../../testing/backend.ts";
 import type { FlagDefinition } from "../../testing/fakePostHog.ts";
-import { definitionsStored, offForEveryone, onForEmails, onForEveryone } from "../../testing/flags.ts";
+import { definitionsStored, offForEveryone, onForEmails, onForEveryone, postHogDeciding } from "../../testing/flags.ts";
+import { analyticsIdOf } from "../analytics/person.ts";
 import { emoji, mention, messageEvent, section, text } from "../../testing/slackMessages.ts";
 import { waitsOn } from "../../testing/waiting.ts";
 import { moveLastVisitTo } from "../website/lastVisit.ts";
@@ -21,10 +22,12 @@ type Backend = ReturnType<typeof backend>;
 
 beforeEach(() => {
   vi.stubEnv("SLACK_BOT_TOKEN", "xoxb-test");
+  postHogDeciding("sandbox");
 });
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
 });
 
 describe("LP38 LP39 LP41: the teaser's line", () => {
@@ -111,9 +114,12 @@ async function aWorkspace(flags: FlagDefinition[]) {
   return t;
 }
 
-function member(t: Backend, user: string) {
+// Each member has an analytics ID, so the teaser's read, which can't write, decides their flags as a mutation would.
+async function member(t: Backend, user: string) {
   t.slack.withMember(user, { profile: { email: `${user.slice(2).toLowerCase()}@example.com` } });
-  return t.seed.insert("members", { workspace: "T1", user, kind: "member" }) as Promise<MemberId>;
+  const id = (await t.seed.insert("members", { workspace: "T1", user, kind: "member" })) as MemberId;
+  await t.run((ctx) => analyticsIdOf(ctx, id));
+  return id;
 }
 
 let seeded = 0;
