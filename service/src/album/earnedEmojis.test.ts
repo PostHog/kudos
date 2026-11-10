@@ -327,7 +327,30 @@ describe("what a member holds", () => {
   });
 });
 
+describe("the item board's overflow", () => {
+  test("while more items wait face down than the board shows, any unseen hype emoji may be held for one beyond it, so none counts; once all fit, one with no item waiting counts", async () => {
+    earnedWorld.flags.hiddenItems.add(alice);
+    await aPack(alice, bruno, tuesday);
+    earnedWorld.otherItemsWaiting.set(alice, 101);
+
+    expect(await t.query((ctx) => earnedEmojiCountOf(ctx, "T1", alice)), "101 waiting, 100 shown").toBe(0);
+
+    earnedWorld.otherItemsWaiting.set(alice, 100);
+
+    expect(await t.query((ctx) => earnedEmojiCountOf(ctx, "T1", alice)), "all 100 shown, none for Bruno").toBe(1);
+  });
+});
+
 describe("the emojis earned in a week", () => {
+  test("a jump past a level emoji's level reaches it at the jump: from level 1 to 12 earns level 5's and level 10's", async () => {
+    const week = { from: tuesday, to: tuesday + 7 * 24 * 60 * minuteMs };
+    earnedWorld.levelReachedAt.set(`${alice}:12`, tuesday + minuteMs);
+
+    const names = (await t.query((ctx) => emojisEarnedBetween(ctx, { workspace: "T1", member: alice }, week))).map(({ name }) => name);
+
+    expect(names).toEqual(["level-5", "level-10"]);
+  });
+
   test("a team sticker, a first pack, a collection, a tier and a level reached between the instants are named, and a drop then; the rest are left out", async () => {
     earnedWorld.flags.randomEmojis.add(alice);
     emojiWorld.slackHas("T1", { name: "partyparrot", image: "https://emoji.example/partyparrot.png" });
