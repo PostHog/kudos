@@ -141,7 +141,8 @@ test("every import or re-export between convex/ modules names an export of the l
       if (!specifier.startsWith(".") || specifier.includes("_generated")) continue;
       const target = posix.normalize(posix.join(posix.dirname(importer), specifier)).replace(/(\.ts)?$/, ".ts");
       const exported = exportsOf(servicePathOf(target));
-      for (const name of names) if (name === "*" ? exported === undefined : !exported?.has(name)) missing.add(`${target}:${name}`);
+      // A whole-module import or re-export (`*`) hides which exports it takes, so it is a miss until it names them.
+      for (const name of names) if (name === "*" || !exported?.has(name)) missing.add(`${target}:${name}`);
     }
   }
   expect([...missing].filter((key) => !(key in leftOut)).sort()).toEqual([]);

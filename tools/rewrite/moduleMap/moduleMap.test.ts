@@ -343,6 +343,13 @@ describe("the skeleton generator", () => {
       expect(sibling.text).toContain('import type { AwardId } from "./awards.ts";');
     });
 
+    test("exports what an export list names, so S1's module re-exports it too", () => {
+      // edges.ts declares `half` and `names` and exports them by `export { half, names }`.
+      const listed = landed(over(3, "// S1's port of nothing yet.\n"));
+      expect(listed.text).toContain("export { half, names };");
+      expect(listed.exports.values).toEqual(expect.arrayContaining(["half", "names"]));
+    });
+
     test("knows S1's jobs by their calls, however S1 imports or quotes them, and not by a comment", () => {
       expect(sibling.text).not.toContain('"skeleton.awards.sweepAwards"');
       expect(sibling.omitted).toContain("sweepAwards: S1 ported it as the job skeleton.awards.sweepAwards");
