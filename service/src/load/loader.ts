@@ -89,7 +89,11 @@ export function planEntries(snapshot: Snapshot): Step[] {
     const [table, file, ...deeper] = rest.split("/");
     if (rest === "README.md" || (deeper.length === 0 && file === "generated_schema.jsonl")) continue;
     if (deeper.length > 0 || file === undefined) throw new LoadError(`The snapshot has an entry the loader doesn't know: ${path}`);
-    if (table === "_storage" && file !== "documents.jsonl") continue;
+    if (table === "_storage" && file !== "documents.jsonl") {
+      // Stored bytes are loaded through their `_storage` documents; bytes in a namespace without any would be dropped.
+      if (!snapshot.entries.has(`${prefix}_storage/documents.jsonl`)) throw new LoadError(`The snapshot has stored bytes without a _storage document: ${path}`);
+      continue;
+    }
     if (file !== "documents.jsonl") throw new LoadError(`The snapshot has an entry the loader doesn't know: ${path}`);
     const step: Step = { path, prefix, source, root, table: table! };
     if (table === "_storage") step.files = storedFiles(snapshot, prefix);
@@ -162,10 +166,15 @@ async function loadEntry(client: pg.PoolClient, snapshot: Snapshot, step: Step, 
   await commit(true);
 }
 
+/** The data-model table a step's rows load into; without one, they go to the archive under the step's source and table. */
+export function dataModelTable(step: Pick<Step, "root" | "table">): PgTable | undefined {
+  return step.root ? tablesByName.get(step.table) : undefined;
+}
+
 function documentInsert(step: Step, doc: Doc, reports: Report[]): Insert {
   const _id = doc._id;
   if (typeof _id !== "string" || typeof doc._creationTime !== "number") throw new LoadError(`A document of ${step.path} has no _id or _creationTime`);
-  const table = step.root ? tablesByName.get(step.table) : undefined;
+  const table = dataModelTable(step);
   if (!table) return archiveInsert(step.source, step.table, doc);
   checkKinds(table, doc);
   reports.push(...indexedSpecials(table, doc));

@@ -5,7 +5,7 @@ import pg from "pg";
 import { afterEach, describe, expect, inject, test } from "vitest";
 import { chunksOf, zip } from "../../testing/zip.ts";
 import { useTestDatabase, withSearchPath } from "../../testing/database.ts";
-import { decodeStored, printExport, type Value } from "../db/codec.ts";
+import { decodeStored, encodeStored, printExport, type Value } from "../db/codec.ts";
 import { fromDocument, toDocument } from "../db/documents.ts";
 import { archive, files, hypeReactions, kudosMessages, members, wordDeletionRequests } from "../db/schema/index.ts";
 import { createPool } from "../db/pool.ts";
@@ -20,6 +20,7 @@ const db = drizzle({ client: database.pool });
 const token = "a-load-token";
 
 type Doc = { [field: string]: Value };
+const printStored = (doc: Doc) => encodeStored(doc).replaceAll("'", "''");
 const jsonl = (docs: Doc[]) => docs.map((doc) => printExport(doc)).join("\n") + (docs.length ? "\n" : "");
 
 interface Copy {
@@ -372,6 +373,42 @@ describe("the round trip", () => {
     }
   });
 
+  test("where a row is stored and under which key counts, not only its document", async () => {
+    const asset = Buffer.from("<svg/>");
+    const stored: Doc = { _id: "cs1", _creationTime: 1, sha256: createHash("sha256").update(asset).digest("base64"), size: BigInt(asset.length), contentType: null, internalId: "i1" };
+    const service = await copy();
+    await finish(
+      service,
+      zip({
+        "hypeReactions/documents.jsonl": jsonl([reaction("h1")]),
+        "authAccounts/documents.jsonl": jsonl([{ _id: "a1", _creationTime: 5, archiveKey: ["a2", 6] }]),
+        "_components/c1/flags/documents.jsonl": jsonl([{ _id: "f1", _creationTime: 1 }]),
+        "_components/c1/_storage/documents.jsonl": jsonl([stored]),
+        "_components/c1/_storage/cs1": asset,
+      }),
+    );
+    expect(await settled(service), "equal as loaded").toMatchObject({ phase: "recovering" });
+    const changes: Array<[string, string, string]> = [
+      [`delete from "hypeReactions"; insert into archive select 'app', 'hypeReactions', a._id, a."_creationTime", a.document from (select '${reaction("h1")._id}' as _id, 1700000000001::float8 as "_creationTime", '${printStored(reaction("h1"))}'::jsonb as document) a`, "hypeReactions", "a live row moved into the archive"],
+      [`update archive set "_id" = 'a2', "_creationTime" = 6 where "table" = 'authAccounts'`, "authAccounts", "keys changed to what a field of the document holds"],
+      [`update archive set source = '_components', "table" = 'c1/flags' where "table" = 'flags'`, "_components/c1/flags", "a source and table that flatten to the same path"],
+      [`update archive set document = jsonb_set(document, '{_id}', '"cs2"') where "table" = '_storage/bytes'`, "_components/c1/_storage/files", "the _id inside a component's bytes document"],
+      [`update archive set document = jsonb_set(document, '{_creationTime}', '2') where "table" = '_storage/bytes'`, "_components/c1/_storage/files", "the _creationTime inside it"],
+      [`insert into files ("_id", "_creationTime", sha256, size, bytes) values ('', 1, 'x', 0, '')`, "_storage/files", "a file whose _id is empty"],
+    ];
+    const restore = await database.pool.query<{ source: string; table: string; _id: string; _creationTime: number; document: string }>("select * from archive");
+    for (const [change, table, why] of changes) {
+      await database.pool.query(change);
+      expect(differing(await reverify(service)), why).toContain(table);
+      await database.pool.query(`delete from archive; delete from files; delete from "hypeReactions"`);
+      for (const row of restore.rows) {
+        await database.pool.query(`insert into archive values ($1, $2, $3, $4, $5)`, [row.source, row.table, row._id, row._creationTime, row.document]);
+      }
+      await db.insert(hypeReactions).values(fromDocument(hypeReactions, reaction("h1")) as never);
+      expect(differing(await reverify(service)), `restored after: ${why}`).toStrictEqual([]);
+    }
+  });
+
   test("a row missing from the copy, or one it gained, counts on its table", async () => {
     const service = await copy();
     await finish(service, zip({ "hypeReactions/documents.jsonl": jsonl([reaction("h1"), reaction("h2")]) }));
@@ -471,6 +508,10 @@ describe("what stops a load", () => {
     const service = await copy();
     await finish(service, zip({ "_storage/documents.jsonl": jsonl([doc]), "_storage/st1": big }));
     expect((await settled(service)).error, "too large").toBe(`Stored file st1 is larger than the loader takes (${maxFileBytes} bytes)`);
+  });
+
+  test("stored bytes in a namespace without _storage documents", async () => {
+    expect((await stops({ "_storage/f1": "orphan" })).error, "bytes the loader would drop").toBe("The snapshot has stored bytes without a _storage document: _storage/f1");
   });
 
   test("a stored file whose bytes don't match its document", async () => {

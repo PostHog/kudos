@@ -14,7 +14,7 @@ import { decodeStored, parseExport, printExport, type Value } from "../db/codec.
 import { toDocument } from "../db/documents.ts";
 import { archive, files } from "../db/schema/index.ts";
 import * as service from "../db/schema/service.ts";
-import { dataModelTables, planEntries } from "./loader.ts";
+import { dataModelTable, dataModelTables, planEntries } from "./loader.ts";
 import { openSnapshot } from "./snapshot.ts";
 
 /** One side of a table: how many rows, and their order-free hash (hex). */
@@ -39,8 +39,15 @@ export interface RoundTrip {
   tables: TableAnswer[];
 }
 
-/** What either side yields: a table seen, a document line of it, or a number of rows it holds unexpectedly. */
-type Item = { table: string; line?: string; rows?: number };
+/**
+ * What either side yields under a table's answer: the table seen; a row, as where it is stored (a data-model table or
+ * the archive's source and table) with its key columns, and its document; or a number of rows a table holds unexpectedly.
+ */
+type Item = { table: string; row?: { at: string; value: Value }; rows?: number };
+
+/** Where a row is stored and under which key, as the comparison sees it: both count, beside the document. */
+const at = (where: { table: string } | { archive: [string, string] } | { orphan: string }, _id?: Value, _creationTime?: Value) =>
+  JSON.stringify([where, _id ?? null, typeof _creationTime === "number" ? printExport(_creationTime) : null]);
 
 /** Rows per page: a document can be near 1 MiB, so a page stays within tens of MiB. */
 const pageRows = 64;
@@ -72,7 +79,7 @@ async function* exportCopy(client: pg.PoolClient): AsyncGenerator<Item> {
   const db = drizzle({ client });
   for (const table of dataModelTables) {
     const name = getTableName(table);
-    for await (const row of pages(db, table)) yield { table: name, line: printExport(toDocument<Value>(table, row)) };
+    for await (const row of pages(db, table)) yield { table: name, row: { at: at({ table: name }, row._id as string, row._creationTime as number), value: toDocument<Value>(table, row) } };
   }
   const sources = await db.selectDistinct({ source: archive.source, table: archive.table }).from(archive).orderBy(archive.source, archive.table);
   for (const { source, table } of sources) {
@@ -82,25 +89,27 @@ async function* exportCopy(client: pg.PoolClient): AsyncGenerator<Item> {
     const bytes = table === "_storage/bytes";
     for await (const row of pages(db, archive, where, bytes ? 1 : pageRows)) {
       const doc = decodeStored(row.document as string) as { [field: string]: Value };
+      const where = at({ archive: [source, table] }, row._id as string, row._creationTime as number);
       if (bytes) {
-        const file = { _id: row._id as string, _creationTime: row._creationTime as number, bytes: sha256(Buffer.from(doc.bytes as ArrayBuffer)) };
-        yield { table: `${namespace}_storage/files`, line: printExport(file) };
-        continue;
+        const file = { _id: doc._id!, _creationTime: doc._creationTime!, bytes: sha256(Buffer.from(doc.bytes as ArrayBuffer)) };
+        yield { table: `${namespace}_storage/files`, row: { at: where, value: file } };
+      } else {
+        yield { table: `${namespace}${table}`, row: { at: where, value: doc } };
       }
-      // The row's key columns are checked against its document: a disagreement marks the line, so it can't match.
-      const keyed = row._id === doc._id && row._creationTime === doc._creationTime ? doc : { ...doc, archiveKey: [row._id as string, row._creationTime as number] };
-      yield { table: `${namespace}${table}`, line: printExport(keyed) };
     }
   }
   // The app's files, metadata and all: each bytes hash taken by Postgres, so no file crosses the connection.
-  let after = "";
+  let after: string | undefined;
   for (;;) {
     const { rows } = await client.query<{ _id: string; _creationTime: number; sha256: string; size: number; contentType: string | null; bytes: string }>(
       `select "_id", "_creationTime", sha256, size, "contentType", encode(sha256(bytes), 'base64') as bytes
-       from files where "_id" > $1 order by "_id" collate "C" limit ${pageRows}`,
-      [after],
+       from files ${after === undefined ? "" : `where "_id" > $1`} order by "_id" collate "C" limit ${pageRows}`,
+      after === undefined ? [] : [after],
     );
-    for (const { contentType, ...file } of rows) yield { table: "_storage/files", line: printExport(contentType === null ? file : { ...file, contentType }) };
+    for (const { contentType, ...file } of rows) {
+      const value = contentType === null ? file : { ...file, contentType };
+      yield { table: "_storage/files", row: { at: at({ table: "files" }, file._id, file._creationTime), value } };
+    }
     if (rows.length < pageRows) break;
     after = rows.at(-1)!._id;
   }
@@ -127,12 +136,14 @@ async function* readSnapshot(pool: pg.Pool, chunks: number): AsyncGenerator<Item
       if (step.files) yield { table: filesTable };
       const unseen = new Map(step.files);
       const input = await snapshot.open(snapshot.entries.get(step.path)!);
+      // Where the loader stores this table's rows, by its own rule.
+      const where = dataModelTable(step) ? { table: step.table } : { archive: [step.source, step.table] as [string, string] };
       for await (const line of createInterface({ input, crlfDelay: Infinity })) {
         if (line === "") continue;
-        yield { table, line };
-        if (!step.files) continue;
-        // A stored file as the loader keeps it: the app's with its metadata in `files`, a component's bytes archived.
         const doc = parseExport(line) as { [field: string]: Value };
+        yield { table, row: { at: at(where, doc._id, doc._creationTime), value: doc } };
+        if (!step.files) continue;
+        // A stored file as the loader keeps it: the app's in `files` with its metadata, a component's bytes archived.
         const path = step.files.get(doc._id as string);
         unseen.delete(doc._id as string);
         const file: { [field: string]: Value } = { _id: doc._id!, _creationTime: doc._creationTime! };
@@ -141,10 +152,11 @@ async function* readSnapshot(pool: pg.Pool, chunks: number): AsyncGenerator<Item
           if (doc.contentType !== null && doc.contentType !== undefined) file.contentType = doc.contentType;
         }
         if (path) file.bytes = await hashOf(path);
-        yield { table: filesTable, line: printExport(file) };
+        const fileAt = step.root ? at({ table: "files" }, doc._id, doc._creationTime) : at({ archive: [step.source, "_storage/bytes"] }, doc._id, doc._creationTime);
+        yield { table: filesTable, row: { at: fileAt, value: file } };
       }
       // Bytes without a document: the loader keeps none of them, so each counts as a file the copy lacks.
-      for (const [_id, path] of unseen) yield { table: filesTable, line: printExport({ _id, bytes: await hashOf(path) }) };
+      for (const [_id, path] of unseen) yield { table: filesTable, row: { at: at({ orphan: path }), value: { _id, bytes: await hashOf(path) } } };
     }
   } finally {
     snapshot.close();
@@ -152,18 +164,20 @@ async function* readSnapshot(pool: pg.Pool, chunks: number): AsyncGenerator<Item
 }
 
 /**
- * Each table's count and hash: the sum, modulo 2^256, of each row's sha256 over its canonical text. A sum doesn't
+ * Each table's count and hash: the sum, modulo 2^256, of each row's sha256 over where it is stored, its key columns and
+ * its canonical text. A sum doesn't
  * depend on order, so neither side sorts, and a table costs one number however many rows it has.
  */
 class Tallies {
   private readonly tallies = new Map<string, { rows: number; sum: bigint }>();
 
-  add({ table, line, rows }: Item): void {
+  add({ table, row, rows }: Item): void {
     const tally = this.tallies.get(table) ?? { rows: 0, sum: 0n };
     this.tallies.set(table, tally);
-    if (line !== undefined) {
+    if (row !== undefined) {
       tally.rows += 1;
-      tally.sum = (tally.sum + BigInt(`0x${createHash("sha256").update(canonical(parseExport(line))).digest("hex")}`)) & mask;
+      const digest = createHash("sha256").update(row.at).update("\n").update(canonical(row.value)).digest("hex");
+      tally.sum = (tally.sum + BigInt(`0x${digest}`)) & mask;
     }
     if (rows !== undefined) {
       tally.rows += rows;
