@@ -501,6 +501,8 @@ describe("GB27, GB1, GB8, GB26: the group mode", () => {
   });
 });
 
+// Ports convex/groups/attributionInsertOnly.test.ts, historyInsertOnly.test.ts and transitionsInsertOnly.test.ts, which
+// scanned the sources, as behavior: the domain runs, and no earlier row of its four logs changes or goes.
 describe("GB9, GB10: the logs are only ever added to", () => {
   test("reconciling, picking, switching the group mode and attributing again leave every earlier log row as it was", async () => {
     postHogDeciding("sandbox");
