@@ -14,7 +14,7 @@ import { createOperations } from "../../operations.ts";
 import { websiteClock } from "../../db/schema/website.ts";
 import type { Denial, Verified } from "../memberQuery.ts";
 import { memberCommand, memberRead, type Route } from "./route.ts";
-import { apiHeader, apiTransport, maxBodyBytes, type MemberCheck, type SignedIn } from "./transport.ts";
+import { apiHeader, apiTransport, maxBodyBytes, type Enter, type Identity, type MemberCheck, type SignedIn } from "./transport.ts";
 
 const database = useTestDatabase();
 
@@ -32,13 +32,13 @@ function verifiedAs(signedIn: SignedIn, admin: boolean): Verified {
 type Gate = "admit" | Denial;
 
 function checkOf({ read, command }: { read: Gate; command: Gate }): MemberCheck {
-  const decide = (gate: Gate, signedIn: SignedIn | null, admin: boolean): Verified | Denial => {
-    if (signedIn === null) return { kind: "signed-out" };
-    return gate === "admit" ? verifiedAs(signedIn, admin) : gate;
+  const decide = (gate: Gate, identity: Identity, admin: boolean): Verified | Denial => {
+    if ("kind" in identity) return identity;
+    return gate === "admit" ? verifiedAs(identity, admin) : gate;
   };
   return {
-    read: async (_ctx, signedIn) => decide(read, signedIn, false),
-    command: async (_ctx, signedIn) => decide(command, signedIn, true),
+    read: async (_ctx, identity) => decide(read, identity, false),
+    command: async (_ctx, identity) => decide(command, identity, true),
   };
 }
 
@@ -64,7 +64,9 @@ const nested = memberRead("website.test.nested", { filter: z.strictObject({ week
 
 const allRoutes: Route[] = [greeting, ticks, tick, tickThenFail, nothing, closesItself, failing, nested];
 
-function apiWith({ read = "admit", command = "admit", routes = allRoutes }: { read?: Gate; command?: Gate; routes?: Route[] } = {}) {
+const entering: Enter = async (_ctx, identity) => ("kind" in identity ? identity : { kind: "entered" });
+
+function apiWith({ read = "admit", command = "admit", routes = allRoutes, enter = entering }: { read?: Gate; command?: Gate; routes?: Route[]; enter?: Enter | null } = {}) {
   const lines: Array<Record<string, unknown>> = [];
   const log = jsonLog((line) => lines.push(JSON.parse(line) as Record<string, unknown>));
   const clock = createClock();
@@ -72,7 +74,7 @@ function apiWith({ read = "admit", command = "admit", routes = allRoutes }: { re
   const identify = async (request: Request) => {
     const who = request.headers.get("x-signed-in-as") ?? "";
     if (who === "explodes") throw new Error("the identity lookup ran");
-    return people[who] ?? null;
+    return people[who] ?? { kind: "signed-out" as const };
   };
   const app = createApp({
     commit: "0123abc",
@@ -80,7 +82,7 @@ function apiWith({ read = "admit", command = "admit", routes = allRoutes }: { re
     off: false,
     log,
     clock,
-    routes: [apiTransport({ operations, log, routes, identify, check: checkOf({ read, command }) })],
+    routes: [apiTransport({ operations, log, routes, identify, check: checkOf({ read, command }), ...(enter !== null && { enter }) })],
   });
   const ticked = async () => (await (await app.request("/api/query/website.test.ticks", sent({}))).json()) as number[];
   return { app, lines, ticked };
@@ -342,6 +344,14 @@ describe("only the table's routes answer", () => {
       expect(answer.status, path).toBe(404);
       expect(answer.headers.get("content-type"), path).toMatch(/^application\/json/);
     }
+  });
+
+  test("a transport built without an entry, as a route test may build one, has no entry route", async () => {
+    const without = apiWith({ enter: null });
+    const withEntry = apiWith();
+
+    expect((await without.app.request("/api/entry", sent({}))).status).toBe(404);
+    expect(await (await withEntry.app.request("/api/entry", sent({}))).json()).toEqual({ kind: "entered" });
   });
 
   test("a read is never a command, nor a command a read", async () => {

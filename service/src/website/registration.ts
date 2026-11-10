@@ -1,23 +1,17 @@
 // The website domain's jobs, bus subscribers, cron jobs, Slack handlers and website routes. Only its stack fills it.
-import { notPorted } from "../notPorted.ts";
-import type { Registration } from "../registration.ts";
+import type { Registration, Routes } from "../registration.ts";
 import { websiteRoutes } from "./api/table.ts";
-import { apiTransport, type Identify, type MemberCheck } from "./api/transport.ts";
+import { apiTransport } from "./api/transport.ts";
+import type { Route } from "./api/route.ts";
+import { enter } from "./entry.ts";
+import { identifyByEmail } from "./identity.ts";
+import { admittedMember } from "./memberMutation.ts";
+import { verifiedMember } from "./memberQuery.ts";
 
-// Who a request is and today's member check arrive with the identity mapping (S15's 15.2); until then every route
-// fails by name.
-const identify: Identify = async () => {
-  throw notPorted("website.memberQuery.verifiedMember");
-};
-const check: MemberCheck = {
-  read: async () => {
-    throw notPorted("website.memberQuery.verifiedMember");
-  },
-  command: async () => {
-    throw notPorted("website.memberMutation.memberMutation");
-  },
-};
+/** The website's API over `routes`, for whoever the edge signed in, through today's member check. */
+export function websiteApi(routes: readonly Route[]): Routes {
+  return ({ operations, log }) =>
+    apiTransport({ operations, log, routes, identify: identifyByEmail({ operations, log }), check: { read: verifiedMember, command: admittedMember }, enter });
+}
 
-export const registration: Registration = {
-  routes: ({ operations, log }) => apiTransport({ operations, log, routes: websiteRoutes, identify, check }),
-};
+export const registration: Registration = { routes: websiteApi(websiteRoutes) };

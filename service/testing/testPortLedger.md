@@ -75,7 +75,7 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/analytics/projections.test.ts | S14 | | |
 | convex/analytics/questFinished.test.ts | S14 | | |
 | convex/analytics/skillTreeAndBook.test.ts | S14 | | |
-| convex/analytics/sweep.test.ts | S14 | | |
+| convex/analytics/sweep.test.ts | S14 | service/src/analytics/sweep.test.ts | |
 | convex/analytics/unlocks.test.ts | S14 | | |
 | convex/bus/replay.test.ts | S1 | | |
 | convex/bus/seams.guard.test.ts | S1 | | |
@@ -93,8 +93,8 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/feedback/oneReply.test.ts | S5 | | |
 | convex/feedback/questsHold.test.ts | S5 | | |
 | convex/feedback/replies.test.ts | S5 | service/src/feedback/replies.test.ts | |
-| convex/feedback/republishAdmins.test.ts | S5 | | |
-| convex/feedback/teaser.test.ts | S5 | | |
+| convex/feedback/republishAdmins.test.ts | S5 | service/src/feedback/republishAdmins.test.ts | S3 |
+| convex/feedback/teaser.test.ts | S5 | service/src/feedback/teaser.test.ts | S4 S8 S17 |
 | convex/feedback/welcomeNudge.test.ts | S5 | | |
 | convex/groups/attribution.test.ts | S11 | | |
 | convex/groups/attributionInsertOnly.test.ts | S11 | service/src/groups/groups.test.ts | |
@@ -118,16 +118,16 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/leaderboard/totals.test.ts | S11 | | |
 | convex/mondayDm/mondayDm.test.ts | S12 | | |
 | convex/progression/backfill.test.ts | S6 | | |
-| convex/progression/effectsInsertOnly.test.ts | S6 | | |
+| convex/progression/effectsInsertOnly.test.ts | S6 | service/src/progression/effectsInsertOnly.test.ts | |
 | convex/progression/gate.test.ts | S6 | | |
 | convex/progression/heldReward.test.ts | S6 | | |
 | convex/progression/hugRewards.test.ts | S6 | | |
 | convex/progression/perks.test.ts | S6 | | |
-| convex/progression/progress.test.ts | S6 | | |
+| convex/progression/progress.test.ts | S6 | service/src/progression/progress.test.ts | |
 | convex/progression/progression.test.ts | S6 | | |
 | convex/progression/questRewards.test.ts | S6 | | |
 | convex/progression/retiredPerks.test.ts | S6 | | |
-| convex/progression/rewardsInsertOnly.test.ts | S6 | | |
+| convex/progression/rewardsInsertOnly.test.ts | S6 | service/src/progression/rewardsInsertOnly.test.ts | |
 | convex/publicSurface.test.ts | S20 | | |
 | convex/quests/finishSeed.test.ts | S7 | | |
 | convex/quests/hugLadder.test.ts | S7 | | |
@@ -207,7 +207,7 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/slack/progressionHome.test.ts | S6 | | |
 | convex/slack/publicNotices.test.ts | S5 | | |
 | convex/slack/receiptCleanup.test.ts | S1 | | |
-| convex/slack/signIn.test.ts | S15 | | |
+| convex/slack/signIn.test.ts | S15 | service/src/website/identity.test.ts | S3 S6 |
 | convex/slack/skillTree.test.ts | S6 | | |
 | convex/slack/skillTreeFlag.test.ts | S6 | | |
 | convex/slack/stickerBookGate.test.ts | S10 | | |
