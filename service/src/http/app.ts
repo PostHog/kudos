@@ -44,6 +44,8 @@ export interface AppOptions {
 
 const slackPaths = /^\/slack(\/|$)/;
 const loadPaths = /^\/admin\/load(\/|$)/;
+const identifiedPaths = /^\/api\/(query|mutation)\//;
+const edgeIdentityHeaders = /^x[-_]auth[-_]request[-_]/i;
 
 export function createApp({ commit, readiness, off, log, clock, testSecret, worker, timeBudgetMs = 25_000, load, slack, routes = [], website }: AppOptions): Hono {
   const app = new Hono();
@@ -74,6 +76,16 @@ export function createApp({ commit, readiness, off, log, clock, testSecret, work
       status: c.res.status,
       durationMs: Math.round(performance.now() - started),
     });
+  });
+
+  // The edge names the signed-in person in its x-auth-request-* headers. Only the website API's reads and commands
+  // read them, so every other path loses them, and a name spelled with underscores, which a proxy may take for the
+  // same header, reaches no path at all.
+  app.use(async (c, next) => {
+    const identified = identifiedPaths.test(c.req.path);
+    const headers = c.req.raw.headers;
+    for (const name of [...headers.keys()]) if (edgeIdentityHeaders.test(name) && (!identified || name.includes("_"))) headers.delete(name);
+    await next();
   });
 
   // Answers at once, before the migrations finish, so the host sees the copy alive and a promotion sees its commit.
