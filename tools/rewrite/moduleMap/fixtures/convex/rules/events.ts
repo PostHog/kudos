@@ -26,6 +26,7 @@ export const loudnessValidator = v.union(...toneValidator.members, v.literal("qu
 export const tones: readonly string[] = toneValidator.members.map(({ value }) => value);
 export const fieldNames = ({ fields }: typeof messageRefValidator) => Object.keys(fields);
 export const nothingValidator = v.union();
+export const widerValidator = v.union(...nothingValidator.members, v.string());
 
 const refArgs = { ...messageRefValidator.fields, member: v.id("members") };
 export const refValidator = v.object(refArgs);

@@ -1,7 +1,7 @@
 // The codemod: a module whose body declares Convex validators, and touches no `ctx`, lands in the service with each
 // validator turned into the zod schema that accepts and rejects the same values:
 // - `v.object` becomes `z.strictObject`, since a Convex object refuses a field it doesn't declare;
-// - `v.union(a, b)` becomes `z.union([a, b])`, and `v.union()` `z.never()`;
+// - `v.union(a, b)` becomes `z.union([a, b])`, and `v.union()` `z.union([])`, which keeps `options` as Convex's keeps `members`;
 // - `v.number()`, `v.id(t)` and `v.record(v.string(), x)` become the service's `zv` schemas, where zod alone would judge
 //   apart; a record keyed otherwise is refused;
 // - `v.int64()` becomes `z.int64()`; `v.any()` and `v.bytes()`, which no module declares, are refused; every other
@@ -114,7 +114,8 @@ export function validatorEdits(checker: ts.TypeChecker, sourceFile: ts.SourceFil
     }
   }
   const convexName = (node: ts.Identifier) => {
-    const symbol = checker.getSymbolAtLocation(node);
+    // `export { v }` gives the specifier its own alias symbol: the import it names is what counts.
+    const symbol = ts.isExportSpecifier(node.parent) ? checker.getExportSpecifierLocalTargetSymbol(node.parent) : checker.getSymbolAtLocation(node);
     return symbol ? imported.get(symbol) : undefined;
   };
 
@@ -135,10 +136,10 @@ export function validatorEdits(checker: ts.TypeChecker, sourceFile: ts.SourceFil
       else if (node.typeArguments) refuse(node, `passes type arguments to v.${kind}, which zod's builders take differently`);
       else if (kind === "record" && !(key && isConvexCall(key, "string") && key.arguments.length === 0)) {
         refuse(node, "a record keyed other than by v.string(), which zod would require every key of");
-      } else if (kind === "union" && node.arguments.length === 0) replace(node.getStart(sourceFile), node.getEnd(), "z.never()");
-      else {
+      } else {
         replace(node.expression.getStart(sourceFile), node.expression.getEnd(), target);
-        if (kind === "union") {
+        if (kind === "union" && node.arguments.length === 0) replace(node.arguments.pos, node.arguments.end, "[]");
+        else if (kind === "union") {
           replace(node.arguments.pos, node.arguments.pos, "[");
           replace(node.arguments.end, node.arguments.end, "]");
         }
