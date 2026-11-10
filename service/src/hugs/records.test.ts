@@ -2,6 +2,7 @@
 // hugs/ that reach no other stack. Hugs on a kudos reach S4's awards and a hug's received side S3's directory; those
 // are proven by the ported Slack tests beside service/src/slack/.
 import { describe, expect, test } from "vitest";
+import { payHugPeople } from "./people.ts";
 import { useTestBackend } from "../../testing/backend.ts";
 import { fromTheNewestDecided } from "../engine/awards.ts";
 import type { MemberId } from "../workspace/directory.ts";
@@ -171,5 +172,36 @@ describe("a hug paid", () => {
     expect(await t.query((ctx) => hugsOnTheMessageAsOf(ctx, alice, ref, snapshots[3]!))).toBe(4);
     expect(await t.query((ctx) => hugsOnTheMessageAsOf(ctx, alice, ref, snapshots[0]! - 1))).toBe(0);
     expect(await t.query((ctx) => hugsOnTheMessageAsOf(ctx, bob, ref, snapshots[5]!))).toBe(0);
+  });
+});
+
+describe("paying a hug's people again", () => {
+  // The data move's recovery restarts payHugPeople from its event with no cursor: each person is still paid once.
+  test("a payHugPeople run again for the same hug pays its author once, counts once and announces once", async () => {
+    const t = backend();
+    const author = await t.seed.insert("members", { workspace: "T1", user: "U_ALICE", kind: "member", timeZone: "Europe/Berlin" });
+    const hug = hugBy(bob, "1.1", { author });
+    await t.run((ctx) => insertHug(ctx, hug));
+    const event = { type: "hugGiven" as const, workspace: "T1", giver: bob, message: { workspace: "T1", conversation: "C1", message: "1.1" }, onKudos: false, author, at, day: hug.day };
+
+    await t.run((ctx) => payHugPeople(ctx, { event }));
+    await t.run((ctx) => payHugPeople(ctx, { event }));
+
+    expect(await t.query((ctx) => newestHugsPaidTo(ctx, author, 0, 5))).toHaveLength(1);
+    expect(await t.query((ctx) => hugsOnTheMessageAsOf(ctx, author, event.message, Infinity))).toBe(1);
+    const announced = (await t.published()).filter(({ type }) => type === "hugReceived");
+    expect(announced).toEqual([expect.objectContaining({ person: author, giver: bob, week: "2026-10-12", message: event.message })]);
+  });
+
+  test("a hug whose author is no member pays no one", async () => {
+    const t = backend();
+    const gone = await t.seed.insert("members", { workspace: "T1", user: "U_GONE", kind: "not-a-member" });
+    const hug = hugBy(bob, "1.1", { author: gone });
+    await t.run((ctx) => insertHug(ctx, hug));
+
+    await t.run((ctx) => payHugPeople(ctx, { event: { type: "hugGiven", workspace: "T1", giver: bob, message: { workspace: "T1", conversation: "C1", message: "1.1" }, onKudos: false, author: gone, at, day: hug.day } }));
+
+    expect(await t.query((ctx) => newestHugsPaidTo(ctx, gone, 0, 5))).toEqual([]);
+    expect((await t.published()).filter(({ type }) => type === "hugReceived")).toEqual([]);
   });
 });
