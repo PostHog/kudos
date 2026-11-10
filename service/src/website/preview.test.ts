@@ -155,7 +155,7 @@ const meOf = (member: MemberId, { user, name }: { user: string; name: string }):
 
 describe("F26 F27 F28 F29: a member previews the website by their own decision", () => {
   describe("F26: signing in admits on the workspace decision or the member's own", () => {
-    waitsOn(["S3", "S4", "S6", "S7", "S8", "S9", "S10", "S11", "S15", "S16", "S17"], "while the website is closed for the workspace, the member it names by email signs in, sends their website exposure once, and reads their profile", async () => {
+    waitsOn(["S3", "S4", "S6", "S7", "S8", "S9", "S10", "S11", "S15", "S16"], "while the website is closed for the workspace, the member it names by email signs in, sends their website exposure once, and reads their profile", async () => {
       const member = await aMemberWithEmail(alice);
       await flagsServed(websiteForAlice);
 
@@ -221,7 +221,7 @@ describe("F26 F27 F28 F29: a member previews the website by their own decision",
       expect(await myProfile(asSignedIn)).toEqual({ kind: "closed" });
     });
 
-    waitsOn(["S3", "S4", "S6", "S7", "S8", "S9", "S10", "S11", "S15", "S16", "S17"], "with the website on for everyone, each member's pages follow their own XP, board and unlocks decisions", async () => {
+    waitsOn(["S3", "S4", "S6", "S7", "S8", "S9", "S10", "S11", "S15", "S16"], "with the website on for everyone, each member's pages follow their own XP, board and unlocks decisions", async () => {
       const alices = await aMemberWithEmail(alice);
       const bobs = await aMemberWithEmail(bob);
       await flagsServed(...websiteForEveryoneTheRestForAlice);
@@ -356,7 +356,7 @@ describe("F26 F27 F28 F29: a member previews the website by their own decision",
   });
 
   describe("F28: App Home's way in for a previewer", () => {
-    waitsOn(["S3", "S6", "S8", "S10", "S15", "S16", "S17"], "while the website is closed for the workspace, the previewer's App Home links to the direct sign-in entry of each page, and another member's has no link", async () => {
+    waitsOn(["S3", "S6", "S8", "S10", "S15", "S16"], "while the website is closed for the workspace, the previewer's App Home links to the direct sign-in entry of each page, and another member's has no link", async () => {
       const alices = await aMemberWithEmail(alice);
       const bobs = await aMemberWithEmail(bob);
       await flagsServed(...everythingForAlice);
@@ -376,7 +376,7 @@ describe("F26 F27 F28 F29: a member previews the website by their own decision",
       expect(bobsLinks).toBeNull();
     });
 
-    waitsOn(["S3", "S15", "S16", "S17"], "with the website on for the workspace, App Home links to the pages themselves", async () => {
+    waitsOn(["S3", "S15", "S16"], "with the website on for the workspace, App Home links to the pages themselves", async () => {
       await aMemberWithEmail(bob);
       await flagsServed(onForEveryone("website"));
 

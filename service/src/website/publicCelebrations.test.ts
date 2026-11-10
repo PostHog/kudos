@@ -42,7 +42,7 @@ const everyFlag = ["workspace-settings", "celebrations-switch", "message-setting
 // celebration (S4, S5, S6).
 const aWorkspaceRead: [Stack, ...Stack[]] = ["S3", "S4", "S5", "S6", "S11", "S12", "S15", "S16"];
 // And besides: the admin's App Home and its click (S4, S5, S17).
-const aWorkspaceInAppHome: [Stack, ...Stack[]] = ["S3", "S4", "S5", "S6", "S11", "S12", "S15", "S16", "S17"];
+const aWorkspaceInAppHome: [Stack, ...Stack[]] = ["S3", "S4", "S5", "S6", "S11", "S12", "S15", "S16"];
 
 type Row = Record<string, unknown>;
 

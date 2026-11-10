@@ -59,7 +59,7 @@ const commanding: Stack[] = ["S4", "S5", "S6", "S11", "S15"];
 //   board and givers (S11), the album's Slack switch and the delivery (S5);
 const posting: Stack[] = ["S4", "S5", "S6", "S7", "S8", "S9", "S10", "S11", "S12", "S13", "S14"];
 // - an admin's App Home and its Admin tab (S5's homes, S17's App Home).
-const homing: Stack[] = ["S5", "S17"];
+const homing: Stack[] = ["S5"];
 
 function stacks(...steps: Stack[][]): [Stack, ...Stack[]] {
   const all = [...new Set(steps.flat())].sort((a, b) => Number(a.slice(1)) - Number(b.slice(1)));

@@ -38,7 +38,7 @@ const avatarFlags = ["xp-levels", "unlocks", "achievements", "collection", "hogg
 
 // A member holding a hoggie: the unlocks and the Book shipped and opened (S6), a level reached with its level-up hoggies
 // (S10); then the pick: the launch guard (S15), the command runner (S4), the avatar (S10) and App Home's republish (S5, S17).
-const holdingAndPicking: [Stack, ...Stack[]] = ["S4", "S5", "S6", "S10", "S15", "S17"];
+const holdingAndPicking: [Stack, ...Stack[]] = ["S4", "S5", "S6", "S10", "S15"];
 // The member check through the whole app: S15's identity mapping and member check.
 const memberCheck: [Stack, ...Stack[]] = ["S15"];
 

@@ -31,7 +31,7 @@ const album = "album";
 // What getMyProfile reaches past the member check: the clock and member check (S15), homeFacts (S4), the unlock path,
 // inventory and book spread (S16), progression (S6), the wallet (S7), the album flag (S9), the avatar (S10), groups
 // (S11), and the settings and skill tree reads (S17's later slices).
-const profileStacks: [Stack, ...Stack[]] = ["S4", "S6", "S7", "S9", "S10", "S11", "S15", "S16", "S17"];
+const profileStacks: [Stack, ...Stack[]] = ["S4", "S6", "S7", "S9", "S10", "S11", "S15", "S16"];
 const memberCheck: [Stack, ...Stack[]] = ["S15"];
 
 const backend = useTestBackend({ now: now.getTime(), workspace: allowedWorkspace });

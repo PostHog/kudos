@@ -55,13 +55,13 @@ const levelSix = 1000;
 const aShopper: [Stack, ...Stack[]] = ["S6", "S10"];
 // A purchase: the launch guard (S15), the crate store and its bought crates (S10), the command runner (S4), the wallet
 // (S7), and App Home's republish (S5, S17), after a shopper.
-const buying: [Stack, ...Stack[]] = ["S4", "S5", "S6", "S7", "S10", "S15", "S17"];
+const buying: [Stack, ...Stack[]] = ["S4", "S5", "S6", "S7", "S10", "S15"];
 // A purchase read back from the Book's collection: getCollection, the website's read (S16).
-const buyingAndReading: [Stack, ...Stack[]] = ["S4", "S5", "S6", "S7", "S10", "S15", "S16", "S17"];
+const buyingAndReading: [Stack, ...Stack[]] = ["S4", "S5", "S6", "S7", "S10", "S15", "S16"];
 // A bought crate opened: openCrate, the website's command (S15), and the drop it opens (S8, S10).
-const opening: [Stack, ...Stack[]] = ["S4", "S5", "S6", "S7", "S8", "S10", "S15", "S16", "S17"];
+const opening: [Stack, ...Stack[]] = ["S4", "S5", "S6", "S7", "S8", "S10", "S15", "S16"];
 // The drop's product event, through the analytics drain (S14).
-const openingAndCapturing: [Stack, ...Stack[]] = ["S4", "S5", "S6", "S7", "S8", "S10", "S14", "S15", "S16", "S17"];
+const openingAndCapturing: [Stack, ...Stack[]] = ["S4", "S5", "S6", "S7", "S8", "S10", "S14", "S15", "S16"];
 
 type Row = Record<string, unknown>;
 type Person = { user: string; name: string };

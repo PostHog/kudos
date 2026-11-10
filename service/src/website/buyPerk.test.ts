@@ -60,7 +60,7 @@ const anOpenTreesGate: [Stack, ...Stack[]] = ["S6", "S10", "S15", "S16"];
 // Home's republish (S5), on an open tree.
 const aPurchase: [Stack, ...Stack[]] = ["S4", "S5", "S6", "S7", "S10", "S15", "S16"];
 // A purchase beside Slack's App Home: its receipt (S5) and the tab it renders (S17).
-const besideAppHome: [Stack, ...Stack[]] = ["S4", "S5", "S6", "S7", "S10", "S15", "S16", "S17"];
+const besideAppHome: [Stack, ...Stack[]] = ["S4", "S5", "S6", "S7", "S10", "S15", "S16"];
 
 type Row = Record<string, unknown>;
 type Written = { tables: Record<string, Row[]>; scheduled: Row[]; own: Record<string, Row[]> };

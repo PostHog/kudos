@@ -46,9 +46,9 @@ const unlocksFlags = ["everyone-board", "xp-levels", "unlocks"];
 const settingsRead: [Stack, ...Stack[]] = ["S5", "S6", "S11", "S12", "S15", "S16"];
 // What a settings command reaches besides: the command runner (S4), the launch guard (S15), App Home's republish (S5,
 // S17) and the Slack directory's user groups (S3).
-const settingsCommand: [Stack, ...Stack[]] = ["S3", "S4", "S5", "S6", "S11", "S15", "S16", "S17"];
+const settingsCommand: [Stack, ...Stack[]] = ["S3", "S4", "S5", "S6", "S11", "S15", "S16"];
 // Syncing Slack's user groups (S11), then the read or the command.
-const withGroups: [Stack, ...Stack[]] = ["S3", "S4", "S5", "S6", "S11", "S12", "S15", "S16", "S17"];
+const withGroups: [Stack, ...Stack[]] = ["S3", "S4", "S5", "S6", "S11", "S12", "S15", "S16"];
 // getMyProfile reaches homeFacts (S4), progression (S6), the wallet (S7), the album and avatar (S9, S10) and the rest.
 const profileStacks: [Stack, ...Stack[]] = ["S4", "S5", "S6", "S7", "S9", "S10", "S11", "S12", "S15", "S16"];
 // The member check through the whole app: S15's identity mapping and member check.

@@ -43,9 +43,9 @@ const unlocksFlags = ["everyone-board", "xp-levels", "unlocks"];
 
 // What the switch reaches: the unlock path and the board's state (S16), the launch guard (S15), the command runner (S4),
 // the boards (S11), unlocks (S6) and App Home's republish (S5, S17).
-const theSwitch: [Stack, ...Stack[]] = ["S4", "S5", "S6", "S11", "S15", "S16", "S17"];
+const theSwitch: [Stack, ...Stack[]] = ["S4", "S5", "S6", "S11", "S15", "S16"];
 // An open board on the unlock path: unlocks shipped and a level reached (S6) with its level-up hoggies (S10), then the switch.
-const onTheUnlockPath: [Stack, ...Stack[]] = ["S4", "S5", "S6", "S10", "S11", "S15", "S16", "S17"];
+const onTheUnlockPath: [Stack, ...Stack[]] = ["S4", "S5", "S6", "S10", "S11", "S15", "S16"];
 // The member check through the whole app: S15's identity mapping and member check.
 const memberCheck: [Stack, ...Stack[]] = ["S15"];
 

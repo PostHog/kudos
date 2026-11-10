@@ -53,7 +53,7 @@ const anOpenStore: [Stack, ...Stack[]] = ["S6", "S10"];
 const atTheGate: [Stack, ...Stack[]] = ["S6", "S7", "S10", "S15"];
 // A purchase through D17: the command runner (S4), the store and the wallet (S7), App Home's republish (S5, S17), with
 // the gate and an open store before it; App Home's Buy is Slack's receipt (S5).
-const buying: [Stack, ...Stack[]] = ["S4", "S5", "S6", "S7", "S10", "S15", "S17"];
+const buying: [Stack, ...Stack[]] = ["S4", "S5", "S6", "S7", "S10", "S15"];
 
 type Row = Record<string, unknown>;
 
