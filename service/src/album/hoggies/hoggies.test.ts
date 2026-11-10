@@ -1,21 +1,12 @@
 // Hoggie drops, the collection, avatars, bought crates and level-up finds on the service's transaction: the bodies of
-// S10's first slice, driven through the operation runner on Postgres with flags from the fake PostHog. Tests that reach
+// S10's first slice, driven through S4's test backend on Postgres with flags from the fake PostHog. Tests that reach
 // another stack's body (buying a crate spends from the wallet, earning level-up items writes the item ledger) follow in
 // the ported files once those stacks merge.
-import { asc, eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { z } from "zod";
-import { useTestDatabase } from "../../../testing/database.ts";
+import { useTestBackend } from "../../../testing/backend.ts";
 import { definitionsStored, onForEveryone, postHogDeciding } from "../../../testing/flags.ts";
-import { seeder } from "../../../testing/seed.ts";
-import { subscribersOf, type Subscription } from "../../bus/publish.ts";
-import { createClock } from "../../clock.ts";
-import { toDocument } from "../../db/documents.ts";
-import { flagExposures, jobs } from "../../db/schema/index.ts";
+import { flagExposures } from "../../db/schema/index.ts";
 import { fromTheNewestDecided } from "../../engine/awards.ts";
-import { mutationJob } from "../../jobs/define.ts";
-import type { Log } from "../../log.ts";
-import { createOperations, type MutationContext, type QueryContext } from "../../operations.ts";
 import type { MemberId } from "../../workspace/directory.ts";
 import { albumHoggiesOf } from "../albumHoggies.ts";
 import { levelUpCrateKeyOf, levelUpHoggiesOf, levelUpRevealOnFor } from "../levelUpHoggies.ts";
@@ -28,50 +19,22 @@ import { drawOf } from "./draw.ts";
 import { dropFor, dropOf, droppedIn, dropsByDecision, foundIn, lastFoundBy, packOf, putDropIn, recordFind, tallyOf, type DroppedAt } from "./drops.ts";
 import { highestForgedFor, rarityCapsShownTo, rarityRangeFor, welcomeRarities } from "./rarityCaps.ts";
 
-// S3 ports the directory. Until it merges, `chatUserOf` reads the member's row as today's does; nothing else of the
-// directory is stood in for.
-vi.mock("../../workspace/directory.ts", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../workspace/directory.ts")>();
-  const { members } = await import("../../db/schema/index.ts");
-  return {
-    ...actual,
-    chatUserOf: async ({ tx }: QueryContext, member: MemberId) => {
-      const [row] = await tx.select({ workspace: members.workspace, user: members.user }).from(members).where(eq(members._id, member));
-      if (row === undefined) throw new Error("no such member in the directory");
-      return row;
-    },
-  };
-});
-
-const database = useTestDatabase();
-const quiet: Log = { info: () => {}, error: () => {} };
 const at = Date.parse("2026-10-14T10:00:00Z");
 const hour = 60 * 60 * 1000;
 const secret = "draw-test";
-
-// The events the code under test published, read back from the jobs a recording subscriber got.
-const recorder = mutationJob("test.published", z.object({ event: z.looseObject({ type: z.string() }) }), async () => {});
-const recorded = ["hoggieDropped", "crateBought"].map((event) => ({ event, job: recorder })) as Subscription<any>[];
+const backendOf = useTestBackend({ now: at });
 
 function backend() {
-  let offset = 0;
-  const clock = createClock({ real: () => at + offset });
-  const operations = createOperations({ pool: database.pool, clock, log: quiet, retryDelayMs: () => 1, subscribers: subscribersOf(recorded) });
-  const seed = seeder(operations);
+  const t = backendOf();
   return {
-    seed,
-    later: (ms: number) => void (offset += ms),
-    flagsOn: (...keys: string[]) => definitionsStored(operations, ...keys.map(onForEveryone)),
-    mutation: <T>(handler: (ctx: MutationContext) => Promise<T>) => operations.mutation("test.mutation", handler),
-    query: <T>(handler: (ctx: QueryContext) => Promise<T>) => operations.query("test.query", handler),
-    published: () =>
-      operations.query("test.published", async ({ tx }) => {
-        const rows = await tx.select().from(jobs).where(eq(jobs.name, recorder.name)).orderBy(asc(jobs._creationTime), asc(jobs._id));
-        return rows.map((row) => toDocument<{ args: { event: Record<string, unknown> } }>(jobs, row).args.event);
-      }),
-    exposures: () =>
-      operations.query("test.exposures", async ({ tx }) => (await tx.select().from(flagExposures)).map(({ member, flag }) => ({ member, flag }))),
-    member: (user: string) => seed.insert("members", { workspace: "T1", user, kind: "member" }) as Promise<MemberId>,
+    seed: t.seed,
+    later: (ms: number) => void t.time.advance(ms),
+    flagsOn: (...keys: string[]) => definitionsStored(t.operations, ...keys.map(onForEveryone)),
+    mutation: t.run,
+    query: t.query,
+    published: t.published,
+    exposures: () => t.query(async ({ tx }) => (await tx.select().from(flagExposures)).map(({ member, flag }) => ({ member, flag }))),
+    member: (user: string) => t.seed.insert("members", { workspace: "T1", user, kind: "member" }) as Promise<MemberId>,
   };
 }
 
@@ -236,6 +199,22 @@ describe("the walk by decision", () => {
     expect((await walk(t, alice, { decided: decided[10]!, inclusive: true })).map(({ n }) => n)).toEqual(all.slice(10).map(({ n }) => n));
     expect((await walk(t, alice, { decided: decided[10]!, inclusive: false })).map(({ n }) => n)).toEqual(all.slice(11).map(({ n }) => n));
     expect((await walk(t, alice, { decided: Infinity, inclusive: true, above: decided[5]! })).map(({ n }) => n)).toEqual(all.slice(0, 5).map(({ n }) => n));
+  });
+
+  test("walks drops decided at one moment by id, each once, past a first read whose drops all wait in the tray", async () => {
+    const { t, alice } = await collecting();
+    const hoggie = hoggiesOfRarity("common")[0]!;
+    const ids = Array.from({ length: 120 }, (_, n) => `drop-${String(n).padStart(3, "0")}`);
+    for (const [n, _id] of ids.entries()) {
+      await t.seed.insert("drops", { _id, _creationTime: at, member: alice, crate: `thoughtful:pack-${n}`, hoggie: hoggie.hoggie, rarity: hoggie.rarity, n: n + 1, copy: n + 1, catalogueVersion: catalogue.version, at });
+    }
+    // The walk reads newest first, so the greatest ids come first: the 50 of them fill its first read and all wait.
+    const newestFirst = ids.toReversed();
+    for (const _id of newestFirst.slice(0, 50)) await t.seed.insert("trayDrops", { member: alice, crate: `thoughtful:pack-${ids.indexOf(_id)}` });
+
+    const walked = (await walk(t, alice)).map(({ n }) => ids[n - 1]);
+
+    expect(walked).toEqual(newestFirst.slice(50));
   });
 });
 
