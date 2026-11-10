@@ -6,13 +6,14 @@ import { type GroupsBoard } from "./groupsBoard.ts";
 import { type MyGroupBoard } from "./myGroupBoard.ts";
 import { periodValidator, type Compared, type Period } from "./periods.ts";
 import { z } from "zod";
+import type { Id } from "../db/columns.ts";
 import type { QueryContext } from "../operations.ts";
 import { notPorted } from "../notPorted.ts";
 
 export type GroupBoards = { groups: GroupsBoard<GroupId> | null; myGroup: MyGroupBoard | null };
 
 export const groupsBoardOfArgs = z.strictObject({ workspace: z.string(), viewer: z.string(), period: periodValidator });
-export async function groupsBoardOf(ctx: QueryContext, args: z.infer<typeof groupsBoardOfArgs>): Promise<null | import("./groupsBoard.ts").GroupsBoard<string & { __tableName: "userGroups" }>> {
+export async function groupsBoardOf(ctx: QueryContext, args: z.infer<typeof groupsBoardOfArgs>): Promise<null | import("./groupsBoard.ts").GroupsBoard<Id<"userGroups">>> {
   throw notPorted("leaderboard.groupBoards.groupsBoardOf");
 }
 

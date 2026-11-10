@@ -275,7 +275,7 @@ describe("the bootstrap's choice of tool", () => {
 });
 
 describe("the skeleton generator", () => {
-  const modules = ["convex/skeleton/awards.ts", "convex/skeleton/caller.ts", "convex/skeleton/tangled.ts", "convex/skeleton/edges.ts", "convex/skeleton/refused.ts", "convex/skeleton/inline.ts", "convex/skeleton/shadowed.ts", "convex/skeleton/appTypes.ts", "convex/skeleton/helpers.ts", "convex/skeleton/wrapped.ts"];
+  const modules = ["convex/skeleton/awards.ts", "convex/skeleton/caller.ts", "convex/skeleton/tangled.ts", "convex/skeleton/edges.ts", "convex/skeleton/refused.ts", "convex/skeleton/inline.ts", "convex/skeleton/shadowed.ts", "convex/skeleton/appTypes.ts", "convex/skeleton/helpers.ts", "convex/skeleton/wrapped.ts", "convex/skeleton/printed.ts"];
   const program = ts.createProgram(modules.map(onDisk), compilerOptions);
   const sourceFiles = modules.map((module) => program.getSourceFile(onDisk(module))!);
   const reached = reachedByName(sourceFiles);
@@ -285,6 +285,14 @@ describe("the skeleton generator", () => {
   const appTypes = landed(skeleton(7));
   const helpers = landed(skeleton(8));
   const wrapped = landed(skeleton(9));
+  const printed = landed(skeleton(10));
+
+  test("prints an ID that lost its alias as the service's Id, parenthesizes a union of objects in an array, and leaves out a type the checker can't resolve", () => {
+    expect(printed.text).toContain('export async function tagged(ctx: QueryContext): Promise<Id<"members">> {');
+    expect(printed.text).toContain("export async function lines(ctx: QueryContext): Promise<({ text: string } | { link: string })[]> {");
+    expect(printed.text).not.toContain("sorted");
+    expect(printed.omitted).toEqual(["sorted: names a type the checker can't resolve, so its signature can't be printed"]);
+  });
 
   test("finds every function reached by name: run in place by an action, or later by the scheduler, a cron or the bus", () => {
     expect(Object.fromEntries([...reached].map(([path, how]) => [path, [...how]]))).toEqual({

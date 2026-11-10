@@ -28,11 +28,8 @@ const machinery = /(^|\/)_generated\/(api|server)(\.[jt]s)?$|^convex\/server$/;
 /** Every listed module as its tool lands it, and what keeps the list from landing: refusals and unresolved imports. */
 export function landAll(repo: string, paths: readonly string[] = landed): { modules: LandedModule[]; problems: string[] } {
   const exists = (path: string) => existsSync(join(repo, path));
-  // Every module of convex/, since a skeleton keeps what any of them reaches by name.
-  const program = ts.createProgram(
-    [...new Set([...convexModules(repo), ...paths].map((path) => join(repo, path)))],
-    { strict: true, module: ts.ModuleKind.ESNext, moduleResolution: ts.ModuleResolutionKind.Bundler, noEmit: true, skipLibCheck: true },
-  );
+  // Every module of convex/, since a skeleton keeps what any of them reaches by name, checked as Convex checks them.
+  const program = ts.createProgram([...new Set([...convexModules(repo), ...paths].map((path) => join(repo, path)))], convexOptions(repo));
   let reachedOnce: ReturnType<typeof reachedByName> | undefined;
   const reached = () => (reachedOnce ??= reachedByName(program.getSourceFiles().filter((file) => file.fileName.startsWith(join(repo, convexRoot, "/")) && !file.fileName.includes("/_generated/"))));
   const modules: LandedModule[] = [];
@@ -56,6 +53,14 @@ export function toolOf(program: ts.Program, sourceFile: ts.SourceFile, convexPat
   const imported = sourceFile.statements.flatMap((node) => ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier) ? [node.moduleSpecifier.text] : []));
   if (imported.some((specifier) => machinery.test(specifier)) || overContext(program.getTypeChecker(), sourceFile)) return "skeleton";
   return imported.some((specifier) => convexPackage.test(specifier)) || validatorEdits(program.getTypeChecker(), sourceFile, convexPath).edits.length > 0 ? "convert" : "copy";
+}
+
+/** convex/tsconfig.json's options, whose libs (ES2023's `toSorted`) the printer needs to resolve what a module returns. */
+function convexOptions(repo: string): ts.CompilerOptions {
+  const folder = join(repo, convexRoot);
+  const { config, error } = ts.readConfigFile(join(folder, "tsconfig.json"), ts.sys.readFile);
+  if (error) throw new Error(ts.flattenDiagnosticMessageText(error.messageText, "\n"));
+  return { ...ts.parseJsonConfigFileContent(config, ts.sys, folder).options, noEmit: true };
 }
 
 /** Every module of convex/ but its tests, declarations and generated code, from the repository's root. */

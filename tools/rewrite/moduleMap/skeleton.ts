@@ -674,7 +674,11 @@ function typePrinter(checker: ts.TypeChecker, servicePath: string, localNames: R
   };
   const printType = (type: ts.Type): string => {
     const flags = type.flags;
-    if (flags & ts.TypeFlags.Any) return "any";
+    if (flags & ts.TypeFlags.Any) {
+      // The checker's error type is an `any` too: a name it couldn't resolve (a lib the program lacks), not the module's own `any`.
+      if ((type as { intrinsicName?: string }).intrinsicName === "error") throw new Error("names a type the checker can't resolve, so its signature can't be printed");
+      return "any";
+    }
     if (flags & ts.TypeFlags.Unknown) return "unknown";
     if (flags & ts.TypeFlags.Never) return "never";
     if (flags & ts.TypeFlags.Void) return "void";
@@ -694,6 +698,9 @@ function typePrinter(checker: ts.TypeChecker, servicePath: string, localNames: R
     const fromConvex = (symbol: ts.Symbol) => symbol.declarations?.some((declaration) => /\/node_modules\/convex\/|\/_generated\/dataModel(\.d)?\.ts$/.test(declaration.getSourceFile().fileName)) ?? false;
     if (alias && (alias.name === "Id" || alias.name === "GenericId") && fromConvex(alias) && type.aliasTypeArguments?.length === 1) return `${want("db/columns.ts", "Id")}<${print(type.aliasTypeArguments[0]!)}>`;
     if (type.isUnion()) return printUnion(type.types);
+    // An ID whose alias inference dropped is Convex's `string & { __tableName: T }`.
+    const table = type.isIntersection() && type.types.length === 2 && type.types.some((member) => member.flags & ts.TypeFlags.String) ? tableOfBrand(type.types.find((member) => !(member.flags & ts.TypeFlags.String))!) : undefined;
+    if (table) return `${want("db/columns.ts", "Id")}<${JSON.stringify(table)}>`;
     if (type.isIntersection()) return type.types.map((member) => parenthesize(print(member))).join(" & ");
     if (alias) {
       const module = fromConvexModule(alias.declarations?.[0]);
@@ -772,7 +779,27 @@ function typePrinter(checker: ts.TypeChecker, servicePath: string, localNames: R
     return mapped;
   };
   const typeArguments = (args: readonly ts.Type[] | undefined) => (args && args.length > 0 ? `<${args.map(print).join(", ")}>` : "");
-  const parenthesize = (printed: string) => (/[|&]/.test(printed) && !/^[{[(]/.test(printed) ? `(${printed})` : printed);
+  const tableOfBrand = (brand: ts.Type) => {
+    const [property, ...rest] = brand.flags & ts.TypeFlags.Object ? checker.getPropertiesOfType(brand) : [];
+    const table = property?.name === "__tableName" && rest.length === 0 ? checker.getTypeOfSymbol(property) : undefined;
+    return table?.isStringLiteral() ? table.value : undefined;
+  };
+  // A union or intersection at the top level, outside brackets and string literals, needs parentheses inside `[]`, `?` or `&`.
+  const parenthesize = (printed: string) => {
+    let nesting = 0;
+    let quote: string | undefined;
+    for (let index = 0; index < printed.length; index++) {
+      const char = printed[index]!;
+      if (quote) {
+        if (char === "\\") index++;
+        else if (char === quote) quote = undefined;
+      } else if (char === '"' || char === "'" || char === "`") quote = char;
+      else if ("{[(<".includes(char)) nesting++;
+      else if ("}])>".includes(char) && !(char === ">" && printed[index - 1] === "=")) nesting--;
+      else if (nesting === 0 && (char === "|" || char === "&")) return `(${printed})`;
+    }
+    return printed;
+  };
   return {
     imports: imports as ReadonlyMap<string, Set<string>>,
     /** This module's own types the printer named. */

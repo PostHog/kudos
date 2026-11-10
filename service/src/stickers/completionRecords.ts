@@ -5,6 +5,7 @@ import type { MemberId } from "../workspace/directory.ts";
 import type { RecordedCompletion } from "./teamPages.ts";
 import { z } from "zod";
 import { zv } from "../values.ts";
+import type { Id } from "../db/columns.ts";
 import type { QueryContext } from "../operations.ts";
 import { notPorted } from "../notPorted.ts";
 
@@ -31,6 +32,6 @@ export async function teamsCompletedBy(ctx: QueryContext, member: MemberId): Pro
   throw notPorted("stickers.completionRecords.teamsCompletedBy");
 }
 
-export async function completionRecordsInOrder(ctx: QueryContext, member: MemberId): Promise<any> {
+export async function completionRecordsInOrder(ctx: QueryContext, member: MemberId): Promise<{ award: Id<"awards">; at: number; told: boolean }[]> {
   throw notPorted("stickers.completionRecords.completionRecordsInOrder");
 }
