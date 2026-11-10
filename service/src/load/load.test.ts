@@ -538,7 +538,7 @@ describe("tables the data model doesn't own", () => {
 describe("recovery", () => {
   const scheduled = (_id: string, name: string, state: Doc, args: Doc = {}, extra: Doc = {}): Doc => ({ _id, _creationTime: 7, name, args: [args], scheduledTime: 1_000, state, ...extra });
   const jobsNow = async () =>
-    (await database.pool.query(`select _id, "_creationTime", name, args, "runAt", kind, state, error, "completedAt" from jobs order by _id`)).rows.map((row) => ({
+    (await database.pool.query(`select _id, "_creationTime", name, args, "runAt", kind, state, error, "completedAt", "sweptAt" from jobs order by _id`)).rows.map((row) => ({
       ...row,
       args: decodeStored(row.args),
     }));
@@ -563,14 +563,15 @@ describe("recovery", () => {
 
     const jobs = await jobsNow();
     const kept = { _creationTime: 7, runAt: 1_000 };
-    expect(jobs.map(({ completedAt, ...job }) => ({ ...job, completed: completedAt !== null }))).toStrictEqual([
-      { ...kept, _id: "j1", name: "slack.delivery.sendReply", args: { attempt: 3n }, kind: "mutation", state: "pending", error: null, completed: false },
-      { ...kept, _id: "j2", name: "slack.delivery.sendReply", args: { attempt: 1n }, kind: "mutation", state: "pending", error: null, completed: false },
-      { ...kept, _id: "j3", name: "slack.delivery.send", args: { text: "hi" }, kind: "action", state: "failed", error: "Running when Convex stopped: an action runs at most once", completed: true },
-      { ...kept, _id: "j4", name: "slack.delivery.send", args: { text: "hi" }, kind: "action", state: "success", error: null, completed: true },
-      { ...kept, _id: "j5", name: "slack.delivery.send", args: { text: "hi" }, kind: "action", state: "failed", error: "Slack said no", completed: true },
-      { ...kept, _id: "j6", name: "slack.delivery.sendReply", args: { attempt: 1n }, kind: "mutation", state: "canceled", error: null, completed: true },
-      { ...kept, _id: "j7", name: "_components/posthog/lib.refreshLoop", args: {}, kind: "mutation", state: "canceled", error: "Retired at the move", completed: true },
+    // A failed job arrives swept: Convex's sweep reported its failures, and the service's sweep reports only its own.
+    expect(jobs.map(({ completedAt, sweptAt, ...job }) => ({ ...job, completed: completedAt !== null, swept: sweptAt !== null }))).toStrictEqual([
+      { ...kept, _id: "j1", name: "slack.delivery.sendReply", args: { attempt: 3n }, kind: "mutation", state: "pending", error: null, completed: false, swept: false },
+      { ...kept, _id: "j2", name: "slack.delivery.sendReply", args: { attempt: 1n }, kind: "mutation", state: "pending", error: null, completed: false, swept: false },
+      { ...kept, _id: "j3", name: "slack.delivery.send", args: { text: "hi" }, kind: "action", state: "failed", error: "Running when Convex stopped: an action runs at most once", completed: true, swept: true },
+      { ...kept, _id: "j4", name: "slack.delivery.send", args: { text: "hi" }, kind: "action", state: "success", error: null, completed: true, swept: false },
+      { ...kept, _id: "j5", name: "slack.delivery.send", args: { text: "hi" }, kind: "action", state: "failed", error: "Slack said no", completed: true, swept: true },
+      { ...kept, _id: "j6", name: "slack.delivery.sendReply", args: { attempt: 1n }, kind: "mutation", state: "canceled", error: null, completed: true, swept: false },
+      { ...kept, _id: "j7", name: "_components/posthog/lib.refreshLoop", args: {}, kind: "mutation", state: "canceled", error: "Retired at the move", completed: true, swept: false },
     ]);
     expect(jobs.find((job) => job._id === "j4")!.completedAt, "a finished job keeps when it finished").toBe(2_000);
     expect((await service.request("/anything", { token: null })).status, "done releases the hold").toBe(404);

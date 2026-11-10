@@ -6,7 +6,6 @@ import { useTestBackend, type TestBackend } from "../../testing/backend.ts";
 import { postHogHost, projectToken } from "../../testing/fakePostHog.ts";
 import type { Id } from "../db/columns.ts";
 import { encodeStored } from "../db/codec.ts";
-import { reportedJobs } from "../db/schema/index.ts";
 import { jobs } from "../db/schema/service.ts";
 import { cronSchedules } from "../jobs/crons.ts";
 import { actionJob, jobRegistry, mutationJob } from "../jobs/define.ts";
@@ -159,41 +158,6 @@ describe("O22: the failed-job sweep", () => {
     await sweepAfter(t, minutes(15));
 
     expect(exceptions(t)).toEqual([]);
-  });
-
-  test("records nothing of a job Convex reported before the move, however long it sweeps after", async () => {
-    const t = backend();
-    const job = await failedJob(t, "welcome.welcome.welcomeNewMembers", "Uncaught Error: gone");
-    await t.seed.insert("reportedJobs", { job });
-
-    await sweepAfter(t, minutes(15));
-    await sweepAfter(t, days(7));
-    await sweepAfter(t, minutes(15));
-
-    expect(await t.query(({ tx }) => tx.select().from(reportedJobs)), "Convex's report forgotten after a week").toEqual([]);
-    expect(exceptions(t)).toEqual([]);
-  });
-
-  test("records a job Convex was still watching when it moved, whatever cursor Convex's sweep had reached", async () => {
-    const t = backend();
-    const job = await failedJob(t, "welcome.welcome.welcomeNewMembers", "Uncaught Error: gone", { completedAt: start - minutes(30) });
-    await t.seed.insert("errorSweep", { cursor: start, watchCursor: 0 });
-    await t.seed.insert("watchedJobs", { job });
-
-    await sweepAfter(t, minutes(15));
-
-    expect(paths(t)).toEqual(["welcome/welcome:welcomeNewMembers"]);
-  });
-
-  test("takes in a failure older than a week without recording it, as today's sweep never read so far back", async () => {
-    const t = backend();
-    await failedJob(t, "welcome.welcome.welcomeNewMembers", "Uncaught Error: gone", { completedAt: start - days(8) });
-
-    await sweepAfter(t, minutes(15));
-    await sweepAfter(t, minutes(15));
-
-    expect(exceptions(t)).toEqual([]);
-    expect(await unswept(t)).toEqual([]);
   });
 });
 
