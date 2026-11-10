@@ -1,5 +1,11 @@
-// The module map's skeleton of convex/quests/recognitions.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
-// notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
+// What each giver has done toward their quests: one fact per kudos message or hug, recorded once, from their quest start.
+// Today's convex/quests/recognitions.ts over the service's transaction.
+import { and, eq, gte, lte } from "drizzle-orm";
+import { weekOf } from "../engine/allowance.ts";
+import { fromDocument, toDocument } from "../db/documents.ts";
+import { indexOrder } from "../db/indexOrder.ts";
+import { questRecognitions, type Doc } from "../db/schema/index.ts";
+import { questStartOf } from "./start.ts";
 import type { HugGivenEvent, KudosGivenEvent } from "../bus/events.ts";
 import { messageRefValidator } from "../engine/messageEvent.ts";
 import type { MemberId } from "../workspace/directory.ts";
@@ -7,7 +13,6 @@ import type { WeekKey } from "./week.ts";
 import { z } from "zod";
 import { zv } from "../values.ts";
 import type { MutationContext, QueryContext } from "../operations.ts";
-import { notPorted } from "../notPorted.ts";
 
 export const recognitionFactValidator = z.strictObject({
   source: z.union([z.literal("kudos"), z.literal("hug")]),
@@ -32,10 +37,44 @@ export function factOfHugGiven({ workspace, giver, author, message, day, at }: H
   return { source: "hug", workspace, giver, people: author === undefined ? [] : [author], kudos: 0, message, day, at };
 }
 
+const byGiverKey = indexOrder(questRecognitions, ["giver", "key"]);
+const byGiverDay = indexOrder(questRecognitions, ["giver", "day"]);
+
 export async function recognize(ctx: MutationContext, fact: RecognitionFact): Promise<boolean> {
-  throw notPorted("quests.recognitions.recognize");
+  const start = await questStartOf(ctx, fact.giver);
+  if (start === null || fact.at < start) return false;
+  const key = keyOf(fact);
+  if (await isRecognized(ctx, fact.giver, key)) return false;
+  await ctx.tx.insert(questRecognitions).values(fromDocument(questRecognitions, { ...ctx.newRow(), ...fact, key }) as typeof questRecognitions.$inferInsert);
+  return true;
 }
 
 export async function recognitionsOf(ctx: QueryContext, giver: MemberId, week: WeekKey): Promise<RecognitionFact[]> {
-  throw notPorted("quests.recognitions.recognitionsOf");
+  const { monday, sunday } = weekOf(week);
+  const rows = await ctx.tx
+    .select()
+    .from(questRecognitions)
+    .where(and(eq(questRecognitions.giver, giver), gte(questRecognitions.day, monday), lte(questRecognitions.day, sunday)))
+    .orderBy(...byGiverDay.orderBy());
+  return rows.map((row) => {
+    const { _id, _creationTime, key, ...fact } = toDocument<Doc<"questRecognitions">>(questRecognitions, row);
+    return fact;
+  });
+}
+
+function keyOf({ source, message, people }: RecognitionFact): string {
+  const where = `${source}:${message.conversation}:${message.message}`;
+  return source === "kudos" ? `${where}:${people.toSorted().join(",")}` : where;
+}
+
+/** Whether the giver has a fact under this key; two fail, as `.unique()` did. */
+async function isRecognized(ctx: QueryContext, giver: MemberId, key: string): Promise<boolean> {
+  const rows = await ctx.tx
+    .select({ _id: questRecognitions._id })
+    .from(questRecognitions)
+    .where(and(eq(questRecognitions.giver, giver), eq(questRecognitions.key, key)))
+    .orderBy(...byGiverKey.orderBy())
+    .limit(2);
+  if (rows.length > 1) throw new Error("The giver has more than one recognition under one key");
+  return rows.length === 1;
 }
