@@ -4,8 +4,9 @@
 // - `after`: the rows that follow a document in that order, for keyset paging. A plain row-value comparison,
 //   `(a, b) > ($1, $2)`, yields NULL where a field is NULL and drops those rows, so this one is spelled out field by
 //   field: equal on every earlier field and after on this one, where both "equal" and "after" know NULL.
-// - Paging: an index over a jsonb field can't be paged. Postgres orders jsonb by its own rules, not Convex's, and a
-//   missing field (SQL NULL) and a JSON null would share one place, so a walk could repeat or skip rows.
+// - Paging: only an index over strings, floats, booleans and int64 can be paged. Postgres orders jsonb by its own rules,
+//   not Convex's, and a missing field (SQL NULL) and a JSON null would share one place; a cursor can't carry bytes as
+//   the column compares them. Either way a walk could repeat or skip rows, so paging such an index throws.
 import { and, eq, getTableColumns, getTableName, gt, isNotNull, isNull, lt, or, sql, type Column, type SQL } from "drizzle-orm";
 import type { PgTable } from "drizzle-orm/pg-core";
 
@@ -22,7 +23,7 @@ export interface IndexOrder {
   keyOf(document: Readonly<Record<string, unknown>>): Record<string, unknown>;
   /** Whether `place` is one `keyOf` could give: each key there, of its column's kind, null only where it may be missing. */
   isPlace(place: unknown): place is Record<string, unknown>;
-  /** Throws when the index can't be paged, because a field of it is stored as jsonb; `after` and `keyOf` throw too. */
+  /** Throws when the index can't be paged, because a field of it is of a kind paging doesn't know; `after` and `keyOf` throw too. */
   refuseUnpageable(): void;
 }
 
@@ -54,9 +55,9 @@ export function indexOrder<Table extends PgTable>(table: Table, fields: Readonly
   });
 
   const name = `${getTableName(table)}(${fields.join(", ")})`;
-  const jsonb = fields.filter((field) => all[field]!.getSQLType() === "jsonb");
+  const unpageable = fields.map((field) => all[field]!).filter((column) => kindOf(column) === undefined);
   const refuseUnpageable = () => {
-    if (jsonb.length > 0) throw new Error(`${name} can't be paged: ${jsonb.join(", ")} is stored as jsonb, which Postgres orders unlike Convex`);
+    if (unpageable.length > 0) throw new Error(`${name} can't be paged: ${unpageable.map((column) => `${column.name} is stored as ${column.getSQLType()}`).join(", ")}, which paging doesn't know`);
   };
 
   const order: IndexOrder = {
@@ -93,8 +94,15 @@ export function indexOrder<Table extends PgTable>(table: Table, fields: Readonly
 
 // A column's values: a value of its kind, or null where the field may be missing. `_creationTime` and `_id` never are.
 function acceptsOf(column: Column): (value: unknown) => boolean {
-  const kind = ({ 'text COLLATE "C"': "string", "double precision": "number", boolean: "boolean", bigint: "bigint" } as Record<string, string>)[column.getSQLType()];
-  return (value) => (value === null ? !column.notNull && column.name !== "_creationTime" && column.name !== "_id" : kind === undefined || typeof value === kind);
+  const kind = kindOf(column);
+  return (value) => (value === null ? !column.notNull && column.name !== "_creationTime" && column.name !== "_id" : kind !== undefined && typeof value === kind);
+}
+
+// The kinds paging knows, by column type: Postgres orders each as Convex does, and a cursor carries each as it is.
+const pagedKinds: Record<string, "string" | "number" | "boolean" | "bigint"> = { 'text COLLATE "C"': "string", "double precision": "number", boolean: "boolean", bigint: "bigint" };
+
+function kindOf(column: Column): "string" | "number" | "boolean" | "bigint" | undefined {
+  return pagedKinds[column.getSQLType()];
 }
 
 function sameShape(expected: unknown, actual: unknown): boolean {
