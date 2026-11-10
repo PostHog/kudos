@@ -5,6 +5,7 @@ import { indexOrder } from "../db/indexOrder.ts";
 import { questStarts } from "../db/schema/index.ts";
 import type { MemberId } from "../workspace/directory.ts";
 import type { MutationContext, QueryContext } from "../operations.ts";
+import { unique } from "../db/unique.ts";
 
 const byMember = indexOrder(questStarts, ["member"]);
 
@@ -15,6 +16,5 @@ export async function startQuests(ctx: MutationContext, member: MemberId, at: nu
 /** The member's start, or `null`; two starts fail, as `.unique()` did. */
 export async function questStartOf(ctx: QueryContext, member: MemberId): Promise<number | null> {
   const rows = await ctx.tx.select({ at: questStarts.at }).from(questStarts).where(eq(questStarts.member, member)).orderBy(...byMember.orderBy()).limit(2);
-  if (rows.length > 1) throw new Error("The member has more than one quest start");
-  return rows[0]?.at ?? null;
+  return unique("questStarts", rows)?.at ?? null;
 }
