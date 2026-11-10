@@ -1,9 +1,9 @@
 // The module map's skeleton of convex/leaderboard/groupBoards.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
 // notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
-import { type GroupId } from "../groups/groups.ts";
-import { type MemberId } from "../workspace/directory.ts";
-import { type GroupsBoard } from "./groupsBoard.ts";
-import { type MyGroupBoard } from "./myGroupBoard.ts";
+import type { GroupId } from "../groups/groups.ts";
+import type { MemberId } from "../workspace/directory.ts";
+import type { GroupsBoard } from "./groupsBoard.ts";
+import type { MyGroupBoard } from "./myGroupBoard.ts";
 import { periodValidator, type Compared, type Period } from "./periods.ts";
 import { z } from "zod";
 import type { Id } from "../db/columns.ts";
