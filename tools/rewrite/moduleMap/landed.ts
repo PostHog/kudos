@@ -235,7 +235,6 @@ export const landed = [
   "convex/slack/checklist.ts",
   "convex/slack/commandReplies.ts",
   "convex/slack/commands.ts",
-  "convex/slack/customEmoji.ts",
   "convex/slack/customEmojiPicker.ts",
   "convex/slack/directory.ts",
   "convex/slack/events.ts",
