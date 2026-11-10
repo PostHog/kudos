@@ -19,7 +19,7 @@ import { serviceRegistry } from "../registry.ts";
 import type { EventKind } from "./frontDoor.ts";
 import type { MemberId } from "../workspace/directory.ts";
 import { setHugBudget as setHugBudgetOf } from "../workspace/settings.ts";
-import { useTestBackend, type LogLine, type TestBackend } from "../../testing/backend.ts";
+import { useTestBackend, type BackendOptions, type LogLine, type TestBackend } from "../../testing/backend.ts";
 import type { Stack } from "../../testing/waiting.ts";
 import { flagsFromPostHog, onForEveryone } from "../../testing/flags.ts";
 import { flagsKey, postHogHost, projectToken, type FlagDefinition } from "../../testing/fakePostHog.ts";
@@ -46,8 +46,8 @@ export function slackTs(at: number) {
  * `Date` at `now`), and a backend per test whose app clock starts at `Date.now()`: a test that sets the system time
  * before it starts its backend starts the app's clock there, as Convex's test backend followed the faked time.
  */
-export function useHugsBackend(now: Date): () => TestBackend {
-  const backend = useTestBackend();
+export function useHugsBackend(now: Date, options: Pick<BackendOptions, "registry"> = {}): () => TestBackend {
+  const backend = useTestBackend(options);
   beforeEach(() => {
     vi.useFakeTimers({ now, toFake: ["Date"] });
     vi.stubEnv("SLACK_BOT_TOKEN", "xoxb-test");
@@ -120,10 +120,11 @@ export async function sentTo(t: TestBackend, kind: EventKind, path: string, body
  */
 export async function atOnce<Results extends readonly unknown[]>(sends: { [Index in keyof Results]: Promise<Results[Index]> }): Promise<Results> {
   const settled = await Promise.allSettled(sends);
-  const failures = settled.flatMap((result) => (result.status === "rejected" ? [result.reason as unknown] : []));
-  const real = failures.find((failure) => !(failure instanceof NotPortedError));
-  if (real !== undefined) throw real;
-  if (failures.length > 0) throw failures[0];
+  const rejected = settled.filter((result): result is PromiseRejectedResult => result.status === "rejected");
+  // A rejection is read by its result, never by its reason, which may be any value, undefined among them.
+  const real = rejected.find(({ reason }) => !(reason instanceof NotPortedError));
+  if (real !== undefined) throw real.reason;
+  if (rejected.length > 0) throw rejected[0]!.reason;
   return settled.map((result) => (result as PromiseFulfilledResult<unknown>).value) as unknown as Results;
 }
 

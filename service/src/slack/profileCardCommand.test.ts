@@ -7,9 +7,13 @@ import { jobs } from "../db/schema/service.ts";
 import { slackReceipts } from "../db/schema/slack.ts";
 import type { TestBackend } from "../../testing/backend.ts";
 import { slashCommandResponseUrl } from "../../testing/slackMessages.ts";
+import { serviceRegistry } from "../registry.ts";
 import { flagsOn, useHugsBackend } from "./hugsTesting.ts";
 
-const backend = useHugsBackend(new Date("2026-10-13T10:00:00Z"));
+// The chain's last link answers with words of its own, so a command the card passes down is seen arriving there.
+const downTheChain = "passed down the chain";
+const registry = { ...serviceRegistry, slack: { ...serviceRegistry.slack, commands: { ...serviceRegistry.slack.commands, addToChannel: async () => new Response(downTheChain) } } };
+const backend = useHugsBackend(new Date("2026-10-13T10:00:00Z"), { registry });
 
 function command(t: TestBackend, user: string, text: string) {
   const body = new URLSearchParams({ team_id: "T1", channel_id: "C1", user_id: user, command: "/hedgehug", text, response_url: slashCommandResponseUrl, trigger_id: "1.2.3" });
@@ -31,20 +35,19 @@ describe("the /hedgehug profile card command", () => {
     const t = backend();
     await flagsOn(t, ["profile-card"]);
 
-    const answer = await command(t, "U_NEW", "leaderboard");
+    const answer = await command(t, "U_NEW", "hello there");
 
-    expect(answer.status).toBe(200);
+    expect(await answer.text()).toBe(downTheChain);
     expect(await exposesOnceKnown(t)).toEqual([]);
     expect(await answersUnknownTarget(t)).toEqual([]);
   });
 
-  test("with the card off for the workspace, a viewer Kudos doesn't know gets no card, and the flag is exposed once they're known", async () => {
+  test("with the card off for the workspace, a viewer Kudos doesn't know gets no card and is passed down the chain, and the flag is exposed once they're known", async () => {
     const t = backend();
 
     const answer = await command(t, "U_NEW", "<@U_TARGET>");
 
-    expect(answer.status).toBe(200);
-    expect(await answer.text()).not.toContain("profile card");
+    expect(await answer.text()).toBe(downTheChain);
     expect(await exposesOnceKnown(t)).toEqual([{ workspace: "T1", user: "U_NEW", flag: "profile-card", shown: false }]);
     expect(await answersUnknownTarget(t)).toEqual([]);
   });

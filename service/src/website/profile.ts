@@ -1,10 +1,10 @@
 // The module map's skeleton of convex/website/profile.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
 // notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
-import { type Avatar } from "../album/hoggies/avatar.ts";
-import { type Face } from "./faces.ts";
-import { type MemberInventory } from "./inventory.ts";
-import { type Denial } from "./memberQuery.ts";
-import { type FeatureCard, type FeaturePage } from "./unlockPath.ts";
+import type { Avatar } from "../album/hoggies/avatar.ts";
+import type { Face } from "./faces.ts";
+import type { MemberInventory } from "./inventory.ts";
+import type { Denial } from "./memberQuery.ts";
+import type { FeatureCard, FeaturePage } from "./unlockPath.ts";
 
 export type { Face } from "./faces.ts";
 export type { Avatar } from "../album/hoggies/avatar.ts";

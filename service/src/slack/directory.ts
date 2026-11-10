@@ -1,7 +1,7 @@
 // The module map's skeleton of convex/slack/directory.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
 // notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
 import { ReportableError } from "../analytics/exceptions.ts";
-import { type Observation } from "../engine/engine.ts";
+import type { Observation } from "../engine/engine.ts";
 import { messageRefValidator, type MessageRef } from "../engine/messageEvent.ts";
 import { directoryRecordArgs, type DirectoryEntry, type DirectoryRecord } from "../workspace/directory.ts";
 import type { MemberProfile } from "../workspace/memberProfile.ts";

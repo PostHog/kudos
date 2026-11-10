@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { NotPortedError } from "../notPorted.ts";
 import { zv } from "../values.ts";
 
 export class ReportableError extends Error {
@@ -44,6 +45,9 @@ export function withholdingWords<Ctx, Args extends unknown[], Output>(handler: (
     try {
       return await handler(ctx, ...args);
     } catch (error) {
+      // A stub not ported yet names only its module's path, never a member's words, and a waiting test reads it (S2's
+      // module map; it goes once every stack has ported its bodies).
+      if (error instanceof NotPortedError) throw error;
       throw withheldErrorOf(error);
     }
   };
