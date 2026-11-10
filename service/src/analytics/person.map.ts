@@ -3,7 +3,6 @@
 import type { Environment } from "./capture.ts";
 import { z } from "zod";
 import { zv } from "../values.ts";
-import type { Id } from "../db/columns.ts";
 import type { MutationContext } from "../operations.ts";
 import { notPorted } from "../notPorted.ts";
 import { mutationJob } from "../jobs/define.ts";
@@ -21,10 +20,6 @@ export type PersonProfile = {
 };
 
 export const profileKeys = ["email", "name", "display_name", "title", "slack_user_id", "slack_team_id", "is_admin", "teams", "environment"] as const satisfies (keyof PersonProfile)[];
-
-export async function followPeopleLater(ctx: MutationContext, workspace: string, users: string[]): Promise<void> {
-  throw notPorted("analytics.person.followPeopleLater");
-}
 
 export const followMembersArgs = z.strictObject({ members: z.array(zv.id("members")) });
 export async function followMembers(ctx: MutationContext, args: z.infer<typeof followMembersArgs>): Promise<void> {
@@ -49,7 +44,3 @@ export async function catchUp(ctx: MutationContext, args: z.infer<typeof catchUp
   throw notPorted("analytics.person.catchUp");
 }
 export const catchUpJob = mutationJob("analytics.person.catchUp", catchUpArgs, catchUp);
-
-export function requestCatchUp(ctx: MutationContext): Promise<Id<"_scheduled_functions">> {
-  throw notPorted("analytics.person.requestCatchUp");
-}
