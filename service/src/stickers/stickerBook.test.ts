@@ -72,6 +72,30 @@ function find(t: Backend, member: MemberId, crate: CrateKey, hoggie: string) {
 
 const award = (n: number) => `award-${n}` as AwardId;
 
+/** A stored award, as the engine records one, so reads of the first award between two people find it. */
+function anAward(t: Backend, giver: MemberId, recipient: MemberId, when = at, message = "1.000100") {
+  return t.seed.insert("awards", { workspace: "T1", conversation: "C1", message, giver, recipient, kudos: 1, day: "2026-10-14", at: when }) as Promise<AwardId>;
+}
+
+function kudosGiven(giver: MemberId, awards: KudosGivenEvent["awards"]): KudosGivenEvent {
+  return {
+    type: "kudosGiven",
+    workspace: "T1",
+    message: { workspace: "T1", conversation: "C1", message: "1.000100" },
+    giver,
+    awards,
+    via: "message",
+    kudosEmoji: "hedgehog",
+    annotations: {},
+    allowance: { dailyOpening: 5, dailyLeft: 4 },
+    skippedMentions: 0,
+    retry: false,
+    inThread: false,
+    day: "2026-10-14",
+    at,
+  };
+}
+
 beforeEach(() => {
   vi.stubEnv("HOGGIE_DRAW_SECRET", "draw-test");
   postHogDeciding("sandbox");
@@ -172,18 +196,31 @@ describe("pets and the forge", () => {
     expect((await t.query((ctx) => tallyOf(ctx, alice, common)))?.count).toBe(1);
   });
 
-  waitsOn(["S6"], "waiting packs list ready feature crates and bought crates, longest waiting first, numbered", async () => {
+  waitsOn(["S6"], "waiting packs list the longest waiting first, equal waits in crate number order, numbered", async () => {
     const { t, alice } = await aTeam();
-    await t.seed.insert("boughtCrates", { member: alice, crate: boughtCrateKeyOf(2), n: 2, boughtAt: at + hour });
-    await t.seed.insert("boughtCrates", { member: alice, crate: boughtCrateKeyOf(1), n: 1, boughtAt: at });
+    await t.seed.insert("boughtCrates", { member: alice, crate: boughtCrateKeyOf(10), n: 10, boughtAt: at });
+    await t.seed.insert("boughtCrates", { member: alice, crate: boughtCrateKeyOf(3), n: 3, boughtAt: at + hour });
+    await t.seed.insert("boughtCrates", { member: alice, crate: boughtCrateKeyOf(2), n: 2, boughtAt: at });
 
     expect(await t.query((ctx) => waitingPacksOf(ctx, alice))).toEqual({
       packs: [
-        { crate: "bought:1", kind: "bought", n: 1 },
-        { crate: "bought:2", kind: "bought", n: 2 },
+        { crate: "bought:2", kind: "bought", n: 1 },
+        { crate: "bought:10", kind: "bought", n: 2 },
+        { crate: "bought:3", kind: "bought", n: 3 },
       ],
       morePacks: false,
     });
+  });
+
+  waitsOn(["S6"], "waiting packs list fifty, and say when more wait", async () => {
+    const { t, alice, bob } = await aTeam();
+    for (let n = 1; n <= 51; n++) await t.seed.insert("boughtCrates", { member: alice, crate: boughtCrateKeyOf(n), n, boughtAt: at + n });
+    for (let n = 1; n <= 50; n++) await t.seed.insert("boughtCrates", { member: bob, crate: boughtCrateKeyOf(n), n, boughtAt: at + n });
+
+    const [ofAlice, ofBob] = await Promise.all([t.query((ctx) => waitingPacksOf(ctx, alice)), t.query((ctx) => waitingPacksOf(ctx, bob))]);
+
+    expect([ofAlice.packs.length, ofAlice.morePacks, ofAlice.packs.at(-1)?.crate]).toEqual([50, true, "bought:50"]);
+    expect([ofBob.packs.length, ofBob.morePacks]).toEqual([50, false]);
   });
 });
 
@@ -205,28 +242,37 @@ describe("stickers of people", () => {
 
   waitsOn(["S4"], "a kudos gives the giver and the recipient each other's sticker from their first award, and starts the workspace's backfill", async () => {
     const { t, alice, bob } = await aTeamOn(backend({ registry: stickersAlone }));
-    const event: KudosGivenEvent = {
-      type: "kudosGiven",
-      workspace: "T1",
-      message: { workspace: "T1", conversation: "C1", message: "1.000100" },
-      giver: alice,
-      awards: [{ award: award(1), giver: alice, recipient: bob, kudos: 1 }],
-      via: "message",
-      kudosEmoji: "hedgehog",
-      annotations: {},
-      allowance: { dailyOpening: 5, dailyLeft: 4 },
-      skippedMentions: 0,
-      retry: false,
-      inThread: false,
-      day: "2026-10-14",
-      at,
-    };
+    const first = await anAward(t, alice, bob);
+
+    await t.run((ctx) => ctx.publish(kudosGiven(alice, [{ award: first, giver: alice, recipient: bob, kudos: 1 }])));
+    await t.settle();
+
+    expect((await t.seed.all("stickers")).map(({ member, person, firstAward, firstAt }) => ({ member, person, firstAward, firstAt }))).toEqual(
+      expect.arrayContaining([
+        { member: alice, person: bob, firstAward: first, firstAt: at },
+        { member: bob, person: alice, firstAward: first, firstAt: at },
+      ]),
+    );
+    expect((await t.published()).filter(({ type }) => type === "stickersCollected")).not.toEqual([]);
+    expect(await t.seed.all("stickerBackfills")).toEqual([expect.objectContaining({ workspace: "T1", isDone: true })]);
+  });
+
+  waitsOn(["S4"], "a kudos of more awards than one job records goes on in the next, and every pair gets its stickers once", async () => {
+    const { t, alice } = await aTeamOn(backend({ registry: stickersAlone }));
+    const recipients: MemberId[] = [];
+    for (let n = 0; n < 51; n++) recipients.push(await t.member(`U_R${n}`, `Rae ${n}`));
+    const awards = [];
+    for (const recipient of recipients) awards.push({ award: await anAward(t, alice, recipient), giver: alice, recipient, kudos: 1 });
+    const event = kudosGiven(alice, awards);
 
     await t.run((ctx) => ctx.publish(event));
     await t.settle();
+    await t.run((ctx) => ctx.publish(event));
+    await t.settle();
 
-    expect((await t.seed.all("stickers")).map(({ member, person }) => ({ member, person }))).toEqual(expect.arrayContaining([{ member: alice, person: bob }, { member: bob, person: alice }]));
-    expect(await t.seed.all("stickerBackfills")).toEqual([expect.objectContaining({ workspace: "T1", isDone: true })]);
+    const stickers = await t.seed.all("stickers");
+    expect(stickers).toHaveLength(2 * 51);
+    expect(new Set(stickers.filter(({ member }) => member === alice).map(({ person }) => person))).toEqual(new Set(recipients));
   });
 
   test("the sticker book shows by sticker-book, and Team Spirit where the book and its team pages show, exposed when it applies", async () => {
@@ -303,12 +349,37 @@ describe("team pages", () => {
   waitsOn(["S4", "S6"], "a full team page is recorded once with the award that completed it, and published", async () => {
     const { t, alice, bob } = await aTeam("sticker-book", "team-spirit", "team-pages");
     await onTheCompanySite(t);
-    await t.seed.insert("stickers", { member: alice, person: bob, firstAward: award(1), firstAt: at });
+    const first = await anAward(t, alice, bob);
+    await t.seed.insert("stickers", { member: alice, person: bob, firstAward: first, firstAt: at });
 
-    await t.run((ctx) => checkTeamPages(ctx, { check: { workspace: "T1", member: alice, award: award(1), at } }));
+    await t.run((ctx) => checkTeamPages(ctx, { check: { workspace: "T1", member: alice, award: first, at } }));
+    await t.run((ctx) => checkTeamPages(ctx, { check: { workspace: "T1", member: alice, award: first, at } }));
+    await t.settle();
 
-    expect(await t.seed.all("teamPageCompletions")).toEqual([expect.objectContaining({ member: alice, team: "analytics", award: award(1), at, people: 1, told: false })]);
-    expect((await t.published()).map(({ type }) => type)).toContain("teamPagesCompleted");
+    expect(await t.seed.all("teamPageCompletions")).toEqual([expect.objectContaining({ member: alice, team: "analytics", award: first, at, people: 1, told: false })]);
+    expect((await t.published()).filter(({ type }) => type === "teamPagesCompleted")).toHaveLength(1);
+  });
+
+  waitsOn(["S4", "S6"], "a first check of more full pages than one job records goes on in the next and tells nothing; a later completion is told", async () => {
+    const { t, alice, bob, carol } = await aTeam("sticker-book", "team-spirit", "team-pages");
+    await onTheCompanySite(t);
+    for (let n = 0; n < 26; n++) await t.seed.insert("companyTeams", { team: `team-${n}`, name: `Team ${n}`, leads: [], people: [2], asOf: 0 });
+    const ofBob = await anAward(t, alice, bob);
+    await t.seed.insert("stickers", { member: alice, person: bob, firstAward: ofBob, firstAt: at });
+
+    await t.run((ctx) => checkTeamPages(ctx, { check: { workspace: "T1", member: alice, award: ofBob, at } }));
+    await t.settle();
+    const firstCheck = await t.seed.all("teamPageCompletions");
+    await t.seed.insert("companyTeams", { team: "late", name: "Late", leads: [], people: [3], asOf: 0 });
+    const ofCarol = await anAward(t, alice, carol, at + hour, "1.000200");
+    await t.seed.insert("stickers", { member: alice, person: carol, firstAward: ofCarol, firstAt: at + hour });
+    await t.run((ctx) => checkTeamPages(ctx, { check: { workspace: "T1", member: alice, award: ofCarol, at: at + hour } }));
+    await t.settle();
+
+    expect(firstCheck).toHaveLength(27);
+    expect(firstCheck.every(({ told }) => !told)).toBe(true);
+    const late = (await t.seed.all("teamPageCompletions")).filter(({ team }) => team === "late");
+    expect(late).toEqual([expect.objectContaining({ award: ofCarol, told: true })]);
   });
 
   waitsOn(["S9"], "the week's team stickers count per team, most unlocked first", async () => {
