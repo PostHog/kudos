@@ -268,24 +268,24 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/website/levelUp.test.ts | S17 | service/src/website/levelUp.test.ts | S6 S9 S10 S16 |
 | convex/website/link.test.ts | S17 | service/src/website/link.test.ts | |
 | convex/website/mondayQuests.test.ts | S17 | | |
-| convex/website/onboarding.test.ts | S17 | | |
+| convex/website/onboarding.test.ts | S17 | service/src/website/onboarding.test.ts | S4 S5 S6 S7 S8 S9 S10 S11 S12 S13 S14 S16 |
 | convex/website/petHoggie.test.ts | S16 | | |
 | convex/website/playerCard.test.ts | S17 | service/src/website/playerCard.test.ts | S3 S4 S5 S6 S7 S8 S9 S10 S11 S14 S15 S16 |
 | convex/website/preview.test.ts | S17 | service/src/website/preview.test.ts | S3 S4 S6 S7 S8 S9 S10 S11 S15 S16 S17 |
 | convex/website/profile.test.ts | S17 | service/src/website/profile.test.ts | S3 S4 S6 S7 S9 S10 S11 S15 S16 S17 |
 | convex/website/profileCard.test.ts | S17 | service/src/website/profileCard.test.ts | S3 S6 S10 S11 S13 S15 |
-| convex/website/publicCelebrations.test.ts | S17 | | |
+| convex/website/publicCelebrations.test.ts | S17 | service/src/website/publicCelebrations.test.ts | S3 S4 S5 S6 S11 S12 S15 S16 S17 |
 | convex/website/quests.test.ts | S17 | | |
-| convex/website/setAvatar.test.ts | S17 | | |
-| convex/website/setBoardVisibility.test.ts | S17 | | |
-| convex/website/settings.test.ts | S17 | | |
+| convex/website/setAvatar.test.ts | S17 | service/src/website/setAvatar.test.ts | S4 S5 S6 S10 S15 S17 |
+| convex/website/setBoardVisibility.test.ts | S17 | service/src/website/setBoardVisibility.test.ts | S4 S5 S6 S10 S11 S15 S16 S17 |
+| convex/website/settings.test.ts | S17 | service/src/website/settings.test.ts | S3 S4 S5 S6 S7 S9 S10 S11 S12 S15 S16 S17 |
 | convex/website/shareableUrls.test.ts | S17 | service/src/website/shareableUrls.test.ts | S16 |
 | convex/website/signIn.test.ts | S17 | service/src/website/firstEntry.test.ts | S3 S6 S8 |
-| convex/website/skillTree.test.ts | S17 | | |
-| convex/website/skillTreeCatalogue.test.ts | S17 | | |
+| convex/website/skillTree.test.ts | S17 | service/src/website/skillTree.test.ts | S4 S5 S6 S7 S9 S10 S11 S15 S16 |
+| convex/website/skillTreeCatalogue.test.ts | S17 | service/src/website/skillTreeCatalogue.test.ts | S6 S7 S10 S16 |
 | convex/website/spotlight.test.ts | S16 | | |
 | convex/website/thoughtfulBoards.test.ts | S16 | | |
-| convex/website/weeklyPost.test.ts | S17 | | |
+| convex/website/weeklyPost.test.ts | S17 | service/src/website/weeklyPost.test.ts | S4 S5 S6 S7 S8 S9 S10 S11 S12 S13 S14 S15 S16 S17 |
 | convex/website/xpMoment.test.ts | S17 | | |
 | convex/welcome/welcome.test.ts | S5 | | |
 | convex/workspace/workspaceSettings.test.ts | S3 | service/src/workspace/workspaceSettings.test.ts | S4 S17 |
