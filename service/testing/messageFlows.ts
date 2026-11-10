@@ -102,18 +102,24 @@ async function nextJobAt(t: TestBackend): Promise<number | null> {
  */
 export async function settleInTimeOrder(t: TestBackend, { until = Infinity, maxSteps = 10_000 } = {}): Promise<void> {
   for (let step = 0; step < maxSteps; step += 1) {
-    await t.settle();
+    await settledWithin(t);
     const next = await nextJobAt(t);
     if (next === null || next > until) {
       if (Number.isFinite(until) && until > t.clock.now()) {
         t.time.advance(until - t.clock.now());
-        await t.settle();
+        await settledWithin(t);
       }
       return;
     }
     if (next > t.clock.now()) t.time.advance(next - t.clock.now());
   }
   throw new Error(`settleInTimeOrder: more than ${maxSteps} steps`);
+}
+
+/** One settle of the worker, which must end with nothing due or running: an answer cut off by its budget fails the test. */
+async function settledWithin(t: TestBackend): Promise<void> {
+  const { done, ran } = await t.settle();
+  if (!done) throw new Error(`settle ran out of its budget with jobs still due or running, after running ${ran.join(", ") || "nothing"}`);
 }
 
 /** Today's `settle`, which runs every scheduled function, those due later included, as convex-test's fake timers did. */

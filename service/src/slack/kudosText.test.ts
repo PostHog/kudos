@@ -12,12 +12,14 @@ import { useTestBackend, type TestBackend } from "../../testing/backend.ts";
 import { deleteMessage, deleteThreadParent, edit, everythingStored, kudosReceived, memberChanged, post, sendEvent, settle } from "../../testing/messageFlows.ts";
 import { broadcast, channel, channelMessage, codeBlock, emoji, link, list, mention, messageEvent, quote, section, text, tonedEmoji, unicodeEmoji, userGroup, type MessageOptions, type RichElement } from "../../testing/slackMessages.ts";
 import { waitsOn, type Stack } from "../../testing/waiting.ts";
-import { ReportableError } from "../analytics/exceptions.ts";
+import { recordBoundaryException } from "../analytics/boundary.ts";
+import { ReportableError, withholdingWords } from "../analytics/exceptions.ts";
 import { decodeStored } from "../db/codec.ts";
 import { jobs } from "../db/schema/index.ts";
-import { forgetPageSize, forgetWordsOfLeaver, wordsOf } from "../engine/kudosText.ts";
+import { forgetPageSize, forgetWordsAuthoredBy, forgetWordsInWorkspace, forgetWordsOfLeaver, recordDeletionRequest, wordsOf } from "../engine/kudosText.ts";
 import type { WordSegment } from "../engine/messageEvent.ts";
 import { NotPortedError, notPorted } from "../notPorted.ts";
+import type { MutationContext } from "../operations.ts";
 import type { MemberId } from "../workspace/directory.ts";
 import { backfillWordsJob } from "./backfill.ts";
 import { recheckMessage } from "./directory.ts";
@@ -782,13 +784,14 @@ describe("AT40: only kudos messages' text is stored", () => {
     }
 
     /**
-     * The `$exception`s recorded. The front door answers a failure with 500 and records nothing until S14 ports the
-     * error boundary, so while none is recorded the test ends in the boundary's stub.
+     * The `$exception`s recorded. The front door answers a failure with 500 and records nothing while S14's error
+     * boundary is still its stub, so until then the test ends at that stub; once the boundary is ported, an exception
+     * it fails to record fails the test.
      */
     async function exceptionsRecorded(t: TestBackend) {
       const pending = (await t.seed.all("analyticsOutbox")).filter((row) => row.event === "$exception");
       const sent = t.postHog.events().filter((event) => event.event === "$exception");
-      if (pending.length + sent.length === 0) throw notPorted("analytics.boundary.recordBoundaryException");
+      if (pending.length + sent.length === 0 && boundaryIsStillItsStub) throw notPorted("analytics.boundary.recordBoundaryException");
       return [...pending, ...sent];
     }
   });
@@ -839,14 +842,28 @@ async function backfill(t: TestBackend) {
   await settle(t);
 }
 
-// A maintainer's requests, today's internal mutations in convex/workspace/wordDeletion.ts. The service has no body for
-// either until S3 ports that module.
-async function forgetWordsOfMember(_t: TestBackend, _request: { workspace: string; user: string }): Promise<void> {
-  throw notPorted("workspace.wordDeletion.forgetWordsOfMember");
+// A maintainer's requests, today's internal mutations in convex/workspace/wordDeletion.ts, composed as they are there:
+// the request recorded, then the words forgotten, a page at a time, with the members' words kept out of any error. The
+// module map left that module's skeleton without either mutation; how a maintainer calls them in the service is S3's.
+// The error boundary's body is still the module map's stub, which throws by this path, until S14 ports it.
+const boundaryIsStillItsStub = String(recordBoundaryException).includes(`"analytics.boundary.recordBoundaryException"`);
+
+async function forgetWordsOfMember(t: TestBackend, { workspace, user }: { workspace: string; user: string }): Promise<void> {
+  await t.run(
+    withholdingWords(async (ctx: MutationContext) => {
+      await recordDeletionRequest(ctx, { workspace, author: user });
+      await forgetWordsAuthoredBy(ctx, { workspace, author: user });
+    }),
+  );
 }
 
-async function forgetWordsOfWorkspace(_t: TestBackend, _request: { workspace: string }): Promise<void> {
-  throw notPorted("workspace.wordDeletion.forgetWordsOfWorkspace");
+async function forgetWordsOfWorkspace(t: TestBackend, { workspace }: { workspace: string }): Promise<void> {
+  await t.run(
+    withholdingWords(async (ctx: MutationContext) => {
+      await recordDeletionRequest(ctx, { workspace, author: null });
+      await forgetWordsInWorkspace(ctx, { workspace, cursor: null });
+    }),
+  );
 }
 
 function aMinuteLater(t: TestBackend) {

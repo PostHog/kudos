@@ -8,7 +8,7 @@ import { useTestBackend } from "../../testing/backend.ts";
 import { deleteMessage, edit, everythingStored, kudosReceived, post, setWorkspaceSettings, settle } from "../../testing/messageFlows.ts";
 import { broadcast, emoji, mention, section, text, type RichElement } from "../../testing/slackMessages.ts";
 import { waitsOn, type Stack } from "../../testing/waiting.ts";
-import { deliverIndicatorJob } from "./delivery.ts";
+import { deliverIndicator, deliverIndicatorJob } from "./delivery.ts";
 
 const now = new Date("2026-10-13T10:00:00Z");
 const postedTs = "1760349600.000100";
@@ -130,9 +130,12 @@ waitsOn(given, "R32: a late hourglass delivery that lands after the retry's deli
   const message = { workspace: "T1", conversation: "C1", message: postedTs };
   await post(t, overAllowance, { ts: postedTs });
   await settle(t);
+  // While the hourglass is held, the edit gives and its indicator is delivered: today's settle inside the hold ran every
+  // scheduled function but the held one. The service's settle waits on every running job, the held one included, so the
+  // delivery runs here directly, and the jobs the edit made run in the settle below.
   t.slack.holdingBack("reactions.add", "hourglass_flowing_sand", async () => {
     await edit(t, [section(mention("U_BOB"), emoji("taco"), emoji("taco"))], { ts: postedTs });
-    await settle(t);
+    await t.operations.action("test.deliverIndicator", (ctx) => deliverIndicator(ctx, message));
   });
 
   await t.run((ctx) => ctx.jobs.enqueue(deliverIndicatorJob, message));

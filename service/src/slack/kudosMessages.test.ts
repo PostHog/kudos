@@ -272,9 +272,10 @@ describe("R5 R6 R7: whose messages count, and where", () => {
     test(`${name} is ignored`, async () => {
       const t = withSlack();
 
-      await post(t, [section(mention("U_BOB"), emoji("taco"))], options);
+      const response = await post(t, [section(mention("U_BOB"), emoji("taco"))], options);
       await settle(t);
 
+      expect(response.status).toBe(200);
       expect(t.slack.calls).toEqual([]);
       expect(await kudosReceived(t, "U_BOB")).toBe(0);
     });
