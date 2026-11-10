@@ -1,8 +1,8 @@
 // Generated once from convex/schema.ts by tools/rewrite/drizzle; owned by hand from here on.
-import { index, pgTable } from "drizzle-orm/pg-core";
-import { bool, creationTime, f64, i64, id, str, value, type Id } from "../columns.ts";
+import { index } from "drizzle-orm/pg-core";
+import { bool, creationTime, documentTable, f64, i64, id, type Id, str, value } from "../columns.ts";
 
-export const workspaces = pgTable(
+export const workspaces = documentTable(
   "workspaces",
   {
     _id: id(),
@@ -20,7 +20,7 @@ export const workspaces = pgTable(
   ],
 );
 
-export const members = pgTable(
+export const members = documentTable(
   "members",
   {
     _id: id(),
@@ -45,7 +45,7 @@ export const members = pgTable(
   ],
 );
 
-export const listedMembers = pgTable(
+export const listedMembers = documentTable(
   "listedMembers",
   {
     _id: id(),
@@ -60,7 +60,7 @@ export const listedMembers = pgTable(
   ],
 );
 
-export const userGroups = pgTable(
+export const userGroups = documentTable(
   "userGroups",
   {
     _id: id(),
@@ -83,7 +83,7 @@ export const userGroups = pgTable(
   ],
 );
 
-export const userGroupMembers = pgTable(
+export const userGroupMembers = documentTable(
   "userGroupMembers",
   {
     _id: id(),
@@ -98,7 +98,7 @@ export const userGroupMembers = pgTable(
   ],
 );
 
-export const customEmoji = pgTable(
+export const customEmoji = documentTable(
   "customEmoji",
   {
     _id: id(),
@@ -115,7 +115,7 @@ export const customEmoji = pgTable(
   ],
 );
 
-export const customEmojiListings = pgTable(
+export const customEmojiListings = documentTable(
   "customEmojiListings",
   {
     _id: id(),
@@ -131,7 +131,7 @@ export const customEmojiListings = pgTable(
   ],
 );
 
-export const welcomeNudgeSwitches = pgTable(
+export const welcomeNudgeSwitches = documentTable(
   "welcomeNudgeSwitches",
   {
     _id: id(),
@@ -144,7 +144,7 @@ export const welcomeNudgeSwitches = pgTable(
   ],
 );
 
-export const celebrationsSwitches = pgTable(
+export const celebrationsSwitches = documentTable(
   "celebrationsSwitches",
   {
     _id: id(),

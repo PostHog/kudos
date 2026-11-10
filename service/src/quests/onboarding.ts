@@ -1,15 +1,21 @@
-// The module map's skeleton of convex/quests/onboarding.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
-// notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
+// The onboarding journey on the Monday path: Give a kudos to someone, Thank someone new, Thank someone on two different
+// days. Today's convex/quests/onboarding.ts over the service's transaction.
 import type { KudosGivenEvent } from "../bus/events.ts";
+import { isSameMessage, type MessageRef } from "../engine/messageEvent.ts";
+import { awardRecordedAt, earliestAwardFrom, firstDecidedOf, givenBetween, givenRecordedAfter, givenSinceWithin, messagesGivenDecidedAfter, type AwardId, type DatedAward, type GivenKudos } from "../engine/awards.ts";
+import { progressionWaitedFor } from "../progression/effects.ts";
 import type { MemberId } from "../workspace/directory.ts";
-import { rewardKeyOf } from "./crates.ts";
-import { type QuestFinish } from "./finishes.ts";
-import { type Reward } from "./journey.ts";
-import { journeyGoalOf } from "./journeyCopy.ts";
-import type { Moved, MovedQuest, ProgressRead, QuestProgress } from "./progress.ts";
-import type { JourneyStep } from "./step.ts";
 import type { MutationContext, QueryContext } from "../operations.ts";
-import { notPorted } from "../notPorted.ts";
+import { rewardKeyOf } from "./crates.ts";
+import { finishMondayQuest } from "./finish.ts";
+import { questFinishOf, type QuestFinish } from "./finishes.ts";
+import { hasThankedEveryone, type Reward } from "./journey.ts";
+import { journeyGoalOf } from "./journeyCopy.ts";
+import { questsJudgedFor } from "./judged.ts";
+import { isPaidOnTheMondayPath, mondayCatalogueVersion } from "./mondayCatalogue.ts";
+import type { Moved, MovedQuest, ProgressRead, QuestProgress } from "./progress.ts";
+import { questStartOf } from "./start.ts";
+import type { JourneyStep } from "./step.ts";
 
 export const onboardingSteps = ["first-thanks", "someone-new", "two-days"] as const satisfies readonly JourneyStep[];
 
@@ -48,43 +54,175 @@ export function isOnboardingStep(step: JourneyStep): step is OnboardingStep {
 }
 
 export async function nextOnboardingQuestOf(ctx: QueryContext, member: MemberId): Promise<OnboardingStep | null> {
-  throw notPorted("quests.onboarding.nextOnboardingQuestOf");
+  for (const step of onboardingSteps) if ((await finishOf(ctx, member, step)) === null) return step;
+  return null;
 }
 
 export async function onboardingQuestsOf(ctx: QueryContext, member: MemberId, at: number): Promise<OnboardingQuest[]> {
-  throw notPorted("quests.onboarding.onboardingQuestsOf");
+  const facts = await onboardingQuestFactsOf(ctx, member, at);
+  return onboardingSteps.map((step) => {
+    const { finish, progress } = facts[step];
+    return { step, goal: onboardingGoalOf(step), finished: finish !== null, progress };
+  });
 }
 
 export async function onboardingQuestFactsOf(ctx: QueryContext, member: MemberId, at: number): Promise<Record<OnboardingStep, OnboardingQuestFacts>> {
-  throw notPorted("quests.onboarding.onboardingQuestFactsOf");
+  return {
+    "first-thanks": { step: "first-thanks", finish: await finishOf(ctx, member, "first-thanks"), progress: null },
+    "someone-new": { step: "someone-new", finish: await finishOf(ctx, member, "someone-new"), progress: null },
+    "two-days": await twoDaysFactsOf(ctx, member, at),
+  };
 }
 
 export async function twoDaysMovedSince(ctx: QueryContext, member: MemberId, { since, until, mostAwards }: ProgressRead): Promise<Moved[]> {
-  throw notPorted("quests.onboarding.twoDaysMovedSince");
+  const start = await questStartOf(ctx, member);
+  if (start === null || (await twoDaysFinishedBy(ctx, member, since))) return [];
+  const givenSinceTheStart = await givenSinceWithin(ctx, member, start, mostAwards);
+  const decidedSince = await messagesGivenDecidedAfter(ctx, member, since, mostAwards);
+  if (givenSinceTheStart === null || decidedSince === null) return [];
+  const decidedAfter = (instant: number) => new Set<AwardId>(decidedSince.filter(({ created }) => created > instant).flatMap(({ awards }) => awards.map(({ award }) => award)));
+  const decidedBy = (instant: number) => {
+    const later = decidedAfter(instant);
+    return givenSinceTheStart.filter(({ award }) => !later.has(award));
+  };
+  const from = daysAmong(decidedBy(since));
+  const to = daysAmong(decidedBy(until));
+  return from < to && to < daysToFinishTwoDays ? [{ name: onboardingGoalOf("two-days"), from, to, of: daysToFinishTwoDays }] : [];
+}
+
+async function twoDaysFactsOf(ctx: QueryContext, member: MemberId, at: number): Promise<OnboardingQuestFacts> {
+  const finish = await finishOf(ctx, member, "two-days");
+  const progress = finish === null ? { done: await daysThankingOf(ctx, member, at), of: daysToFinishTwoDays, unit: "days" as const } : null;
+  return { step: "two-days", finish, progress };
+}
+
+async function daysThankingOf(ctx: QueryContext, member: MemberId, at: number): Promise<number> {
+  const start = await questStartOf(ctx, member);
+  if (start === null) return 0;
+  return daysAmong(await givenBetween(ctx, member, start, at));
+}
+
+function daysAmong(given: DatedAward[]): number {
+  return Math.min(new Set(given.map(({ day }) => day)).size, daysToFinishTwoDays);
 }
 
 export async function onboardingFinishedBy(ctx: QueryContext, member: MemberId): Promise<boolean> {
-  throw notPorted("quests.onboarding.onboardingFinishedBy");
+  return (await onboardingFinishedAt(ctx, member)) !== null;
 }
 
 export async function onboardingFinishedAt(ctx: QueryContext, member: MemberId): Promise<number | null> {
-  throw notPorted("quests.onboarding.onboardingFinishedAt");
+  let finishedAt = 0;
+  for (const step of onboardingSteps) {
+    const finish = await finishOf(ctx, member, step);
+    if (finish === null) return null;
+    finishedAt = Math.max(finishedAt, finish.at);
+  }
+  return finishedAt;
 }
 
 export const onboardingRewardKeys = onboardingSteps.map((step) => rewardKeyOf({ kind: "journey", step }));
 
 export async function advanceOnboarding(ctx: MutationContext, event: KudosGivenEvent): Promise<FinishedOnboardingQuest[]> {
-  throw notPorted("quests.onboarding.advanceOnboarding");
+  const start = await questStartOf(ctx, event.giver);
+  if (start === null || event.at < start) return [];
+  await advanceFirstThanks(ctx, event, start);
+  await advanceSomeoneNew(ctx, event);
+  await advanceTwoDays(ctx, event, start);
+  return onboardingFinishedFor(ctx, event);
+}
+
+async function onboardingFinishedFor(ctx: QueryContext, { giver, message }: KudosGivenEvent): Promise<FinishedOnboardingQuest[]> {
+  const finished: FinishedOnboardingQuest[] = [];
+  for (const step of onboardingSteps) {
+    const finish = await finishOf(ctx, giver, step);
+    if (finish?.cause !== undefined && isPaidOnTheMondayPath(finish) && isSameMessage(finish.cause, message)) finished.push({ step, reward: onboardingReward });
+  }
+  return finished;
 }
 
 export async function onboardingMovedBy(ctx: QueryContext, { giver, at }: KudosGivenEvent): Promise<MovedQuest[]> {
-  throw notPorted("quests.onboarding.onboardingMovedBy");
+  const before = (await twoDaysFactsOf(ctx, giver, at - 1)).progress;
+  const after = (await twoDaysFactsOf(ctx, giver, at)).progress;
+  return before !== null && after !== null && after.done > before.done ? [{ goal: onboardingGoalOf("two-days"), progress: after }] : [];
 }
 
 export async function someoneNewWaitsOnTheMondayPath(ctx: QueryContext, member: MemberId): Promise<boolean> {
-  throw notPorted("quests.onboarding.someoneNewWaitsOnTheMondayPath");
+  return (await questStartOf(ctx, member)) !== null && (await finishOf(ctx, member, "someone-new")) === null;
 }
 
 export async function finishSomeoneNewOnceEveryoneIsThanked(ctx: MutationContext, workspace: string, member: MemberId, at: number): Promise<void> {
-  throw notPorted("quests.onboarding.finishSomeoneNewOnceEveryoneIsThanked");
+  const start = await questStartOf(ctx, member);
+  if (start === null || at < start || (await finishOf(ctx, member, "someone-new")) !== null || !(await firstThanksCameBefore(ctx, member, start, at))) return;
+  if (await hasThankedEveryone(ctx, workspace, member, at)) await finished(ctx, workspace, member, "someone-new", at);
+}
+
+async function firstThanksCameBefore(ctx: QueryContext, member: MemberId, start: number, at: number): Promise<boolean> {
+  const firstThanks = await finishOf(ctx, member, "first-thanks");
+  if (firstThanks !== null) return firstThanks.at < at;
+  return (await givenBetween(ctx, member, start, at - 1)).length > 0;
+}
+
+async function advanceFirstThanks(ctx: MutationContext, event: KudosGivenEvent, start: number): Promise<void> {
+  if ((await finishOf(ctx, event.giver, "first-thanks")) !== null) return;
+  const earliest = (await earliestKudosAwaitingQuests(ctx, event, start)) ?? event;
+  await finished(ctx, event.workspace, event.giver, "first-thanks", earliest.at, earliest.message);
+}
+
+async function earliestKudosAwaitingQuests(ctx: QueryContext, event: KudosGivenEvent, start: number): Promise<GivenKudos | null> {
+  const recent = await givenRecordedAfter(ctx, event.giver, (await recordedAtOf(ctx, event)) - progressionWaitedFor);
+  for (const kudos of recent.filter(({ at }) => at >= start && at <= event.at).toSorted((one, other) => one.at - other.at)) {
+    if (!(await questsJudgedFor(ctx, [kudos]))) return kudos;
+  }
+  return null;
+}
+
+async function advanceSomeoneNew(ctx: MutationContext, event: KudosGivenEvent): Promise<void> {
+  if ((await finishOf(ctx, event.giver, "someone-new")) !== null || !(await firstThanksPaidForAnotherMessage(ctx, event))) return;
+  const someoneNew = (await thanksSomeoneNew(ctx, event)) || (await hasThankedEveryone(ctx, event.workspace, event.giver, event.at));
+  if (someoneNew) await finished(ctx, event.workspace, event.giver, "someone-new", event.at, event.message);
+}
+
+async function firstThanksPaidForAnotherMessage(ctx: QueryContext, { giver, message }: KudosGivenEvent): Promise<boolean> {
+  const firstThanks = await finishOf(ctx, giver, "first-thanks");
+  return firstThanks !== null && (firstThanks.cause === undefined || !isSameMessage(firstThanks.cause, message));
+}
+
+async function thanksSomeoneNew(ctx: QueryContext, { giver, awards }: KudosGivenEvent): Promise<boolean> {
+  for (const { award, recipient } of awards) if ((await earliestAwardFrom(ctx, giver, recipient))?.award === award) return true;
+  return false;
+}
+
+async function advanceTwoDays(ctx: MutationContext, event: KudosGivenEvent, start: number): Promise<void> {
+  if ((await finishOf(ctx, event.giver, "two-days")) !== null) return;
+  const recorded = await recordedAtOf(ctx, event);
+  const given = (await givenBetween(ctx, event.giver, start, Infinity)).filter(({ at, created }) => at <= event.at || created < recorded);
+  const reachedAt = whenTheSecondDayCame([...given, event]);
+  if (reachedAt !== null) await finished(ctx, event.workspace, event.giver, "two-days", Math.max(reachedAt, event.at), event.message);
+}
+
+function whenTheSecondDayCame(given: { day: string; at: number }[]): number | null {
+  const days = new Set<string>();
+  for (const { day, at } of given.toSorted((one, other) => one.at - other.at)) if (days.add(day).size === daysToFinishTwoDays) return at;
+  return null;
+}
+
+/** When the event's first award was recorded, from its row's creation time, or 0 when it has none. */
+async function recordedAtOf(ctx: QueryContext, { awards: given }: KudosGivenEvent): Promise<number> {
+  if (given[0] === undefined) return 0;
+  return (await awardRecordedAt(ctx, given[0].award)) ?? 0;
+}
+
+async function finished(ctx: MutationContext, workspace: string, member: MemberId, step: OnboardingStep, at: number, cause?: MessageRef): Promise<void> {
+  await finishMondayQuest(ctx, workspace, member, { kind: "journey", step }, { reward: onboardingReward, catalogueVersion: mondayCatalogueVersion }, at, cause);
+}
+
+async function twoDaysFinishedBy(ctx: QueryContext, member: MemberId, instant: number): Promise<boolean> {
+  const finish = await finishOf(ctx, member, "two-days");
+  if (finish === null) return false;
+  const decided = finish.cause === undefined ? null : await firstDecidedOf(ctx, finish.cause);
+  return (decided ?? finish.at) <= instant;
+}
+
+function finishOf(ctx: QueryContext, member: MemberId, step: OnboardingStep) {
+  return questFinishOf(ctx, member, rewardKeyOf({ kind: "journey", step }));
 }

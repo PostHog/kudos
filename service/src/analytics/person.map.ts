@@ -1,11 +1,9 @@
 // The module map's skeleton of what S1 left of convex/analytics/person.ts, written by tools/rewrite/moduleMap/skeleton.ts. S1's
 // service/src/analytics/person.ts re-exports it; its stubs throw notPorted until the stack that owns the module ports their bodies.
-import { type MemberId } from "../workspace/directory.ts";
-import { type Environment } from "./capture.ts";
+import type { Environment } from "./capture.ts";
 import { z } from "zod";
 import { zv } from "../values.ts";
 import type { Id } from "../db/columns.ts";
-import type { Doc } from "../db/schema/index.ts";
 import type { MutationContext } from "../operations.ts";
 import { notPorted } from "../notPorted.ts";
 import { mutationJob } from "../jobs/define.ts";
@@ -23,14 +21,6 @@ export type PersonProfile = {
 };
 
 export const profileKeys = ["email", "name", "display_name", "title", "slack_user_id", "slack_team_id", "is_admin", "teams", "environment"] as const satisfies (keyof PersonProfile)[];
-
-const personEvents: readonly string[] = ["$identify", "$set"];
-type SentPersonEvent = { row: Id<"analyticsOutbox">; distinctId: string };
-type OutboxRow = Doc<"analyticsOutbox">;
-
-export async function followMembersLater(ctx: MutationContext, members: MemberId[]): Promise<void> {
-  throw notPorted("analytics.person.followMembersLater");
-}
 
 export async function followPeopleLater(ctx: MutationContext, workspace: string, users: string[]): Promise<void> {
   throw notPorted("analytics.person.followPeopleLater");
@@ -62,28 +52,4 @@ export const catchUpJob = mutationJob("analytics.person.catchUp", catchUpArgs, c
 
 export function requestCatchUp(ctx: MutationContext): Promise<Id<"_scheduled_functions">> {
   throw notPorted("analytics.person.requestCatchUp");
-}
-
-export async function withoutStalePersonEvents(ctx: MutationContext, rows: OutboxRow[]): Promise<Doc<"analyticsOutbox">[]> {
-  throw notPorted("analytics.person.withoutStalePersonEvents");
-}
-
-export function personEventsIn(rows: OutboxRow[]) {
-  return rows.filter(isPersonEvent).map(({ _id, distinctId }) => ({ row: _id, distinctId }));
-}
-
-export async function followPeopleSentLate(ctx: MutationContext, sent: SentPersonEvent[], stillHeld: OutboxRow[]): Promise<void> {
-  throw notPorted("analytics.person.followPeopleSentLate");
-}
-
-export async function markDeliveriesUncertain(ctx: MutationContext, sent: SentPersonEvent[]): Promise<void> {
-  throw notPorted("analytics.person.markDeliveriesUncertain");
-}
-
-export async function forgetRecordedProfiles(ctx: MutationContext, rows: OutboxRow[]): Promise<void> {
-  throw notPorted("analytics.person.forgetRecordedProfiles");
-}
-
-function isPersonEvent({ event }: Pick<OutboxRow, "event">) {
-  return personEvents.includes(event);
 }

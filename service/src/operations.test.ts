@@ -6,6 +6,7 @@ import pg from "pg";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, inject, test, vi } from "vitest";
 import { useTestDatabase, withSearchPath } from "../testing/database.ts";
 import { createClock } from "./clock.ts";
+import { runMigrations } from "./db/migrate.ts";
 import { createPool } from "./db/pool.ts";
 import { errorFields, type Log, type LogFields } from "./log.ts";
 import { createOperations, fence, type Database, type Operations } from "./operations.ts";
@@ -32,6 +33,7 @@ beforeAll(async () => {
   );
   await admin.end();
   pool = createPool(withSearchPath(inject("databaseUrl"), schema), { max: 6 });
+  await runMigrations(pool); // the runner keeps the creation order in the migrated schema
 });
 afterAll(async () => {
   await pool.end();
@@ -41,11 +43,12 @@ afterAll(async () => {
   await admin.end();
 });
 beforeEach(async () => {
-  await pool.query("truncate counters");
+  await pool.query(`truncate counters; select setval('"creationClock"', 0, false)`);
 });
 
-function setUp(options: { maxAttempts?: number; pool?: Pick<pg.Pool, "connect"> } = {}) {
-  let real = 1_700_000_000_000;
+/** One runner: the operations of one process, on a clock of its own. `real` is its clock's reading at the start. */
+function setUp({ real: start = 1_700_000_000_000, ...options }: { maxAttempts?: number; pool?: Pick<pg.Pool, "connect">; real?: number } = {}) {
+  let real = start;
   const clock = createClock({ real: () => real });
   const lines: Array<{ level: string; message: string } & LogFields> = [];
   const log: Log = {
@@ -54,6 +57,26 @@ function setUp(options: { maxAttempts?: number; pool?: Pick<pg.Pool, "connect"> 
   };
   const operations = createOperations({ pool, clock, log, retryDelayMs: () => 1, ...options });
   return { operations, clock, lines, tick: (ms: number) => (real += ms) };
+}
+
+/** Ways a connection is lost under a handler, as a failover, a restart or a network fault loses it. */
+const lose = {
+  /** The server ends the session, as a restart or a failover does. */
+  async endSession(tx: { execute: Database["execute"] }, _client?: pg.PoolClient): Promise<void> {
+    const { rows } = await tx.execute<{ pid: number }>(sql`select pg_backend_pid() as pid`);
+    await pool.query("select pg_terminate_backend($1, 5000)", [rows[0]!.pid]);
+  },
+  /** The socket goes away under the client, as a network fault takes it. */
+  async resetSocket(_tx: unknown, client?: pg.PoolClient): Promise<void> {
+    (client as unknown as { connection: { stream: { destroy(): void } } }).connection.stream.destroy();
+  },
+};
+
+/** A runner whose pool notes each connection it hands out, in order. */
+function watched(options: { maxAttempts?: number } = {}) {
+  const connections: pg.PoolClient[] = [];
+  const noting = { connect: async () => connections[connections.push(await pool.connect()) - 1]! } as Pick<pg.Pool, "connect">;
+  return { ...setUp({ ...options, pool: noting }), connections };
 }
 
 /** Whether the error, or one it wraps (Drizzle wraps a failed query), is named `name`. */
@@ -158,8 +181,112 @@ describe("mutations", () => {
   });
 });
 
+// Two runners on one database: the two copies of a deploy's overlap, or one whose clock is behind. Convex gave every
+// table one creation order every reader saw; "the latest" by `_creationTime` must stay the row written last.
+describe("_creationTime across runners", () => {
+  const minute = 60_000;
+  /** The row `at` stamps last: the latest by `_creationTime`, as `.order("desc").first()` read it. */
+  const latest = async () => (await pool.query<{ id: string }>("select id from counters order by at desc, id desc limit 1")).rows[0]?.id;
+  const insert = (operations: Operations, id: string) =>
+    operations.mutation(`insert ${id}`, async ({ tx, newRow }) => {
+      const { _creationTime } = newRow();
+      await tx.insert(counters).values({ id, n: 0, at: _creationTime });
+      return _creationTime;
+    });
+
+  test("a row written after another committed sorts after it, though its runner's clock is behind", async () => {
+    const ahead = setUp({ real: 1_700_000_000_000 + minute });
+    const behind = setUp({ real: 1_700_000_000_000 });
+
+    const first = await insert(ahead.operations, "first");
+    const second = await insert(behind.operations, "second");
+
+    expect(second, "stamped after the row it could see").toBeGreaterThan(first);
+    expect(await latest(), "the latest is the row written last").toBe("second");
+    expect(second - first, "pushed only as far as the earlier row, not to a clock of its own").toBeLessThan(1);
+  });
+
+  test.each([
+    ["on both sides of zero", 1, -1],
+    ["before 1970", -1_000, -61_000],
+    ["at zero and below", 0, -0.5],
+  ])("the order holds for clocks %s", async (_, aheadAt, behindAt) => {
+    const first = await insert(setUp({ real: aheadAt }).operations, "first");
+    const second = await insert(setUp({ real: behindAt }).operations, "second");
+
+    expect(first, "the first row keeps its runner's now").toBe(aheadAt);
+    expect(second).toBeGreaterThan(first);
+    expect(second - first, "just after it").toBeLessThan(1);
+    expect(await latest()).toBe("second");
+  });
+
+  test("advances that race keep the highest stamp, and give their lock back", async () => {
+    const keys = Array.from({ length: 40 }, (_, i) => BigInt((i * 7919) % 40) * 1_000_000_007n - 20_000_000_000n);
+
+    await Promise.all(keys.map((key) => pool.query(`select "advanceCreationClock"($1::bigint)`, [key.toString()])));
+
+    const { rows } = await pool.query<{ last_value: string }>(`select last_value from "creationClock"`);
+    expect(BigInt(rows[0]!.last_value)).toBe(keys.reduce((a, b) => (a > b ? a : b)));
+    const { rows: held } = await pool.query(
+      `select pid from pg_locks where locktype = 'advisory' and classid = 'pg_class'::regclass and objid = '"creationClock"'::regclass and objsubid = 2`,
+    );
+    expect(held, "no session keeps the clock's lock").toEqual([]);
+  });
+
+  test("an attempt that re-runs after losing to another runner stamps after the row it lost to", async () => {
+    const ahead = setUp({ real: 1_700_000_000_000 + minute });
+    const behind = setUp({ real: 1_700_000_000_000 });
+    await pool.query("insert into counters (id, n) values ('wallet', 0)");
+    const stamps = new Map<string, number[]>();
+    // Both first attempts read before either writes; the runner behind writes only once the one ahead has committed,
+    // so SERIALIZABLE refuses it, and its second attempt sees the other's row.
+    let reads = 0;
+    let bothRead: () => void;
+    const barrier = new Promise<void>((resolve) => (bothRead = resolve));
+    let aheadCommitted: () => void;
+    const committed = new Promise<void>((resolve) => (aheadCommitted = resolve));
+    const spend = (operations: Operations, name: string) =>
+      operations.mutation(name, async ({ tx, newRow }) => {
+        const [row] = await tx.select().from(counters).where(eq(counters.id, "wallet"));
+        if (++reads === 2) bothRead();
+        if (reads <= 2) await barrier;
+        if (name === "behind" && reads <= 2) await committed;
+        const { _creationTime } = newRow();
+        stamps.set(name, [...(stamps.get(name) ?? []), _creationTime]);
+        await tx.update(counters).set({ n: row!.n + 1, at: _creationTime }).where(eq(counters.id, "wallet"));
+      });
+
+    await Promise.all([spend(ahead.operations, "ahead").then(() => aheadCommitted()), spend(behind.operations, "behind")]);
+
+    const [once] = stamps.get("ahead")!;
+    const [, retried] = stamps.get("behind")!;
+    expect([stamps.get("ahead")!.length, stamps.get("behind")!.length], "the one behind ran twice").toEqual([1, 2]);
+    expect(retried, "its second attempt stamps after the row it lost to").toBeGreaterThan(once!);
+    const { rows } = await pool.query("select n, at from counters where id = 'wallet'");
+    expect(rows, "both spends counted, the last write's stamp kept").toEqual([{ n: 2, at: retried }]);
+  });
+
+  test("runners writing rows of their own never conflict through the creation order", async () => {
+    const runners = [setUp({ real: 1_700_000_000_000 + minute }), setUp({ real: 1_700_000_000_000 })];
+    const attempts = new Map<string, number>();
+    const ids = Array.from({ length: 12 }, (_, i) => `row-${i}`);
+
+    await Promise.all(
+      ids.map((id, i) =>
+        runners[i % 2]!.operations.mutation(`insert ${id}`, async ({ tx, newRow }) => {
+          attempts.set(id, (attempts.get(id) ?? 0) + 1);
+          await tx.insert(counters).values({ id, n: 0, at: newRow()._creationTime });
+        }),
+      ),
+    );
+
+    expect([...attempts.values()], "every insert ran once").toEqual(ids.map(() => 1));
+    expect(Number((await pool.query("select count(*) from counters")).rows[0].count)).toBe(ids.length);
+  });
+});
+
 describe("the transaction", () => {
-  test("lets go of a connection lost before it begins, so the next operation still gets one", async () => {
+  test("a connection lost before BEGIN is let go, and the operation runs again on a new one", async () => {
     // One connection, so a leaked one would leave the next operation waiting until the connect timeout.
     const single = createPool(withSearchPath(inject("databaseUrl"), schema), { max: 1, connectTimeoutMs: 2_000 });
     let loseNext = true;
@@ -180,10 +307,11 @@ describe("the transaction", () => {
     });
     try {
       const { operations, lines } = setUp({ pool: losing });
+      let runs = 0;
 
-      await expect(operations.mutation("first", async () => "ran")).rejects.toThrow();
+      expect(await operations.mutation("first", async () => ++runs), "it runs on the next connection").toBe(1);
       expect(await operations.mutation("second", async () => "ran"), "the next operation gets a connection").toBe("ran");
-      expect(lines.filter((line) => line.level === "error").map((line) => line.operation)).toEqual(["first"]);
+      expect(lines.filter((line) => line.level === "error"), "nothing failed").toEqual([]);
     } finally {
       await single.end();
     }
@@ -194,13 +322,121 @@ describe("the transaction", () => {
     const single = createPool(withSearchPath(inject("databaseUrl"), schema), { max: 1, connectTimeoutMs: 2_000 });
     try {
       const { operations } = setUp({ pool: single });
+      let runs = 0;
 
-      await expect(operations.mutation("doomed", ({ tx }) => tx.execute(sql`insert into doomed values ('x')`))).rejects.toMatchObject({ code: "57P01" });
+      const doomed = operations.mutation("doomed", ({ tx }) => (runs++, tx.execute(sql`insert into doomed values ('x')`)));
+      await expect(doomed, "lost during COMMIT, whose outcome is unknown").rejects.toMatchObject({ code: "57P01" });
+      expect(runs, "never run again blindly").toBe(1);
       const next = await operations.mutation("next", async ({ tx }) => (await tx.execute<{ one: number }>(sql`select 1 as one`)).rows);
       expect(next, "the next operation runs").toEqual([{ one: 1 }]);
     } finally {
       await single.end();
     }
+  });
+
+  test.each([
+    ["the server ends its session", "endSession"],
+    ["its socket resets", "resetSocket"],
+  ] as const)("a mutation whose connection drops before COMMIT runs again on a new connection: %s", async (_, how) => {
+    const { operations, lines, connections } = watched();
+    let runs = 0;
+
+    const result = await operations.mutation("book next", async ({ tx }) => {
+      runs += 1;
+      await tx.insert(counters).values({ id: `attempt-${runs}`, n: runs });
+      if (runs === 1) {
+        await lose[how](tx, connections.at(-1)!);
+        await tx.execute(sql`select 1`); // the next statement finds the connection gone
+      }
+      return runs;
+    });
+
+    expect(result, "the second attempt's answer").toBe(2);
+    expect((await pool.query("select id from counters")).rows, "only the second attempt's write").toEqual([{ id: "attempt-2" }]);
+    expect(new Set(connections).size, "on a new connection").toBe(2);
+    expect(lines.filter((line) => line.level === "error"), "nothing failed").toEqual([]);
+  });
+
+  test("a handler that catches the lost connection and goes on still runs again, never COMMITting on it", async () => {
+    const { operations, connections } = watched();
+    let runs = 0;
+
+    const result = await operations.mutation("swallow", async ({ tx }) => {
+      runs += 1;
+      await tx.insert(counters).values({ id: `attempt-${runs}`, n: runs });
+      if (runs === 1) {
+        await lose.resetSocket(tx, connections.at(-1)!);
+        await tx.execute(sql`select 1`).catch(() => {});
+      }
+      return runs;
+    });
+
+    expect(result).toBe(2);
+    expect((await pool.query("select id from counters")).rows).toEqual([{ id: "attempt-2" }]);
+  });
+
+  test("a session-ending answer that lands after COMMIT was sent never makes that COMMIT run again", async () => {
+    // COMMIT succeeds on the server, and its answer is lost on the way back: the outcome is unknown to the runner.
+    const answerLost = {
+      connect: async () => {
+        const client = await pool.connect();
+        const query = client.query.bind(client) as (text: unknown, ...rest: unknown[]) => Promise<unknown>;
+        (client as unknown as { query: typeof query }).query = (text, ...rest) =>
+          typeof text === "string" && text.endsWith("COMMIT")
+            ? query(text, ...rest).then(() => {
+                (client as unknown as { connection: { stream: { destroy(): void } } }).connection.stream.destroy();
+                throw new Error("Connection terminated unexpectedly");
+              })
+            : query(text, ...rest);
+        return client;
+      },
+    } as Pick<pg.Pool, "connect">;
+    const { operations } = setUp({ pool: answerLost });
+    let runs = 0;
+
+    const once = operations.mutation("book next", async ({ tx }) => {
+      runs += 1;
+      await tx.insert(counters).values({ id: `attempt-${runs}`, n: runs });
+      await tx.execute(sql`savepoint late`);
+      // Not awaited: an answer of a session-ending class, and the rollback that recovers from it, land after COMMIT is sent.
+      void tx.execute(sql.raw(`do $$ begin raise exception 'gone' using errcode = '08006'; end $$`)).catch(() => {});
+      void tx.execute(sql`rollback to savepoint late`).catch(() => {});
+    });
+
+    await expect(once, "lost during COMMIT, whose outcome is unknown").rejects.toThrow("Connection terminated unexpectedly");
+    expect(runs, "never run again blindly").toBe(1);
+    expect((await pool.query("select id from counters")).rows, "the one committed write").toEqual([{ id: "attempt-1" }]);
+  });
+
+  test("a query whose connection drops runs again on a new connection", async () => {
+    const { operations } = watched();
+    let runs = 0;
+
+    const rows = await operations.query("read", async ({ tx }) => {
+      runs += 1;
+      if (runs === 1) await lose.endSession(tx);
+      return (await tx.execute<{ one: number }>(sql`select 1 as one`)).rows;
+    });
+
+    expect(rows).toEqual([{ one: 1 }]);
+    expect(runs).toBe(2);
+  });
+
+  test("a connection that keeps dropping runs out of the same attempts, logged with the operation's name", async () => {
+    const { operations, lines } = setUp({ maxAttempts: 3 });
+    let runs = 0;
+
+    const failing = operations.mutation("book next", async ({ tx }) => {
+      runs += 1;
+      await lose.endSession(tx);
+      await tx.execute(sql`select 1`);
+    });
+
+    await expect(failing).rejects.toThrow();
+    expect(runs).toBe(3);
+    expect(lines.filter((line) => line.level === "error").map(({ message, operation, attempts }) => ({ message, operation, attempts }))).toEqual([
+      { message: "mutation retries exhausted", operation: "book next", attempts: 3 },
+    ]);
   });
 
   test("a handler can't end or start the runner's transaction: Drizzle's own transaction, a raw statement, or one behind a comment or another statement", async () => {
@@ -291,6 +527,22 @@ describe("the transaction", () => {
 
     expect(result).toBe("done");
     expect(attempts).toBe(2);
+  });
+
+  test("a serialization failure of a statement still running when the handler returns retries, though the creation clock moves with COMMIT", async () => {
+    const { operations } = setUp();
+    let runs = 0;
+
+    const result = await operations.mutation("leave one running", async ({ tx, newRow }) => {
+      runs += 1;
+      await tx.insert(counters).values({ id: `attempt-${runs}`, n: runs, at: newRow()._creationTime });
+      // Not awaited: it fails after the handler has returned, before the runner's COMMIT runs.
+      if (runs === 1) void tx.execute(sql.raw(`do $$ begin raise exception 'conflict' using errcode = '40001'; end $$`)).catch(() => {});
+      return runs;
+    });
+
+    expect(result, "the second attempt's answer").toBe(2);
+    expect((await pool.query("select id from counters")).rows, "only the second attempt's write").toEqual([{ id: "attempt-2" }]);
   });
 
   test("a statement after a swallowed failure answers with that failure's code, so a hidden serialization failure retries at once", async () => {

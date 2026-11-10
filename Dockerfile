@@ -7,10 +7,12 @@ COPY . .
 # The commit the copy serves on /healthz: the build argument when given, else HEAD read from the checkout's .git.
 ARG HEDGEHUG_COMMIT=""
 RUN HEDGEHUG_COMMIT="$HEDGEHUG_COMMIT" node service/scripts/write-commit.ts .
+# The website's build, which the service serves from /app/website (service/src/website/hosting.ts).
+RUN pnpm install --frozen-lockfile && pnpm website:build
 # The service's production dependencies only, in a folder of their own.
-RUN pnpm install --frozen-lockfile --filter @kudos/service \
-  && pnpm --filter @kudos/service deploy --prod /app \
-  && cp service/COMMIT /app/COMMIT
+RUN pnpm --filter @kudos/service deploy --prod /app \
+  && cp service/COMMIT /app/COMMIT \
+  && cp -r website/dist /app/website
 
 FROM node:24.21.0-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20
 # NODE_USE_ENV_PROXY makes fetch honour HTTPS_PROXY, the host's only way out.

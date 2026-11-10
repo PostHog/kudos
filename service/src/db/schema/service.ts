@@ -1,14 +1,15 @@
 // The service's own tables, beside the ones generated from convex/schema.ts.
-import { doublePrecision, index, jsonb, pgTable, primaryKey, text } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import { doublePrecision, index, jsonb, pgSequence, pgTable, primaryKey, text } from "drizzle-orm/pg-core";
 import type { FlagDefinitions } from "../../analytics/evaluator/types.ts";
-import { bytes, creationTime, f64, id, str, value } from "../columns.ts";
+import { bytes, creationTime, documentTable, f64, id, str, value } from "../columns.ts";
 
 /**
  * Rows of Convex tables the rewrite doesn't use, kept verbatim: Convex Auth's tables other than `users`, the
  * components' private tables and every exported `_scheduled_functions` row. `document` is the whole document in the
  * codec's stored encoding; nothing is dropped.
  */
-export const archive = pgTable(
+export const archive = documentTable(
   "archive",
   {
     /** Where the row came from: `app`, or the component's path in the export, such as `_components/posthog`. */
@@ -25,7 +26,7 @@ export const archive = pgTable(
  * Stored files, such as card pictures: Convex's `_storage` document field by field, with its bytes.
  * `contentType` is optional in `_storage`, so NULL means it was missing.
  */
-export const files = pgTable("files", {
+export const files = documentTable("files", {
   _id: id(),
   _creationTime: creationTime(),
   sha256: str().notNull(),
@@ -38,7 +39,7 @@ export const files = pgTable("files", {
  * Every job, pending or done: the one job history, which the failed-job sweep and the bus's replay read. `args` is in
  * the codec's stored encoding; `deadline` is set on an action job when it starts running.
  */
-export const jobs = pgTable(
+export const jobs = documentTable(
   "jobs",
   {
     _id: id(),
@@ -52,8 +53,14 @@ export const jobs = pgTable(
     error: str(),
     completedAt: f64(),
     deadline: f64(),
+    /** When the failed-job sweep took a failed job in, by the app's clock; NULL until it has. */
+    sweptAt: f64(),
   },
-  (t) => [index("jobs_by_state_and_runAt").on(t.state, t.runAt, t._creationTime, t._id)],
+  (t) => [
+    index("jobs_by_state_and_runAt").on(t.state, t.runAt, t._creationTime, t._id),
+    // The failed jobs the sweep has yet to take in, in the order they finished: what it reads stays as small as its backlog.
+    index("jobs_failed_and_unswept").on(t.completedAt, t._id).where(sql`${t.state} = 'failed' and ${t.sweptAt} is null`),
+  ],
 );
 
 /** Each cron's next run; the copy that moves it forward fires the cron. */
@@ -81,3 +88,10 @@ export const flagRefreshes = pgTable("flagRefreshes", {
   key: text().primaryKey(),
   refreshedAt: doublePrecision().notNull(),
 });
+
+/**
+ * The creation order every runner shares: the highest `_creationTime` a mutation has stamped, as the order-keeping
+ * int64 key of its float64 (db/creationClock.ts). A sequence, so moving it forward neither waits for nor conflicts with any
+ * transaction; `"advanceCreationClock"` (migration 0006) moves it, and only forward. Unset until the first stamp.
+ */
+export const creationClock = pgSequence("creationClock", { minValue: "-9223372036854775808", startWith: "0" });

@@ -1,8 +1,10 @@
+import { fileURLToPath } from "node:url";
 import { serve, type ServerType } from "@hono/node-server";
 import { createClock, type Clock } from "./clock.ts";
 import { readCommit } from "./commit.ts";
 import { runMigrations } from "./db/migrate.ts";
 import { createPool } from "./db/pool.ts";
+import { configuredHost } from "./analytics/browser.ts";
 import { createApp, type Migrations } from "./http/app.ts";
 import { listenForDueJobs, type Listener } from "./jobs/wakeups.ts";
 import { createWorker, type Worker } from "./jobs/worker.ts";
@@ -12,6 +14,10 @@ import { createOperations, type Operations } from "./operations.ts";
 import type { Registry } from "./registration.ts";
 import { serviceRegistry } from "./registry.ts";
 import { createFrontDoor } from "./slack/frontDoor.ts";
+import { websiteFiles } from "./website/hosting.ts";
+
+/** Where the image puts the website's build (the Dockerfile); `HEDGEHUG_WEBSITE_DIR` names another, as a local run's. */
+const builtWebsite = fileURLToPath(new URL("../website", import.meta.url));
 
 export interface BootOptions {
   env: NodeJS.ProcessEnv;
@@ -65,7 +71,7 @@ export async function boot({
   const clock = createClock();
   const pool = databaseUrl ? createPool(databaseUrl, { connectTimeoutMs }) : undefined;
   pool?.on("error", (error) => log.error("database connection lost", errorFields(error)));
-  const load = pool ? createLoadControl({ pool, token: env.HEDGEHUG_ADMIN_TOKEN || undefined, log }) : undefined;
+  const load = pool ? createLoadControl({ pool, token: env.HEDGEHUG_ADMIN_TOKEN || undefined, log, jobs: registry.jobs, now: clock.now }) : undefined;
   const operations = pool ? createOperations({ pool, clock, log, subscribers: registry.subscribers }) : undefined;
   // While a load holds, no cron is written or fired and no job starts.
   const worker = operations && load ? createWorker({ operations, log, registry: registry.jobs, held: load.held, ...(pollMs ? { pollMs } : {}) }) : undefined;
@@ -84,6 +90,7 @@ export async function boot({
     slack,
     // Without a database no domain route could answer: the gate holds every one at 503.
     routes: operations ? registry.routes.map((routes) => routes({ operations, clock, log })) : [],
+    website: websiteFiles({ dir: env.HEDGEHUG_WEBSITE_DIR || builtWebsite, postHogHost: () => configuredHost() ?? undefined }),
   });
   const server = await listen(app.fetch, Number(env.PORT ?? 8080));
   const port = (server.address() as { port: number }).port;
