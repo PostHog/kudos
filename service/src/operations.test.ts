@@ -8,7 +8,7 @@ import { useTestDatabase, withSearchPath } from "../testing/database.ts";
 import { createClock } from "./clock.ts";
 import { createPool } from "./db/pool.ts";
 import { errorFields, type Log, type LogFields } from "./log.ts";
-import { createOperations, type Database, type Operations } from "./operations.ts";
+import { createOperations, fence, type Database, type Operations } from "./operations.ts";
 
 // A table of the test's own, in a schema of its own, so the service's schema stays exactly the migrations'.
 const counters = pgTable("counters", { id: text().primaryKey(), n: integer().notNull(), at: doublePrecision() });
@@ -484,6 +484,129 @@ describe("no network inside a mutation or query", () => {
       }),
     ).rejects.toMatchObject({ name: "NetworkInOperationError" });
     expect((await pool.query("select * from counters")).rows, "its writes roll back").toEqual([]);
+  });
+
+  test("behind the fence, a refused fetch undoes only what the fence ran, and the mutation goes on to commit", async () => {
+    const { operations } = setUp();
+
+    const answer = await operations.mutation("fail a job", async ({ tx }) => {
+      await tx.insert(counters).values({ id: "claim", n: 1 });
+      const refused = await fence(async () => {
+        await tx.insert(counters).values({ id: "behind", n: 1 });
+        await tx.execute(sql`savepoint own`); // a savepoint of the fenced code's own launders nothing either
+        await fetchesOk().catch(() => "swallowed");
+        await tx.execute(sql`rollback to savepoint own`).catch(() => "swallowed too");
+      }).catch((error: unknown) => error);
+      await tx.insert(counters).values({ id: "marked", n: 1 });
+      return refused;
+    });
+
+    expect(answer).toMatchObject({ name: "NetworkInOperationError" });
+    expect((await pool.query("select id from counters order by id")).rows).toEqual([{ id: "claim" }, { id: "marked" }]);
+  });
+
+  test("work the fence left running writes nothing once the fence undid it, and a fetch it makes later fails the mutation", async () => {
+    const { operations } = setUp();
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => (release = resolve));
+    let stray!: Promise<unknown>;
+
+    await operations.mutation("fail a job", async ({ tx }) => {
+      await fence(async () => {
+        stray = released.then(() => tx.insert(counters).values({ id: "stray", n: 1 }));
+        throw new Error("the job failed");
+      }).catch(() => "marked failed");
+      release();
+      await expect(stray).rejects.toSatisfy(causedBy("OperationEndedError"));
+    });
+    expect((await pool.query("select * from counters")).rows).toEqual([]);
+
+    let fetchLater!: () => void;
+    let later!: Promise<string>;
+    await expect(
+      operations.mutation("fail a job", async () => {
+        await fence(async () => {
+          later = new Promise<void>((resolve) => (fetchLater = resolve)).then(fetchesOk);
+          throw new Error("the job failed");
+        }).catch(() => "marked failed");
+        fetchLater();
+        await later.catch(() => "swallowed");
+      }),
+    ).rejects.toMatchObject({ name: "NetworkInOperationError" });
+  });
+
+  test("a fence taken after a swallowed serialization failure answers with it, so the mutation retries", async () => {
+    const { operations } = setUp();
+    let attempts = 0;
+
+    const result = await operations.mutation("went on", async ({ tx }) => {
+      attempts += 1;
+      if (attempts === 1) await tx.execute(sql`do $$ begin raise exception using errcode = '40001'; end $$`).catch(() => {});
+      return fence(async () => "fenced");
+    });
+
+    expect(result).toBe("fenced");
+    expect(attempts).toBe(2);
+  });
+
+  test("a fence left running past its operation never touches the connection the next operation gets", async () => {
+    const single = createPool(withSearchPath(inject("databaseUrl"), schema), { max: 1, connectTimeoutMs: 2_000 });
+    try {
+      const { operations } = setUp({ pool: single });
+      let fail!: () => void;
+      const failing = new Promise<void>((_, reject) => (fail = () => reject(new Error("the job failed"))));
+      let left!: Promise<unknown>;
+
+      await operations.mutation("leaves a fence behind", async () => {
+        left = fence(() => failing).catch((error: unknown) => error);
+      });
+      const next = operations.mutation("next", async ({ tx }) => {
+        fail();
+        await left;
+        await tx.insert(counters).values({ id: "next", n: 1 });
+      });
+
+      await next;
+      expect((await pool.query("select id from counters")).rows, "the next operation's write commits").toEqual([{ id: "next" }]);
+    } finally {
+      await single.end();
+    }
+  });
+
+  test("a refusal outside the fence fails the mutation even while the fence undoes its own", async () => {
+    const { operations } = setUp();
+    let refuseOutside!: () => void;
+    const outsideRefused = new Promise<void>((resolve) => (refuseOutside = resolve));
+    let insideRefused!: () => void;
+    const refusedInside = new Promise<void>((resolve) => (insideRefused = resolve));
+
+    await expect(
+      operations.mutation("both refused", async ({ tx }) => {
+        await tx.insert(counters).values({ id: "before", n: 1 });
+        const fenced = fence(async () => {
+          await fetchesOk().catch(() => "swallowed");
+          insideRefused();
+          await outsideRefused; // the call outside is refused while the fence is still pending
+        }).catch(() => "marked failed");
+        await refusedInside;
+        await fetchesOk().catch(() => "swallowed outside");
+        refuseOutside();
+        await fenced;
+        await tx.insert(counters).values({ id: "after", n: 1 }).catch(() => "swallowed too");
+      }),
+    ).rejects.toMatchObject({ name: "NetworkInOperationError" });
+    expect((await pool.query("select * from counters")).rows, "nothing commits").toEqual([]);
+  });
+
+  test("one fence per attempt: never twice, never nested, never outside an operation", async () => {
+    const { operations } = setUp();
+
+    await expect(fence(async () => "outside")).rejects.toMatchObject({ name: "FenceTakenError" });
+    await expect(operations.mutation("twice", async () => {
+      await fence(async () => "first");
+      await fence(async () => "second");
+    })).rejects.toMatchObject({ name: "FenceTakenError" });
+    await expect(operations.mutation("nested", () => fence(() => fence(async () => "inner")))).rejects.toMatchObject({ name: "FenceTakenError" });
   });
 
   test("a fetch inside a query throws too", async () => {
