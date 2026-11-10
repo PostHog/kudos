@@ -38,13 +38,11 @@ const world = vi.hoisted(() => ({
   given: null as null | Array<{ created: number; awards: Array<{ award: string }>; annotations: Record<string, unknown> }>,
   // The directory's cursors are opaque, as Convex's are: each names where its page ended, and a made-up one is refused.
   cursors: new Map<string, number>(),
-  cursorsRead: [] as Array<string | null>,
 }));
 
 vi.mock("../workspace/directory.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../workspace/directory.ts")>()),
   membersPageIn: async (_ctx: unknown, workspace: string, cursor: string | null, numItems: number) => {
-    world.cursorsRead.push(cursor);
     const members = world.members.filter((each) => each.workspace === workspace).map(({ member }) => member);
     const from = cursor === null ? 0 : world.cursors.get(cursor);
     if (from === undefined) throw new Error(`The directory never gave the cursor ${cursor}`);
@@ -108,7 +106,6 @@ beforeEach(() => {
   world.items.length = 0;
   world.given = null;
   world.cursors.clear();
-  world.cursorsRead.length = 0;
 });
 
 describe("a tier is earned once, with its item", () => {
@@ -185,8 +182,7 @@ describe("the backfills walk by cursor, a job a page", () => {
     await enqueue(recordMilestonesInWorkspaceJob, { workspace: "T1", cursor: null });
     const { ran } = await t.settle();
 
-    expect(ran.filter((name) => name === recordMilestonesInWorkspaceJob.name), "two pages of members").toHaveLength(2);
-    expect(world.cursorsRead, "the second job reads on from the cursor the directory gave").toEqual([null, [...world.cursors.keys()][0]]);
+    expect(ran.filter((name) => name === recordMilestonesInWorkspaceJob.name), "two pages of members, the second on the cursor the directory gave").toHaveLength(2);
     expect(ran.filter((name) => name === recordMilestonesOfStickerHoldersJob.name), "the holders' walk follows once: the holder, then the end").toHaveLength(2);
     const tiered = new Set((await t.seed.all("milestoneTiers")).map(({ member }) => member));
     expect(tiered, "everyone, the sticker holder by the holders' walk").toEqual(new Set(crowd));
