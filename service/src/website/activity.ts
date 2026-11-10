@@ -1,8 +1,8 @@
 // The module map's skeleton of convex/website/activity.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
 // notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
 import type { Activity, RecentKudos, Spotlight } from "../activity/entries.ts";
-import { type ActivityWeek } from "./activityWeek.ts";
-import { type Denial } from "./memberQuery.ts";
+import type { ActivityWeek } from "./activityWeek.ts";
+import type { Denial } from "./memberQuery.ts";
 
 export type { Activity, ActivityEntry, Channel, Found, KudosGiven, KudosReceived, LevelUp, Message, Person, QuestDone, RecentKudos, Segment, Spotlight, HugGiven, HugReceived } from "../activity/entries.ts";
 

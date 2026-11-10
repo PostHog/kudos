@@ -94,6 +94,6 @@ describe("the one reply's row", () => {
     await t.seed.insert("oneReplies", { reply, left: "3 kudos left today" });
     await t.seed.insert("oneReplies", { reply, left: "2 kudos left today" });
 
-    await expect(t.oneReplyRowOf(reply)).rejects.toThrow(/more than one/i);
+    await expect(t.oneReplyRowOf(reply)).rejects.toThrow(new Error("unique() query returned more than one result from table oneReplies:"));
   });
 });
