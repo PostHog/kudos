@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Proves the root Dockerfile's image boots as the host runs it: as user 1000, on $PORT, under the host's memory and CPU
-# limits, with and without a database, serving the commit it was built from, and sending fetch through HTTPS_PROXY.
+# limits, with and without a database, serving the commit it was built from, answering Slack while cards draw and a job
+# runs, and sending fetch through HTTPS_PROXY.
 # Usage: service/scripts/check-image.sh <image> <expected commit>
 set -euo pipefail
 
@@ -67,6 +68,12 @@ asset="$(curl -fsS "http://127.0.0.1:$app_port/" | grep -o '/assets/index-[A-Za-
 [[ "$(curl -fsS -D - -o /dev/null "http://127.0.0.1:$app_port$asset")" == *"cache-control: public, max-age=31536000, immutable"* ]] || fail "$asset is not cached for good"
 echo "ok: serves the website's build with its policy and cache headers"
 docker stats --no-stream --format 'memory after boot: {{.MemUsage}}' "$run_id-app"
+
+# The resource proof, under the same limits: the service answers Slack within its ack deadline while cards draw on the
+# renderer thread and a job runs, and the container stays inside its memory (service/scripts/resourceProof.ts).
+proof="$(docker run --rm "${limits[@]}" --network "$run_id" -e DATABASE_URL="postgres://postgres:check@$run_id-db:5432/hedgehug" "$image" node scripts/resourceProof.ts)" \
+  || fail "the resource proof failed: $proof"
+echo "ok: acks Slack while cards draw and a job runs, under --memory 512m --cpus 0.5: $proof"
 
 # fetch goes through HTTPS_PROXY: a proxy that refuses connections makes a public fetch fail on the proxy's port.
 proxied="$(docker run --rm "${limits[@]}" -e HTTPS_PROXY=http://127.0.0.1:9 "$image" node -e \
