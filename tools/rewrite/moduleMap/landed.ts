@@ -111,7 +111,6 @@ export const landed = [
   "convex/feedback/sentNotices.ts",
   "convex/feedback/thankYouClassifier.ts",
   "convex/feedback/thankYouNudge.ts",
-  "convex/feedback/tierNotices.ts",
   "convex/feedback/waitingHoggies.ts",
   "convex/feedback/welcome.ts",
   "convex/feedback/welcomeNudge.ts",
