@@ -5,7 +5,7 @@ import { asc, eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, test, vi, type MockInstance } from "vitest";
 import { useTestBackend, type TestBackend } from "../../testing/backend.ts";
 import { httpStatus, networkFailure, rateLimitedFor, slackError } from "../../testing/fakeSlack.ts";
-import { channelCreatedEvent, kudosAppBotUser, messageEvent, section, text } from "../../testing/slackMessages.ts";
+import { channelCreatedEvent } from "../../testing/slackMessages.ts";
 import { decodeStored } from "../db/codec.ts";
 import { jobs } from "../db/schema/service.ts";
 import { joinPublicChannelsJob } from "./channelJoins.ts";
@@ -61,12 +61,13 @@ describe("the channel join puts the app in every public channel it isn't in yet"
     expect(logged).toHaveBeenLastCalledWith("channel joins finished: joined 2, missed 0");
   });
 
-  test("joining posts nothing in the channel beyond Slack's own join line", async () => {
+  // Today's case also sends Slack's own join line (a `channel_join` message) and checks nothing answers it. No stack
+  // takes in `message` events on the service yet, so that half would pass whatever the handler did: it joins this case
+  // when S4's message handler lands (PostHog/kudos#990's Still owed).
+  test("joining posts nothing in the channel", async () => {
     t.slack.withChannel("C_FIRST", { name: "first" });
 
     await joinPublicChannels();
-    expect((await t.send("/events", messageEvent([section(text("has joined the channel"))], { channel: "C_FIRST", user: kudosAppBotUser, subtype: "channel_join" }))).status).toBe(200);
-    await settleInTimeOrder();
 
     expect(t.slack.hasJoined("C_FIRST")).toBe(true);
     expect(t.slack.calls.filter(({ method }) => postingMethods.includes(method))).toEqual([]);
