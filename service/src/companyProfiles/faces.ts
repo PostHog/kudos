@@ -1,7 +1,7 @@
-// The module map's skeleton of convex/companyProfiles/faces.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
-// notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
+// A member's company face by their real name, as today's convex/companyProfiles/faces.ts.
+import { asc, eq } from "drizzle-orm";
+import { companyProfiles } from "../db/schema/companyProfiles.ts";
 import type { QueryContext } from "../operations.ts";
-import { notPorted } from "../notPorted.ts";
 
 export type CompanyFace = { image: string; colour: string };
 
@@ -20,5 +20,15 @@ export function normalisedName(name: string) {
 }
 
 export async function companyFaceOf(ctx: QueryContext, realName: string): Promise<CompanyFace | undefined> {
-  throw notPorted("companyProfiles.faces.companyFaceOf");
+  const name = normalisedName(realName);
+  if (name === "") return undefined;
+  const matches = await ctx.tx
+    .select({ image: companyProfiles.image, colour: companyProfiles.colour })
+    .from(companyProfiles)
+    .where(eq(companyProfiles.normalisedName, name))
+    .orderBy(asc(companyProfiles._creationTime), asc(companyProfiles._id))
+    .limit(2);
+  const [only] = matches;
+  if (only?.image == null || matches.length !== 1) return undefined;
+  return { image: only.image, colour: only.colour };
 }
