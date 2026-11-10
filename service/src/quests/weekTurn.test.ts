@@ -4,7 +4,7 @@
 // member still on it. The worker runs the quests registration's jobs as the service does, beside two recording
 // subscribers for questsDrawn and questFinished. The draws read stacks still stubbed on main (S4's awards reads, S5's
 // republish, S13's hugsLeftOf, welcome's isWelcomed, S6's xp-levels decision): this file stands each in over the rows it
-// seeds, as today's code reads them; republish only records whom it was asked to republish.
+// seeds, as today's code reads them; republish does nothing here, and weekTurnHome.test.ts proves the home refresh.
 import { and, asc, eq, gt, lte, type SQL } from "drizzle-orm";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { z } from "zod";
