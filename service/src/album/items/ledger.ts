@@ -132,6 +132,6 @@ async function itemOf(ctx: QueryContext, member: MemberId, source: ItemSource, k
     .where(and(eq(items.member, member), eq(items.source, source), eq(items.key, key)))
     .orderBy(...byMemberSourceKey.orderBy())
     .limit(2);
-  if (rows.length > 1) throw new Error(`The member holds more than one ${source} item under ${key}`);
+  if (rows.length > 1) throw new Error("unique() query returned more than one result from table items:");
   return rows[0] ? asItem(rows[0]) : null;
 }
