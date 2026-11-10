@@ -355,6 +355,15 @@ describe("the round trip", () => {
     ]);
   });
 
+  test("a NaN with its own sign or payload equals the one NaN the copy keeps", async () => {
+    // Convex's export keeps a NaN's bits; the stored form keeps one NaN on purpose, in a column or an archived document.
+    const nan = Buffer.from("010000000000f8ff", "hex").toString("base64");
+    const at = printExport(reaction("h1")).replace(/"at":[^,}]+/, `"at":{"$float":"${nan}"}`);
+    const service = await copy();
+    await finish(service, zip({ "hypeReactions/documents.jsonl": `${at}\n`, "retired/documents.jsonl": `{"_id":"r1","_creationTime":1.0,"n":{"$float":"${nan}"}}\n` }));
+    expect(await settled(service), "both tables are equal").toMatchObject({ phase: "recovering", roundTrip: { equal: true } });
+  });
+
   test("a database migrated before the round trip's column still reads the load's state", async () => {
     const schema = `load_older_${process.env.VITEST_POOL_ID ?? "0"}`;
     const admin = new pg.Client({ connectionString: inject("databaseUrl") });
@@ -512,6 +521,17 @@ describe("what stops a load", () => {
 
   test("stored bytes in a namespace without _storage documents", async () => {
     expect((await stops({ "_storage/f1": "orphan" })).error, "bytes the loader would drop").toBe("The snapshot has stored bytes without a _storage document: _storage/f1");
+  });
+
+  test("two stored bytes entries for one file, which the loader would read only one of", async () => {
+    const doc: Doc = { _id: "st1", _creationTime: 1, sha256: createHash("sha256").update("abc").digest("base64"), size: 3n, contentType: null, internalId: "i1" };
+    expect((await stops({ "_storage/documents.jsonl": jsonl([doc]), "_storage/st1.png": "lost", "_storage/st1.jpg": "abc" })).error, "in the app").toBe(
+      "The snapshot has two stored bytes entries for file st1: _storage/st1.jpg and _storage/st1.png",
+    );
+    await copies[0]!.request("/admin/load/reset", { method: "POST" });
+    expect((await stops({ "_components/c1/_storage/documents.jsonl": jsonl([doc]), "_components/c1/_storage/st1": "abc", "_components/c1/_storage/st1.txt": "lost" })).error, "in a component").toBe(
+      "The snapshot has two stored bytes entries for file st1: _components/c1/_storage/st1 and _components/c1/_storage/st1.txt",
+    );
   });
 
   test("a stored file whose bytes don't match its document", async () => {

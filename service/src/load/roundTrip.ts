@@ -10,7 +10,7 @@ import { and, asc, eq, getTableColumns, getTableName, gt } from "drizzle-orm";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { PgTable } from "drizzle-orm/pg-core";
 import type pg from "pg";
-import { decodeStored, parseExport, printExport, type Value } from "../db/codec.ts";
+import { decodeStored, encodeStored, parseExport, printExport, type Value } from "../db/codec.ts";
 import { toDocument } from "../db/documents.ts";
 import { archive, files } from "../db/schema/index.ts";
 import * as service from "../db/schema/service.ts";
@@ -140,7 +140,8 @@ async function* readSnapshot(pool: pg.Pool, chunks: number): AsyncGenerator<Item
       const where = dataModelTable(step) ? { table: step.table } : { archive: [step.source, step.table] as [string, string] };
       for await (const line of createInterface({ input, crlfDelay: Infinity })) {
         if (line === "") continue;
-        const doc = parseExport(line) as { [field: string]: Value };
+        // As the copy keeps it: the stored form makes every NaN one NaN, on purpose.
+        const doc = decodeStored(encodeStored(parseExport(line))) as { [field: string]: Value };
         yield { table, row: { at: at(where, doc._id, doc._creationTime), value: doc } };
         if (!step.files) continue;
         // A stored file as the loader keeps it: the app's in `files` with its metadata, a component's bytes archived.

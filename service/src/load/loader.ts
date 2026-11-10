@@ -106,7 +106,12 @@ function storedFiles(snapshot: Snapshot, prefix: string): Map<string, string> {
   const files = new Map<string, string>();
   for (const path of snapshot.entries.keys()) {
     const name = path.startsWith(`${prefix}_storage/`) ? path.slice(prefix.length + "_storage/".length) : undefined;
-    if (name && name !== "documents.jsonl" && !name.includes("/")) files.set(name.split(".")[0]!, path);
+    if (!name || name === "documents.jsonl" || name.includes("/")) continue;
+    const _id = name.split(".")[0]!;
+    // Two entries for one file would leave one unread, its bytes lost without a trace.
+    const other = files.get(_id);
+    if (other) throw new LoadError(`The snapshot has two stored bytes entries for file ${_id}: ${[other, path].sort().join(" and ")}`);
+    files.set(_id, path);
   }
   return files;
 }
