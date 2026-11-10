@@ -131,6 +131,16 @@ describe("O22: the failed-job sweep", () => {
     expect(paths(t)).toEqual(["welcome/welcome:welcomeNewMembers", "slack/delivery:deliver"]);
   });
 
+  test("records a failure that finished more than a week before the sweep, once, as after a long outage", async () => {
+    const t = backend();
+    await failedJob(t, "welcome.welcome.welcomeNewMembers", "Uncaught Error: gone", { completedAt: start - days(8) });
+
+    await sweepAfter(t, minutes(15));
+    await sweepAfter(t, minutes(15));
+
+    expect(paths(t)).toEqual(["welcome/welcome:welcomeNewMembers"]);
+  });
+
   test("O20: never records the analytics module's own jobs", async () => {
     const t = backend();
     await enqueue(t, recordKudosGiven);
