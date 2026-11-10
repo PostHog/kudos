@@ -14,7 +14,7 @@ import { createWorker, type Worker } from "../jobs/worker.ts";
 import type { Log, LogFields } from "../log.ts";
 import { createOperations } from "../operations.ts";
 import { serviceRegistry } from "../registry.ts";
-import { claim, cleanUp, cleanUpJob, createDrain, drainArgs, recover, recoverJob, settle } from "./drain.ts";
+import { claim, cleanUp, cleanUpJob, createDrain, drainArgs, recover, recoverJob, settle, wakeDrain } from "./drain.ts";
 import { record } from "./outbox.ts";
 import { drainJob, sendBatch } from "./send.ts";
 
@@ -199,6 +199,22 @@ describe("O18: a batch PostHog doesn't accept is retried", () => {
       { state: "exhausted", reason: "rejected" },
     ]);
     expect(warnings.mock.calls).toEqual([["analytics.events_given_up", { reason: "rejected", events: ["kudos given", "kudos received"] }]]);
+  });
+
+  // Convex read a batch's rows back by ID, in the order it claimed them. Here the rows are stored, and their IDs sort,
+  // against that order, so a read back without an order of its own lists them the other way round.
+  test("events given up together are named in the order they were recorded", async () => {
+    postHog.answering(answersWith(503));
+    const at = clock.now();
+    const pending = { distinctId: "a-member", timestamp: at, properties: {}, state: "pending" as const, failures: 5, dueAt: at };
+    await seed.insert("analyticsOutbox", { _id: "a-received", _creationTime: at + 1, uuid: "u-received", event: "kudos received", ...pending });
+    await seed.insert("analyticsOutbox", { _id: "b-given", _creationTime: at, uuid: "u-given", event: "kudos given", ...pending });
+    await operations.mutation("test.wake", (ctx) => wakeDrain(ctx));
+
+    await settle_();
+
+    expect(postHog.requests.map((request) => request.events.map(({ event }) => event))).toEqual([["kudos given", "kudos received"]]);
+    expect(warnings.mock.calls).toEqual([["analytics.events_given_up", { reason: "exhausted", events: ["kudos given", "kudos received"] }]]);
   });
 });
 
