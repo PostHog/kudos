@@ -250,10 +250,10 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/website/book.test.ts | S16 | | |
 | convex/website/bookNext.test.ts | S16 | | |
 | convex/website/browserAnalytics.test.ts | S15 | | |
-| convex/website/buyCrate.test.ts | S17 | | |
-| convex/website/buyItem.test.ts | S17 | | |
-| convex/website/buyPerk.test.ts | S17 | | |
-| convex/website/buyPerkCatalogue.test.ts | S17 | | |
+| convex/website/buyCrate.test.ts | S17 | service/src/website/buyCrate.test.ts | S4 S5 S6 S7 S8 S10 S14 S15 S16 S17 |
+| convex/website/buyItem.test.ts | S17 | service/src/website/buyItem.test.ts | S4 S5 S6 S7 S10 S15 S17 |
+| convex/website/buyPerk.test.ts | S17 | service/src/website/buyPerk.test.ts | S4 S5 S6 S7 S10 S15 S16 S17 |
+| convex/website/buyPerkCatalogue.test.ts | S17 | service/src/website/buyPerkCatalogue.test.ts | S4 S6 S7 S10 S15 S16 |
 | convex/website/collection.test.ts | S16 | | |
 | convex/website/commands.test.ts | S15 | | |
 | convex/website/customEmoji.test.ts | S16 | | |
@@ -267,7 +267,7 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/website/leaderboardHugs.test.ts | S16 | | |
 | convex/website/levelUp.test.ts | S17 | service/src/website/levelUp.test.ts | S6 S9 S10 S16 |
 | convex/website/link.test.ts | S17 | service/src/website/link.test.ts | S15 |
-| convex/website/mondayQuests.test.ts | S17 | | |
+| convex/website/mondayQuests.test.ts | S17 | service/src/website/mondayQuests.test.ts | S3 S4 S5 S6 S7 S8 S9 S10 S11 S12 S13 S14 S15 S16 |
 | convex/website/onboarding.test.ts | S17 | service/src/website/onboarding.test.ts | S4 S5 S6 S7 S8 S9 S10 S11 S12 S13 S14 S16 |
 | convex/website/petHoggie.test.ts | S16 | | |
 | convex/website/playerCard.test.ts | S17 | service/src/website/playerCard.test.ts | S3 S4 S5 S6 S7 S8 S9 S10 S11 S14 S15 S16 |
