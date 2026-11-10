@@ -7,6 +7,7 @@ import { flagsKey, postHogHost, projectToken, type FlagDefinition } from "../../
 import { flagsFromPostHog, onForEmails, onForEveryone } from "../../testing/flags.ts";
 import { waitsOn } from "../../testing/waiting.ts";
 import { workspaceKeyOf } from "../analytics/outbox.ts";
+import { analyticsIdOf } from "../analytics/person.ts";
 import { notPorted } from "../notPorted.ts";
 import type { QueryContext } from "../operations.ts";
 import type { MemberId } from "../workspace/directory.ts";
@@ -81,8 +82,12 @@ async function aTeammate({ user, name, email }: Person) {
   await t.seed.insert("members", { workspace: "T1", user, kind: "member", asOf: 0, name, displayName: name, email });
 }
 
+// A signed-in reader, as today's `aSignedInSession` left them: the member check's answer, and the analytics ID their
+// sign-in made, which the flags decide them by.
 async function meOf({ user, name }: Person): Promise<VerifiedMember> {
   const row = (await t.seed.all("members")).find((member) => member.workspace === "T1" && member.user === user);
   if (row === undefined) throw new Error(`${user} is no member`);
-  return { member: row._id as MemberId, workspace: "T1", user, name };
+  const member = row._id as MemberId;
+  await t.run((ctx) => analyticsIdOf(ctx, member));
+  return { member, workspace: "T1", user, name };
 }

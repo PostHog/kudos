@@ -1,6 +1,7 @@
-// The website's own profile card: today's convex/website/profileCard.test.ts. A read whose subject is the member check
-// (closed, signed out, not a member, its arguments) goes through `readAs`, S15's check and then the handler; a read of
-// the card runs `getProfileCard` for a `me` made from the seeded directory row, as the check would answer it. Ann and
+// The website's own profile card: today's convex/website/profileCard.test.ts. A read of the card runs `getProfileCard`
+// for a `me` made from the seeded directory row, as S15's member check answers it. The reads whose subject is the member
+// check or the route's arguments (closed, signed out, not a member, an argument naming another member) go through S15's
+// route transport with the reader's identity, in S17's route pull request. Ann and
 // Bea are seeded as today's `team_join` writes them, with the workspace key its analytics made, and each one's sign-in
 // makes their analytics ID, as today's sign-in did.
 import { afterEach, beforeEach, describe, expect, vi } from "vitest";
@@ -16,12 +17,10 @@ import { earnLevelUpHoggies } from "../album/levelUpHoggies.ts";
 import { workspaceKeyOf } from "../analytics/outbox.ts";
 import { analyticsIdOf } from "../analytics/person.ts";
 import type { LevelReachedEvent } from "../bus/events.ts";
-import { NotPortedError } from "../notPorted.ts";
-import type { QueryContext } from "../operations.ts";
 import { unlocksLiveIn } from "../unlocks/launch.ts";
 import { makeReady, openUnlock } from "../unlocks/unlocks.ts";
 import type { MemberId } from "../workspace/directory.ts";
-import { verifiedMember, type Denial, type VerifiedMember } from "./memberQuery.ts";
+import type { VerifiedMember } from "./memberQuery.ts";
 import { getProfileCard } from "./profileCard.ts";
 
 const allowedWorkspace = "T1";
@@ -57,61 +56,9 @@ beforeEach(() => {
 
 afterEach(() => void vi.unstubAllEnvs());
 
-// S15's member check, then the handler: a read through the website, by whoever signed in (`null` for a visitor). The
-// check finds who reads through S15's identity mapping, so `who` only names them here.
-function readAs<Args, Answer>(t: TestBackend, _who: string | null, handler: (ctx: QueryContext, me: VerifiedMember, args: Args) => Promise<Answer>, args: Args) {
-  return t.query(async (ctx): Promise<Answer | Denial> => {
-    const verified = await verifiedMember(ctx);
-    return "kind" in verified ? verified : handler(ctx, verified.me, args);
-  });
-}
-
 function cardOf(t: TestBackend, me: VerifiedMember) {
   return t.query((ctx) => getProfileCard(ctx, me));
 }
-
-// The error a read ends in; a stub's error fails the test as itself.
-const failureOf = (read: Promise<unknown>) =>
-  read.then(
-    () => undefined,
-    (error: unknown) => {
-      if (error instanceof NotPortedError) throw error;
-      return error;
-    },
-  );
-
-describe("website reads pass one guard", () => {
-  waitsOn(memberCheck, "getProfileCard reads closed while the website flag is off, even with profile-card on", async () => {
-    const t = await workspace({ flags: [offForEveryone("website"), ...["xp-levels", "unlocks", "achievements", cardFlag].map(onForEveryone)] });
-    await aSession(t, { user: ann.user, name: ann.name });
-
-    expect(await readAs(t, ann.user, getProfileCard, {})).toEqual({ kind: "closed" });
-  }, 30_000);
-
-  waitsOn(memberCheck, "getProfileCard reads signed out without a session", async () => {
-    const t = await workspace();
-
-    expect(await readAs(t, null, getProfileCard, {})).toEqual({ kind: "signed-out" });
-  }, 30_000);
-
-  waitsOn(memberCheck, "getProfileCard reads not-a-member for a former member with a live session", async () => {
-    const t = await workspace();
-    await aMember(t, "U_GONE", "not-a-member");
-    await aSession(t, { user: "U_GONE" });
-
-    expect(await readAs(t, "U_GONE", getProfileCard, {})).toEqual({ kind: "not-a-member" });
-  }, 30_000);
-
-  // The refusal is the route table's: its zod args for getProfileCard (S15, 15.3) take no field, so `readAs` must check
-  // the args the same way once it runs the member check for real.
-  waitsOn(memberCheck, "getProfileCard rejects an argument that names another member", async () => {
-    const t = await workspace();
-    await signedIn(t, ann);
-    const withAnotherMember = { user: bea.user } as unknown as Record<string, never>;
-
-    expect(await failureOf(readAs(t, ann.user, getProfileCard, withAnotherMember))).toEqual(expect.objectContaining({ message: expect.stringMatching(/user/) }));
-  }, 30_000);
-});
 
 describe("PC15: the website reads the member's own profile card", () => {
   waitsOn(cardStacks, "the card holds exactly the name, level and best four medals the member's own Slack card shows", async () => {
