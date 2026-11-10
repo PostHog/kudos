@@ -6,6 +6,7 @@
 // first (a CORS preflight), which the service never grants, so no form or link on another site runs a command.
 import { Hono, type Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
+import { z } from "zod";
 import type { HomeMember } from "../../feedback/homes.ts";
 import type { Log } from "../../log.ts";
 import type { MutationContext, Operations, QueryContext } from "../../operations.ts";
@@ -41,10 +42,19 @@ export interface TransportOptions {
   routes: readonly Route[];
   identify: Identify;
   check: MemberCheck;
+  /** The page load that signs the person in, run by `POST /api/entry` in one command of its own. The website's
+   *  registration always gives it; a transport without it, as a route test may build, has no entry route. */
+  enter?: Enter;
 }
 
+/** Runs a person's entry: their sign-in effects when they're due, or the denial that writes nothing. */
+export type Enter = (ctx: MutationContext, identity: Identity) => Promise<{ kind: "entered" } | Denial>;
+
+// The entry takes no arguments, and refuses any it is sent, as a route without arguments does.
+const noArguments = z.strictObject({});
+
 /** The API's routes. Two routes of one name stop the service at boot. */
-export function apiTransport({ operations, log, routes, identify, check }: TransportOptions): Hono {
+export function apiTransport({ operations, log, routes, identify, check, enter }: TransportOptions): Hono {
   const reads = new Map<string, Route>();
   const commands = new Map<string, Route>();
   for (const route of routes) {
@@ -57,6 +67,7 @@ export function apiTransport({ operations, log, routes, identify, check }: Trans
   const limited = bodyLimit({ maxSize: maxBodyBytes, onError: (c) => c.json({ error: "the request is too large" }, 413, { "cache-control": "no-store" }) });
   api.post("/api/query/:name", limited, (c) => answer(c, reads.get(c.req.param("name"))));
   api.post("/api/mutation/:name", limited, (c) => answer(c, commands.get(c.req.param("name"))));
+  if (enter !== undefined) api.post("/api/entry", limited, (c) => entry(c, enter));
   // Every other API path, and any other method on these, is no route: never the website's page.
   api.all("/api", (c) => c.json({ error: "no such route" }, 404));
   api.all("/api/*", (c) => c.json({ error: "no such route" }, 404));
@@ -64,10 +75,8 @@ export function apiTransport({ operations, log, routes, identify, check }: Trans
 
   async function answer(c: Context, route: Route | undefined): Promise<Response> {
     if (route === undefined) return refused(c, 404, "no such route");
-    if (c.req.header(apiHeader) !== "1" || !isJson(c.req.header("content-type")) || c.req.header("sec-fetch-site") === "cross-site") return refused(c, 403, "not a request of the website's own");
-    const body: unknown = await c.req.json().catch(() => undefined);
-    const args = route.args.safeParse(body);
-    if (!args.success) return refused(c, 400, "the arguments don't fit the route");
+    const args = await argumentsOf(c, route.args);
+    if (args instanceof Response) return args;
     const identity = await identify(c.req.raw);
     // Set where the check denies, never read off the result: a handler may answer `{ kind: "closed" }` itself.
     let denied: Denial | undefined;
@@ -87,6 +96,25 @@ export function apiTransport({ operations, log, routes, identify, check }: Trans
     // Convex answered a function that returned nothing with null.
     return c.json(result === undefined ? null : result, 200, { "cache-control": "no-store" });
   }
+
+  async function entry(c: Context, enter: Enter): Promise<Response> {
+    const args = await argumentsOf(c, noArguments);
+    if (args instanceof Response) return args;
+    const identity = await identify(c.req.raw);
+    const result = await operations.mutation("website.entry", (ctx) => enter(ctx, identity));
+    if (result.kind !== "entered") log.info("website request denied", { route: "website.entry", denial: result.kind });
+    return c.json(result, 200, { "cache-control": "no-store" });
+  }
+}
+
+// The request's arguments as the shape passed them, or the refusal: a request of another site's, or arguments that
+// don't fit. Nobody is looked up before this passes.
+async function argumentsOf(c: Context, shape: z.ZodType): Promise<Response | { data: never }> {
+  if (c.req.header(apiHeader) !== "1" || !isJson(c.req.header("content-type")) || c.req.header("sec-fetch-site") === "cross-site") return refused(c, 403, "not a request of the website's own");
+  const body: unknown = await c.req.json().catch(() => undefined);
+  const args = shape.safeParse(body);
+  if (!args.success) return refused(c, 400, "the arguments don't fit the route");
+  return { data: args.data as never };
 }
 
 function refused(c: Context, status: 400 | 403 | 404, error: string): Response {
