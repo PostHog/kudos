@@ -1,50 +1,78 @@
-// The ports' website seam: a call the route table doesn't register throws its former path's stub, and one it registers
-// goes to that route through the app, its failures and refusals reaching the test as themselves. The table here holds
-// one stand-in route of a former path, as S16's list will.
-import { describe, expect, test, vi } from "vitest";
+// The ports' website seam over a route table: a name the table doesn't register throws its stub, and one it registers
+// goes to that route through the app, its answer, failures and refusals reaching the test as themselves. The table here
+// is the test's own, served by S15's transport with a check that admits whoever calls, so nothing in it waits on
+// another stack.
+import { describe, expect, test } from "vitest";
+import { z } from "zod";
 import { useTestBackend } from "../../testing/backend.ts";
-import { NotPortedError } from "../notPorted.ts";
-import { formerConvexCall, registry } from "./albumPorts.testing.ts";
+import type { HomeMember } from "../feedback/homes.ts";
+import { notPorted, NotPortedError } from "../notPorted.ts";
+import { memberCommand, memberRead, type Route } from "../website/api/route.ts";
+import { apiTransport, type MemberCheck, type SignedIn } from "../website/api/transport.ts";
+import type { Verified } from "../website/memberQuery.ts";
+import type { MemberId } from "../workspace/directory.ts";
+import { callThroughTheTable, keepingFailures, registry } from "./albumPorts.testing.ts";
 
-vi.mock("../website/api/table.ts", async () => {
-  const [{ memberRead }, { z }] = await Promise.all([import("../website/api/route.ts"), import("zod")]);
-  return { websiteRoutes: [memberRead("website.album.getAlbumPerson", { person: z.string() }, async () => ({ kind: "found" }))] };
+const juno: SignedIn = { workspace: "T1", user: "U_JUNO", name: "Juno Whitlock" };
+const admitted: Verified = { me: { member: "m_juno" as MemberId, ...juno }, person: { kind: "member", member: "m_juno" } as unknown as HomeMember };
+const admitsAnyone: MemberCheck = { read: async () => admitted, command: async () => admitted };
+
+const table: readonly Route[] = [
+  memberRead("website.test.greeting", { shout: z.boolean() }, async (_ctx, me, { shout }) => ({ words: shout ? `HELLO ${me.user}` : `hello ${me.user}` })),
+  memberCommand("website.test.stub", { at: z.number() }, async (_ctx, _me, _person, { at }) => {
+    throw notPorted(`website.test.notYet${at}`);
+  }),
+  memberCommand("website.test.defect", { at: z.number() }, async (_ctx, _me, _person, { at }) => {
+    throw new Error(`defect ${at}`);
+  }),
+];
+
+const startBackend = useTestBackend({
+  // First, before the service's own transport, which answers every other `/api/*` name with 404.
+  registry: { ...registry, routes: [keepingFailures(({ operations, log }) => apiTransport({ operations, log, routes: table, identify: async () => juno, check: admitsAnyone })), ...registry.routes] },
 });
 
-const startBackend = useTestBackend({ registry });
-
-async function failureOf(call: Promise<unknown>): Promise<unknown> {
+async function outcomeOf(call: Promise<unknown>): Promise<unknown> {
   return call.then(
-    (answer) => ({ answered: answer }),
-    (error: unknown) => error,
+    (answered) => ({ answered }),
+    (failed: unknown) => ({ failed }),
   );
 }
 
-describe("a ported test's website call", () => {
-  test("throws its former path's stub while no route of that name is registered", async () => {
+describe("a ported test's website call over a route table", () => {
+  test("throws the name's stub while the table registers no route of that name", async () => {
     const t = startBackend();
 
-    const failure = await failureOf(formerConvexCall(t, "website.album.getAlbum", null));
+    const { failed } = (await outcomeOf(callThroughTheTable(t, table, "website.album.getAlbum", null))) as { failed: NotPortedError };
 
-    expect(failure).toBeInstanceOf(NotPortedError);
-    expect((failure as NotPortedError).path).toBe("website.album.getAlbum");
+    expect(failed).toBeInstanceOf(NotPortedError);
+    expect(failed.path).toBe("website.album.getAlbum");
   });
 
-  test("goes to the registered route through the app, and a stub that route reaches is thrown as itself", async () => {
+  test("answers what the registered route answers through the app", async () => {
     const t = startBackend();
 
-    const failure = await failureOf(formerConvexCall(t, "website.album.getAlbumPerson", null, { person: "m1" }));
+    expect(await callThroughTheTable(t, table, "website.test.greeting", null, { shout: true })).toEqual({ words: "HELLO U_JUNO" });
+  });
 
-    // Who a request signs in as is S15's next port; until it lands, the transport's identify is that stub.
-    expect(failure).toBeInstanceOf(NotPortedError);
-    expect((failure as NotPortedError).path).toBe("website.memberQuery.verifiedMember");
+  test("throws a stub the route reaches as itself, and any other failure as itself, each to its own call when made at once", async () => {
+    const t = startBackend();
+    const ats = Array.from({ length: 10 }, (_, n) => n);
+
+    const outcomes = await Promise.all(ats.flatMap((at) => [outcomeOf(callThroughTheTable(t, table, "website.test.stub", null, { at })), outcomeOf(callThroughTheTable(t, table, "website.test.defect", null, { at }))]));
+
+    const seen = outcomes.map((outcome) => {
+      const { failed } = outcome as { failed: Error };
+      return failed instanceof NotPortedError ? `stub ${failed.path}` : `other ${failed.message}`;
+    });
+    expect(seen).toEqual(ats.flatMap((at) => [`stub website.test.notYet${at}`, `other defect ${at}`]));
   });
 
   test("refuses an argument the route's shape doesn't name with the shape's own refusal", async () => {
     const t = startBackend();
 
-    const failure = await failureOf(formerConvexCall(t, "website.album.getAlbumPerson", null, { person: "m1", member: "m2" }));
+    const { failed } = (await outcomeOf(callThroughTheTable(t, table, "website.test.greeting", null, { shout: true, member: "m2" }))) as { failed: Error };
 
-    expect(String(failure)).toMatch(/Unrecognized key: "member"/);
+    expect(failed.message).toMatch(/Unrecognized key: "member"/);
   });
 });

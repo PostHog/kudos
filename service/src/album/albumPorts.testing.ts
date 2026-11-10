@@ -130,20 +130,33 @@ export type FormerConvexPath =
 //
 // Who the request signs in as waits on S15's identity mapping (15.2): until then the transport's identify throws its
 // stub for everyone, and `caller` isn't sent. When 15.2 lands, S8 sends the caller's session the way it reads one.
-export async function formerConvexCall<T>(t: TestBackend, name: FormerConvexPath, caller: Session | null, args: Record<string, unknown> = {}): Promise<T> {
-  const route = (websiteRoutes as readonly Route[]).find((each) => each.name === name);
+export function formerConvexCall<T>(t: TestBackend, name: FormerConvexPath, caller: Session | null, args: Record<string, unknown> = {}): Promise<T> {
+  return callThroughTheTable<T>(t, websiteRoutes, name, caller, args);
+}
+
+let calls = 0;
+
+/** `formerConvexCall` over a given route table, which the backend's app must serve: the real one, or a test's own. */
+export async function callThroughTheTable<T>(t: TestBackend, table: readonly Route[], name: string, caller: Session | null, args: Record<string, unknown> = {}): Promise<T> {
+  const route = table.find((each) => each.name === name);
   if (route === undefined) throw notPorted(name);
   void caller;
-  routeFailures.length = 0;
-  const response = await t.app.request(`/api/${route.kind}/${name}`, { method: "POST", headers: { [apiHeader]: "1", "content-type": "application/json" }, body: JSON.stringify(args) });
-  if (response.status === 200) return (await response.json()) as T;
-  // The transport answers only "the arguments don't fit the route"; the route's own schema says why, as Convex's
-  // validator did.
-  if (response.status === 400) {
-    const refused = route.args.safeParse(args);
-    if (!refused.success) throw new Error(`${name} refused its arguments: ${refused.error.issues.map(({ message }) => message).join("; ")}`);
+  // Each call names its request, so calls made at once each get their own route's failure back.
+  const call = `call-${++calls}`;
+  try {
+    const response = await t.app.request(`/api/${route.kind}/${name}`, { method: "POST", headers: { [apiHeader]: "1", "content-type": "application/json", [callHeader]: call }, body: JSON.stringify(args) });
+    if (response.status === 200) return (await response.json()) as T;
+    // The transport answers only "the arguments don't fit the route"; the route's own schema says why, as Convex's
+    // validator did.
+    if (response.status === 400) {
+      const refused = route.args.safeParse(args);
+      if (!refused.success) throw new Error(`${name} refused its arguments: ${refused.error.issues.map(({ message }) => message).join("; ")}`);
+    }
+    if (routeFailures.has(call)) throw routeFailures.get(call);
+    throw new Error(`${name} answered ${response.status}: ${await response.text()}`);
+  } finally {
+    routeFailures.delete(call);
   }
-  throw routeFailures.pop() ?? new Error(`${name} answered ${response.status}: ${await response.text()}`);
 }
 
 /** A website caller, signed in or not, as today's `t.withIdentity(...)` or `t` makes the calls. */
@@ -238,16 +251,19 @@ const events: Partial<Record<EventKind, EventHandler>> = Object.fromEntries(
 );
 // Every website route's failure is kept too, so a stub a route reaches is thrown to the test as itself rather than as
 // the request's 500, whose log names only the error's class.
-const routeFailures: unknown[] = [];
-const keepingFailures =
+const callHeader = "x-test-call";
+const routeFailures = new Map<string, unknown>();
+/** A domain's routes, each request's failure kept by the call that sent it. */
+export const keepingFailures =
   (routes: Routes): Routes =>
   (runtime) =>
     new Hono()
-      .use(async (_c, next) => {
+      .use(async (c, next) => {
         try {
           await next();
         } catch (error) {
-          routeFailures.push(error);
+          const call = c.req.header(callHeader);
+          if (call !== undefined) routeFailures.set(call, error);
           throw error;
         }
       })
