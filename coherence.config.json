@@ -4,6 +4,6 @@
   "test": "pnpm exec vitest run -t {filter}",
   "testMatch": "Tests +[1-9][0-9]* passed",
   "testJson": "pnpm exec vitest run -t {filter} --reporter=json --outputFile={out}",
-  "ignore": ["convex/_generated", "website/proof", "convex/workspace/standardEmojiRows.ts"],
+  "ignore": ["convex/_generated", "website/proof", "convex/workspace/standardEmojiRows.ts", "service/src/workspace/standardEmojiRows.ts"],
   "wellKnown": ["Convex", "Convex Auth", "Cloudinary"]
 }
