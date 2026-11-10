@@ -315,8 +315,12 @@ export function createOperations({ pool, clock, log, maxAttempts = 10, retryDela
       const advance = stamps.highest !== undefined && aborted === undefined ? `${advanceCreationClock(stamps.highest)}; ` : "";
       const committed = await client.query(`${advance}COMMIT`).catch((error: unknown) => {
         // The connection may be gone even when Postgres answered: a session ended at COMMIT answers 57P01 first. A
-        // failed advance drops it too, and with it any lock the advance held.
+        // failed advance drops it too, and with it any lock the advance held, and the transaction it left aborted.
         broken ??= error;
+        // A statement the handler left running failed after it returned, so the advance found the transaction aborted:
+        // that statement's failure is the answer, as COMMIT's ROLLBACK would have given it, so a serialization failure
+        // still retries.
+        if (hasSqlState(error) && error.code === "25P02" && aborted !== undefined) throw wentOnAfter(aborted);
         throw error;
       });
       const commit = lastOf(committed);

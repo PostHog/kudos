@@ -246,7 +246,7 @@ describe("_creationTime across runners", () => {
     expect(rows, "both spends counted, the last write's stamp kept").toEqual([{ n: 2, at: retried }]);
   });
 
-  test("runners writing rows of their own never wait on, nor conflict through, the creation order", async () => {
+  test("runners writing rows of their own never conflict through the creation order", async () => {
     const runners = [setUp({ real: 1_700_000_000_000 + minute }), setUp({ real: 1_700_000_000_000 })];
     const attempts = new Map<string, number>();
     const ids = Array.from({ length: 12 }, (_, i) => `row-${i}`);
@@ -398,6 +398,22 @@ describe("the transaction", () => {
 
     expect(result).toBe("done");
     expect(attempts).toBe(2);
+  });
+
+  test("a serialization failure of a statement still running when the handler returns retries, though the creation clock moves with COMMIT", async () => {
+    const { operations } = setUp();
+    let runs = 0;
+
+    const result = await operations.mutation("leave one running", async ({ tx, newRow }) => {
+      runs += 1;
+      await tx.insert(counters).values({ id: `attempt-${runs}`, n: runs, at: newRow()._creationTime });
+      // Not awaited: it fails after the handler has returned, before the runner's COMMIT runs.
+      if (runs === 1) void tx.execute(sql.raw(`do $$ begin raise exception 'conflict' using errcode = '40001'; end $$`)).catch(() => {});
+      return runs;
+    });
+
+    expect(result, "the second attempt's answer").toBe(2);
+    expect((await pool.query("select id from counters")).rows, "only the second attempt's write").toEqual([{ id: "attempt-2" }]);
   });
 
   test("a statement after a swallowed failure answers with that failure's code, so a hidden serialization failure retries at once", async () => {
