@@ -1,15 +1,14 @@
 // The outbox's write API, as today's convex/analytics/outbox.ts: product events and exceptions become pending rows in
-// the caller's transaction, so they commit or roll back with it. Sending them is the drain's (S14), which `wakeDrain`
-// wakes without reading or writing anything of the drain's.
+// the caller's transaction, so they commit or roll back with it. Sending them is the drain's (drain.ts), which
+// `wakeDrain` wakes without reading or writing anything of the drain's.
 import { randomUUID } from "node:crypto";
 import { asc, eq } from "drizzle-orm";
-import { z } from "zod";
 import type { Id } from "../db/columns.ts";
 import { fromDocument } from "../db/documents.ts";
 import { analyticsOutbox, workspaceKeys, type Doc } from "../db/schema/index.ts";
-import { actionJob } from "../jobs/define.ts";
 import type { MutationContext, QueryContext } from "../operations.ts";
 import { captureSettings, nativeErrorReportingOn, type Capture } from "./capture.ts";
+import { wakeDrain } from "./drain.ts";
 import { analyticsIdOf } from "./person.ts";
 
 const taxonomyVersion = 1;
@@ -81,19 +80,4 @@ type Pending = Pick<Doc<"analyticsOutbox">, "event" | "distinctId" | "timestamp"
 async function insertPending(ctx: MutationContext, row: Pending): Promise<void> {
   const document = { ...ctx.newRow(), uuid: randomUUID(), ...row, state: "pending", failures: 0, dueAt: ctx.now };
   await ctx.tx.insert(analyticsOutbox).values(fromDocument(analyticsOutbox, document) as typeof analyticsOutbox.$inferInsert);
-}
-
-/**
- * The drain, S14's to fill: it claims the due pending rows `FOR UPDATE SKIP LOCKED`, exits at once when another drain
- * holds them, and sends them. Until then it does nothing, and the rows wait.
- */
-export const drain = actionJob("analytics.drain.drain", z.object({}), async () => {});
-
-/**
- * Wakes the drain once the caller commits: a job row and the jobs channel's notification, both insert-only. Today's
- * read the drain's row, its job and the pending rows in the caller's transaction, so requests conflicted with a drain
- * claiming the outbox and ran out of retries; a request here never touches them.
- */
-async function wakeDrain(ctx: MutationContext): Promise<void> {
-  await ctx.jobs.enqueue(drain, {});
 }
