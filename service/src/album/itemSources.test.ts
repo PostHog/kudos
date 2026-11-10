@@ -116,9 +116,9 @@ describe("the album's item jobs run on their events", () => {
 
 describe("the move finds every job the album's items own", () => {
   // At the move, every job Convex scheduled must map to a registered job, or recovery stops (S18). These are the item
-  // jobs Convex scheduled or ran on an event, of the modules ported so far; the item fill joins them when it is ported.
-  test("the grant and the three item jobs of hugs, quests and greetings are registered", () => {
-    const owned = ["album.packs.grantThoughtfulPacks", "album.items.hugFinds.findOnHug", "album.items.questHoggies.earnQuestHoggie", "album.items.welcome.earnWelcomeItemOnGreeting"];
+  // jobs Convex scheduled or ran on an event.
+  test("the grant, the item fill and the three item jobs of hugs, quests and greetings are registered", () => {
+    const owned = ["album.packs.grantThoughtfulPacks", "album.items.fill.fillItems", "album.items.hugFinds.findOnHug", "album.items.questHoggies.earnQuestHoggie", "album.items.welcome.earnWelcomeItemOnGreeting"];
     expect(owned.filter((name) => !serviceRegistry.jobs.has(name))).toEqual([]);
   });
 });

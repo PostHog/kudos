@@ -44,11 +44,11 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/album/items/achievementItems.test.ts | S8 | service/src/album/items/achievementItems.test.ts | S3 S4 S9 S10 S12 S15 S16 |
 | convex/album/items/hugFinds.test.ts | S8 | service/src/album/items/hugFinds.test.ts | S4 S13 S15 S16 |
 | convex/album/items/itemBoard.test.ts | S8 | service/src/album/items/itemBoard.test.ts | S3 S4 S9 S10 S15 S16 |
-| convex/album/items/levelUpItems.test.ts | S8 | service/src/album/items/levelUpItems.test.ts | S4 S6 S10 S11 S15 S16 |
+| convex/album/items/levelUpItems.test.ts | S8 | service/src/album/items/levelUpItems.test.ts | S4 S6 S10 S15 S16 |
 | convex/album/items/milestoneUnlocks.test.ts | S8 | service/src/album/items/milestoneUnlocks.test.ts | S3 S4 S9 S10 S13 S15 S16 |
 | convex/album/items/questHoggies.test.ts | S8 | service/src/album/items/questHoggies.test.ts |  |
 | convex/album/items/stickerItems.test.ts | S8 | service/src/album/items/stickerItems.test.ts | S3 S4 S9 S10 S12 S15 S16 |
-| convex/album/items/trayItems.test.ts | S8 | service/src/album/items/trayItems.test.ts | S3 S4 S9 S10 S11 S15 S16 |
+| convex/album/items/trayItems.test.ts | S8 | service/src/album/items/trayItems.test.ts | S3 S4 S9 S10 S15 S16 |
 | convex/album/items/welcomeItem.test.ts | S8 | service/src/album/items/welcomeItem.test.ts | S4 S5 S10 S15 S16 |
 | convex/album/kudosEmojis.test.ts | S9 | | |
 | convex/album/levelUpHoggies.test.ts | S10 | | |
