@@ -1,6 +1,6 @@
 // The module map's skeleton of what S1 left of convex/analytics/flags.ts, written by tools/rewrite/moduleMap/skeleton.ts. S1's
 // service/src/analytics/flags.ts re-exports it; its stubs throw notPorted until the stack that owns the module ports their bodies.
-import { type MemberId } from "../workspace/directory.ts";
+import type { MemberId } from "../workspace/directory.ts";
 import { z } from "zod";
 import { zv } from "../values.ts";
 import type { MutationContext } from "../operations.ts";

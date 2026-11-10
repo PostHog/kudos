@@ -1,7 +1,7 @@
 // The module map's skeleton of convex/engine/awards.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
 // notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
 import type { MemberId } from "../workspace/directory.ts";
-import { type DayKey, type Week } from "./allowance.ts";
+import type { DayKey, Week } from "./allowance.ts";
 import type { Annotations, MessageRef } from "./messageEvent.ts";
 import { zv } from "../values.ts";
 import type { Id } from "../db/columns.ts";
