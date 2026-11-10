@@ -286,6 +286,20 @@ describe("the Monday DM reaches each member at 9:00 on Monday in their own time 
     expect(huggers.map((member) => mondayOf.get(member))).toEqual(huggers.map(() => "2026-10-19"));
     expect(mondayOf.size).toBe(huggers.length + 1);
   });
+
+  test("a sweep restarted from its start, as the data move's recovery restarts it, books no member a second DM", async () => {
+    const t = await setUp("2026-10-14T10:00:00Z");
+    await t.person("U_ANN", "Europe/Berlin");
+    for (let index = 0; index < 101; index++) await t.hugger(`U_HUG${String(index).padStart(3, "0")}`, "2026-10-12");
+    await t.sweepAt("2026-10-14T10:00:00Z");
+    await t.settleUntil("2026-10-14T10:01:00Z");
+    const booked = await t.dms();
+
+    await t.sweepAt("2026-10-14T10:02:00Z");
+    await t.settleUntil("2026-10-14T10:03:00Z");
+    expect(await t.dms()).toEqual(booked);
+    expect(await t.bookedTries()).toEqual(booked.map(() => "2026-10-19T07:00:00.000Z"));
+  });
 });
 
 describe("the Monday DM's try", () => {
