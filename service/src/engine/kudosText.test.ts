@@ -1,9 +1,7 @@
 // A kudos message's words, from outside: kept as it is given and edited, a tombstone once it is deleted, no longer kudos
-// or removed, dropped from the spotlight with it, and forgotten for an author or a workspace a page at a time. Reading
-// the words back checks whether their author still belongs (S3's directory), so those reads wait on S3.
+// or removed, dropped from the spotlight with it, and forgotten for an author or a workspace a page at a time.
 import { describe, expect, test } from "vitest";
 import { useTestBackend } from "../../testing/backend.ts";
-import { waitsOn } from "../../testing/waiting.ts";
 import { toDocument } from "../db/documents.ts";
 import { kudosTexts, spotlightDraws, wordDeletionRequests, type Doc } from "../db/schema/index.ts";
 import type { MemberId } from "../workspace/directory.ts";
@@ -169,7 +167,7 @@ describe("forgetting on request", () => {
 });
 
 describe("reading the words back", () => {
-  waitsOn(["S3"], "kept words read back as the message's text while their author belongs", async () => {
+  test("kept words read back as the message's text while their author belongs", async () => {
     const t = backend();
     await t.seed.insert("members", { workspace: "T1", user: "U_ALICE", kind: "member", asOf: 0 });
     await t.run((ctx) => keepWords(ctx, said(ref("m1"), "thanks", 1n), thoughtful));
@@ -184,7 +182,7 @@ describe("reading the words back", () => {
     });
   });
 
-  waitsOn(["S3"], "the words of an author who left are removed, and a leaver's words are forgotten when they leave", async () => {
+  test("the words of an author who left are removed, and a leaver's words are forgotten when they leave", async () => {
     const t = backend();
     const alice = (await t.seed.insert("members", { workspace: "T1", user: "U_ALICE", kind: "member", asOf: 0 })) as MemberId;
     await t.run((ctx) => keepWords(ctx, said(ref("m1"), "thanks", 1n), {}));

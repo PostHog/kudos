@@ -1,6 +1,6 @@
-// The spotlight, from outside: which given messages it may draw and the draw itself. Whether a message is drawable asks
-// whether its giver is still a member (S3's directory) and whether everyone on it shows on the boards (S11's
-// visibility), so the drawable paths wait on S3 and S11; what needs neither runs now.
+// The spotlight, from outside: which given messages it may draw and the draw itself. A message is drawable while its
+// giver is still a member and everyone on it shows on the boards (S11's visibility), so the paths that ask the boards
+// wait on S11.
 import { describe, expect, test } from "vitest";
 import { useTestBackend } from "../../testing/backend.ts";
 import { waitsOn } from "../../testing/waiting.ts";
@@ -31,7 +31,7 @@ async function givePublicly(t: Backend, message: string, giver: MemberId, recipi
 
 const drawn = (t: Backend) => t.query(async ({ tx }) => (await tx.select().from(spotlightDraws)).map(({ message }) => message));
 
-describe("what needs no member's facts", () => {
+describe("what never reaches the boards", () => {
   test("a message nobody was given is never placed, and an empty spotlight draws nothing", async () => {
     const t = backend();
 
@@ -44,7 +44,7 @@ describe("what needs no member's facts", () => {
 });
 
 describe("drawable kudos", () => {
-  waitsOn(["S3", "S11"], "a public kudos message among members on the boards is placed, drawn and answered as public kudos", async () => {
+  waitsOn(["S11"], "a public kudos message among members on the boards is placed, drawn and answered as public kudos", async () => {
     const t = backend();
     const [alice, bob] = [await member(t, "U_ALICE"), await member(t, "U_BOB")];
     await givePublicly(t, "m1", alice, [bob]);
@@ -58,7 +58,7 @@ describe("drawable kudos", () => {
     expect(await t.query((ctx) => publicKudosOf(ctx, ref("m1"))), "its public kudos").toEqual(kudos);
   });
 
-  waitsOn(["S3", "S11"], "a message from someone no longer a member is taken out of the spotlight", async () => {
+  test("a message from someone no longer a member is taken out of the spotlight", async () => {
     const t = backend();
     const bob = await member(t, "U_BOB");
     const gone = (await t.seed.insert("members", { workspace: "T1", user: "U_GONE", kind: "not-a-member", asOf: 0 })) as MemberId;
@@ -70,7 +70,7 @@ describe("drawable kudos", () => {
     expect(await drawn(t), "the draws").toEqual([]);
   });
 
-  waitsOn(["S3", "S11"], "a message to more than fifty people is checked by a job, and a member's messages are rechecked when the boards change", async () => {
+  waitsOn(["S11"], "a message to more than fifty people is checked by a job, and a member's messages are rechecked when the boards change", async () => {
     const t = backend();
     const alice = await member(t, "U_ALICE");
     const crowd: MemberId[] = [];

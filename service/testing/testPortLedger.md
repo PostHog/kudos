@@ -85,7 +85,7 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/companyProfiles/sync.test.ts | S12 | service/src/companyProfiles/sync.test.ts | |
 | convex/engine/awardsInsertOnly.test.ts | S4 | service/src/engine/awardsInsertOnly.test.ts | |
 | convex/engine/engine.test.ts | S4 | | |
-| convex/engine/home.test.ts | S4 | service/src/engine/home.test.ts | S3 |
+| convex/engine/home.test.ts | S4 | service/src/engine/home.test.ts | |
 | convex/feedback/albumMoments.test.ts | S5 | | |
 | convex/feedback/albumReplies.test.ts | S5 | | |
 | convex/feedback/leaderboard.test.ts | S5 | | |
