@@ -12,6 +12,7 @@ import type { Id } from "../db/columns.ts";
 import { jobs } from "../db/schema/index.ts";
 import type { MessageRef } from "../engine/messageEvent.ts";
 import type { MutationContext, QueryContext } from "../operations.ts";
+import { serviceRegistry } from "../registry.ts";
 import type { MemberId } from "../workspace/directory.ts";
 import { findsOnHug } from "./hoggies/draw.ts";
 import { drawSecret } from "./hoggies/drops.ts";
@@ -111,6 +112,15 @@ describe("the album's item jobs run on their events", () => {
       expect(await stillWaiting(stacks, () => t.published(event(alice)))).toBe(stub);
     });
   }
+});
+
+describe("the move finds every job the album's items own", () => {
+  // At the move, every job Convex scheduled must map to a registered job, or recovery stops (S18). These are the item
+  // jobs Convex scheduled or ran on an event.
+  test("the grant, the item fill and the three item jobs of hugs, quests and greetings are registered", () => {
+    const owned = ["album.packs.grantThoughtfulPacks", "album.items.fill.fillItems", "album.items.hugFinds.findOnHug", "album.items.questHoggies.earnQuestHoggie", "album.items.welcome.earnWelcomeItemOnGreeting"];
+    expect(owned.filter((name) => !serviceRegistry.jobs.has(name))).toEqual([]);
+  });
 });
 
 describe("the welcome item", () => {
