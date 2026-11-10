@@ -1,11 +1,11 @@
 // The module map's skeleton of convex/website/collection.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
 // notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
-import { type CrateStore } from "../album/hoggies/boughtCrates.ts";
-import { type HeldCrest, type HeldHoggie, type RarityShare } from "../album/hoggies/collection.ts";
-import { type WaitingPacks } from "../album/hoggies/waitingPacks.ts";
-import { type Album } from "../stickers/albums.ts";
-import { type TeamPageOf } from "../stickers/teamPages.ts";
-import { type Face } from "./faces.ts";
+import type { CrateStore } from "../album/hoggies/boughtCrates.ts";
+import type { HeldCrest, HeldHoggie, RarityShare } from "../album/hoggies/collection.ts";
+import type { WaitingPacks } from "../album/hoggies/waitingPacks.ts";
+import type { Album } from "../stickers/albums.ts";
+import type { TeamPageOf } from "../stickers/teamPages.ts";
+import type { Face } from "./faces.ts";
 import type { PageWaits } from "./unlockPath.ts";
 
 export type CollectionHoggie = HeldHoggie & { seen: string | null };

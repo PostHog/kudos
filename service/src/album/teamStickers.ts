@@ -2,8 +2,8 @@
 // notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
 import type { Instants } from "./packs.ts";
 import type { TeamSticker } from "./records.ts";
-import { type ShownEmoji } from "./earnedEmojis.ts";
-import { type PageOwner, type TeamPage } from "./teamPages.ts";
+import type { ShownEmoji } from "./earnedEmojis.ts";
+import type { PageOwner, TeamPage } from "./teamPages.ts";
 import type { MutationContext, QueryContext } from "../operations.ts";
 import { notPorted } from "../notPorted.ts";
 
