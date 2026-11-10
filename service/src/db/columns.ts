@@ -1,6 +1,16 @@
 // The column kinds of the data model, one per Convex scalar kind, by the spec's column rule:
 // a field of one scalar kind gets a typed column, every other field a `value` column (jsonb in the stored encoding).
-import { bigint, boolean, customType, doublePrecision } from "drizzle-orm/pg-core";
+import type { BuildExtraConfigColumns } from "drizzle-orm";
+import {
+  bigint,
+  boolean,
+  customType,
+  doublePrecision,
+  index,
+  pgTable,
+  type PgColumnBuilderBase,
+  type PgTableExtraConfigValue,
+} from "drizzle-orm/pg-core";
 
 /** A Convex document ID. New rows get a UUID; loaded rows keep their Convex ID verbatim. */
 export type Id<Table extends string> = string & { readonly __table?: Table };
@@ -44,3 +54,15 @@ export const id = () => str("_id").primaryKey();
 
 /** `_creationTime`: Convex's milliseconds, verbatim for loaded rows. */
 export const creationTime = () => doublePrecision("_creationTime").notNull();
+
+/**
+ * A table of documents. Convex gave every table an index in creation order, `by_creation_time`, and so does this:
+ * `<table>_by_creation_time` on `_creationTime`, then `_id`, which a read in creation order (`indexOrder(table, [])`)
+ * walks instead of sorting the table.
+ */
+export function documentTable<
+  Name extends string,
+  Columns extends Record<string, PgColumnBuilderBase> & { _id: PgColumnBuilderBase; _creationTime: PgColumnBuilderBase },
+>(name: Name, columns: Columns, indexes: (t: BuildExtraConfigColumns<Name, Columns, "pg">) => PgTableExtraConfigValue[] = () => []) {
+  return pgTable(name, columns, (t) => [...indexes(t), index(`${name}_by_creation_time`).on(t._creationTime, t._id)]);
+}
