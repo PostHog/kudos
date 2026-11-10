@@ -6,6 +6,7 @@ import { indicators } from "../db/schema/feedback.ts";
 import { messageRefValidator, type MessageRef } from "../engine/messageEvent.ts";
 import type { MutationContext, QueryContext, Transaction } from "../operations.ts";
 import { deliverIndicatorJob } from "../slack/delivery.ts";
+import { unique } from "../db/unique.ts";
 
 export type Indicator = { emoji: string } | null;
 export type DesiredIndicator = { indicator: Indicator; version: number };
@@ -41,6 +42,5 @@ async function indicatorRow(tx: Transaction, { workspace, conversation, message 
     .from(indicators)
     .where(and(eq(indicators.workspace, workspace), eq(indicators.conversation, conversation), eq(indicators.message, message)))
     .limit(2);
-  if (rows.length > 1) throw new Error("More than one indicator is stored for a message");
-  return rows[0] ?? null;
+  return unique("indicators", rows);
 }

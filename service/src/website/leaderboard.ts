@@ -1,17 +1,17 @@
 // The module map's skeleton of convex/website/leaderboard.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
 // notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
-import { type LoopLesson } from "../album/items/welcome.ts";
+import type { LoopLesson } from "../album/items/welcome.ts";
 import type { Improvement } from "../leaderboard/improvement.ts";
 import type { Peer } from "../leaderboard/peer.ts";
-import { type Period } from "../leaderboard/periods.ts";
-import { type RankedRow, type Standing } from "../leaderboard/totals.ts";
+import type { Period } from "../leaderboard/periods.ts";
+import type { RankedRow, Standing } from "../leaderboard/totals.ts";
 import { teammateOf, type Face } from "./faces.ts";
-import { type BoardsNextStep } from "./leaderboardNextStep.ts";
-import { type Denial } from "./memberQuery.ts";
-import { type PeopleBoards } from "./peopleBoards.ts";
-import { type TeamsJoiningIn } from "./teamsJoiningIn.ts";
-import { type PageWaits } from "./unlockPath.ts";
-import { type WithinReach } from "./withinReach.ts";
+import type { BoardsNextStep } from "./leaderboardNextStep.ts";
+import type { Denial } from "./memberQuery.ts";
+import type { PeopleBoards } from "./peopleBoards.ts";
+import type { TeamsJoiningIn } from "./teamsJoiningIn.ts";
+import type { PageWaits } from "./unlockPath.ts";
+import type { WithinReach } from "./withinReach.ts";
 import { z } from "zod";
 import type { QueryContext } from "../operations.ts";
 import { notPorted } from "../notPorted.ts";
