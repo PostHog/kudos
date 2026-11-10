@@ -57,8 +57,8 @@ export const creationTime = () => doublePrecision("_creationTime").notNull();
 
 /**
  * A table of documents. Convex gave every table an index in creation order, `by_creation_time`, and so does this:
- * `<table>_by_creation_time` on `_creationTime`, then `_id`: the index a read in creation order (`indexOrder(table, [])`)
- * needs to walk in order instead of sorting the table.
+ * `<table>_by_creation_time` on `_creationTime`, then `_id`, which a read in creation order (`indexOrder(table, [])`)
+ * walks instead of sorting the table (indexPlans.test.ts).
  */
 export function documentTable<
   Name extends string,
