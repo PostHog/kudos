@@ -5,6 +5,7 @@ Every test file of the root `convex` Vitest project (`vitest.config.ts`), one ro
 - **Stack**: S1 to S20. A file outside `convex/`, or at its root, is S20's, which moves it off the `convex` project.
 - **Ported to**: the port's path from the repository's root, such as `service/src/engine/engine.test.ts`; empty until it is ported.
 - **Waits on**: space-separated stacks, such as `S5 S6`; only a ported row waits. Whichever of them merges last empties it.
+  A waiting test is declared with `waitsOn` from `service/testing/waiting.ts`: it runs, passes while it ends in a stub's `NotPortedError`, and fails on any other error or once it passes, so that stack turns it into a plain `test`. A stub a job reaches counts too: `useTestBackend`'s `settle` throws the `NotPortedError` the worker recorded for it.
 
 Edit only your own rows, in place, and keep both sides on a conflict.
 
@@ -35,33 +36,33 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/album/hoggies/crests.test.ts | S10 | | |
 | convex/album/hoggies/draw.test.ts | S10 | | |
 | convex/album/hoggies/drops.test.ts | S10 | | |
-| convex/album/hoggies/packs.test.ts | S8 | | |
+| convex/album/hoggies/packs.test.ts | S8 | service/src/album/hoggies/packs.test.ts | S4 S6 S10 S15 |
 | convex/album/hoggies/rarityCaps.test.ts | S10 | | |
-| convex/album/hoggies/waitingPacks.test.ts | S8 | | |
+| convex/album/hoggies/waitingPacks.test.ts | S8 | service/src/album/hoggies/waitingPacks.test.ts | S4 S6 S10 S15 S16 |
 | convex/album/hypeByReactions.test.ts | S9 | | |
 | convex/album/hypeReactions.test.ts | S9 | | |
-| convex/album/items/achievementItems.test.ts | S8 | | |
-| convex/album/items/hugFinds.test.ts | S8 | | |
-| convex/album/items/itemBoard.test.ts | S8 | | |
-| convex/album/items/levelUpItems.test.ts | S8 | | |
-| convex/album/items/milestoneUnlocks.test.ts | S8 | | |
-| convex/album/items/questHoggies.test.ts | S8 | | |
-| convex/album/items/stickerItems.test.ts | S8 | | |
-| convex/album/items/trayItems.test.ts | S8 | | |
-| convex/album/items/welcomeItem.test.ts | S8 | | |
+| convex/album/items/achievementItems.test.ts | S8 | service/src/album/items/achievementItems.test.ts | S3 S4 S9 S10 S12 S15 S16 |
+| convex/album/items/hugFinds.test.ts | S8 | service/src/album/items/hugFinds.test.ts | S4 S13 S15 S16 |
+| convex/album/items/itemBoard.test.ts | S8 | service/src/album/items/itemBoard.test.ts | S3 S4 S9 S10 S15 S16 |
+| convex/album/items/levelUpItems.test.ts | S8 | service/src/album/items/levelUpItems.test.ts | S4 S6 S10 S11 S15 S16 |
+| convex/album/items/milestoneUnlocks.test.ts | S8 | service/src/album/items/milestoneUnlocks.test.ts | S3 S4 S9 S10 S13 S15 S16 |
+| convex/album/items/questHoggies.test.ts | S8 | service/src/album/items/questHoggies.test.ts |  |
+| convex/album/items/stickerItems.test.ts | S8 | service/src/album/items/stickerItems.test.ts | S3 S4 S9 S10 S12 S15 S16 |
+| convex/album/items/trayItems.test.ts | S8 | service/src/album/items/trayItems.test.ts | S3 S4 S9 S10 S11 S15 S16 |
+| convex/album/items/welcomeItem.test.ts | S8 | service/src/album/items/welcomeItem.test.ts | S4 S5 S10 S15 S16 |
 | convex/album/kudosEmojis.test.ts | S9 | | |
 | convex/album/levelUpHoggies.test.ts | S10 | | |
 | convex/album/milestones.test.ts | S9 | | |
-| convex/album/opening.test.ts | S8 | | |
+| convex/album/opening.test.ts | S8 | service/src/album/opening.test.ts | S4 S6 S15 S16 |
 | convex/album/ownHypePick.test.ts | S9 | | |
-| convex/album/packs.test.ts | S8 | | |
-| convex/album/putIn.test.ts | S8 | | |
+| convex/album/packs.test.ts | S8 | service/src/album/packs.test.ts | S4 S15 S16 |
+| convex/album/putIn.test.ts | S8 | service/src/album/putIn.test.ts | S3 S4 S5 S6 S9 S10 S12 S15 S16 |
 | convex/album/teamStickers.test.ts | S10 | | |
 | convex/analytics/boundary.test.ts | S14 | | |
 | convex/analytics/coreLoopFacts.test.ts | S14 | | |
 | convex/analytics/darkFeatures.test.ts | S14 | | |
 | convex/analytics/deliveredTwice.test.ts | S14 | | |
-| convex/analytics/drain.test.ts | S14 | | |
+| convex/analytics/drain.test.ts | S14 | service/src/analytics/drain.test.ts | |
 | convex/analytics/errors.test.ts | S14 | | |
 | convex/analytics/flags.test.ts | S14 | service/src/analytics/flags.test.ts | |
 | convex/analytics/hoggieDropped.test.ts | S14 | | |
@@ -81,7 +82,7 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/companyProfiles/faces.test.ts | S12 | | |
 | convex/companyProfiles/matcher.test.ts | S12 | | |
 | convex/companyProfiles/storedFaces.test.ts | S12 | | |
-| convex/companyProfiles/sync.test.ts | S12 | | |
+| convex/companyProfiles/sync.test.ts | S12 | service/src/companyProfiles/sync.test.ts | |
 | convex/engine/awardsInsertOnly.test.ts | S4 | | |
 | convex/engine/engine.test.ts | S4 | | |
 | convex/engine/home.test.ts | S4 | | |
@@ -259,7 +260,7 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/website/features.test.ts | S15 | | |
 | convex/website/groupBoards.test.ts | S16 | | |
 | convex/website/hoggieForge.test.ts | S16 | | |
-| convex/website/hosting.test.ts | S15 | | |
+| convex/website/hosting.test.ts | S15 | service/src/website/hosting.test.ts | |
 | convex/website/inventory.test.ts | S16 | | |
 | convex/website/lastVisit.test.ts | S17 | | |
 | convex/website/leaderboard.test.ts | S16 | | |
@@ -287,7 +288,7 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/website/weeklyPost.test.ts | S17 | | |
 | convex/website/xpMoment.test.ts | S17 | | |
 | convex/welcome/welcome.test.ts | S5 | | |
-| convex/workspace/workspaceSettings.test.ts | S3 | | |
+| convex/workspace/workspaceSettings.test.ts | S3 | service/src/workspace/workspaceSettings.test.ts | S4 S17 |
 | e2e/edgeSignIn.test.ts | S20 | | |
 | e2e/fakes/server.test.ts | S20 | | |
 | e2e/local/edge.test.ts | S20 | | |

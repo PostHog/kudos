@@ -10,6 +10,7 @@ import type { Earning, ItemReason, ItemSource } from "./records.ts";
 import type { Id } from "../../db/columns.ts";
 import { fromDocument, toDocument } from "../../db/documents.ts";
 import { indexOrder } from "../../db/indexOrder.ts";
+import { unique } from "../../db/unique.ts";
 import type { Page } from "../../db/page.ts";
 import { items, type Doc } from "../../db/schema/index.ts";
 import type { MutationContext, QueryContext } from "../../operations.ts";
@@ -132,6 +133,6 @@ async function itemOf(ctx: QueryContext, member: MemberId, source: ItemSource, k
     .where(and(eq(items.member, member), eq(items.source, source), eq(items.key, key)))
     .orderBy(...byMemberSourceKey.orderBy())
     .limit(2);
-  if (rows.length > 1) throw new Error("unique() query returned more than one result from table items:");
-  return rows[0] ? asItem(rows[0]) : null;
+  const row = unique("items", rows);
+  return row ? asItem(row) : null;
 }

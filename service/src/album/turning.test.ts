@@ -3,38 +3,29 @@
 // and emojis; its tests are in the ported files beside this one.
 import { asc } from "drizzle-orm";
 import { describe, expect, test } from "vitest";
-import { z } from "zod";
-import { useTestDatabase } from "../../testing/database.ts";
-import { seeder } from "../../testing/seed.ts";
-import { subscribersOf, type Subscription } from "../bus/publish.ts";
-import { createClock } from "../clock.ts";
+import { useTestBackend } from "../../testing/backend.ts";
 import type { Id } from "../db/columns.ts";
 import { jobs } from "../db/schema/index.ts";
 import type { MessageRef } from "../engine/messageEvent.ts";
-import { mutationJob } from "../jobs/define.ts";
-import type { Log } from "../log.ts";
-import { createOperations, type MutationContext } from "../operations.ts";
+import type { MutationContext } from "../operations.ts";
 import type { MemberId } from "../workspace/directory.ts";
 import { turn } from "./items/turn.ts";
 import { trayKeyOf } from "./opening.ts";
 import { markTrayStickerPutIn, putItemIn } from "./putIn.ts";
 
-const database = useTestDatabase();
-const quiet: Log = { info: () => {}, error: () => {} };
 const at = new Date("2026-10-13T10:00:00Z").getTime();
 const ref: MessageRef = { workspace: "T1", conversation: "C1", message: "1760000000.000001" };
+const startBackend = useTestBackend({ now: at });
 
-// The one setup of this file: the operation runner on the test database and the seeder, with a recording subscriber
-// on the events a put-in and a turn publish, so a refusal that publishes queues a job. S4's in-process backend
-// replaces it.
-const recorder = mutationJob("test.published", z.object({ event: z.looseObject({ type: z.string() }) }), async () => {});
+// The one setup of this file, on S4's in-process backend: the operation runner and the seeder. The backend records
+// every event a committed operation publishes as a job, so a refusal that publishes, or queues any job, shows in
+// `scheduled`.
 function backend() {
-  const subscriptions = [{ event: "itemTurned", job: recorder }, { event: "stickerPutIn", job: recorder }] as Subscription<any>[];
-  const operations = createOperations({ pool: database.pool, clock: createClock({ real: () => at }), log: quiet, retryDelayMs: () => 1, subscribers: subscribersOf(subscriptions) });
-  const seed = seeder(operations);
+  const t = startBackend();
+  const seed = t.seed;
   return {
     seed,
-    mutation: <T>(handler: (ctx: MutationContext) => Promise<T>) => operations.mutation("test.mutation", handler),
+    mutation: <T>(handler: (ctx: MutationContext) => Promise<T>) => t.run(handler),
     member: (user: string) => seed.insert("members", { workspace: "T1", user, kind: "member" }) as Promise<MemberId>,
     pack: (giver: MemberId, recipient: MemberId) => seed.insert("thoughtfulPacks", { workspace: "T1", giver, recipient, week: "2026-10-12", message: ref, holdsSticker: true, at }),
     hoggieInTheTray: (member: MemberId, pack: Id<"thoughtfulPacks">, putInAt?: number) =>
@@ -43,7 +34,7 @@ function backend() {
       seed.insert("trayItems", { member, pack, at, kind: "sticker", person, ...(putInAt === undefined ? {} : { putInAt }) }),
     item: (member: MemberId, fields: { source?: "hoggie" | "sticker"; key: string; reason?: Record<string, unknown>; turnedAt?: number }) =>
       seed.insert("items", { workspace: "T1", member, source: fields.source ?? "hoggie", key: fields.key, reason: (fields.reason ?? { kind: "welcome" }) as never, earnedAt: at, ...(fields.turnedAt === undefined ? {} : { turnedAt: fields.turnedAt }) }),
-    scheduled: () => operations.query("test.scheduled", async ({ tx }) => (await tx.select({ name: jobs.name }).from(jobs).orderBy(asc(jobs._creationTime))).map(({ name }) => name)),
+    scheduled: () => t.query(async ({ tx }) => (await tx.select({ name: jobs.name }).from(jobs).orderBy(asc(jobs._creationTime))).map(({ name }) => name)),
   };
 }
 

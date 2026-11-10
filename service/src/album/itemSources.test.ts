@@ -4,19 +4,18 @@
 // the ported files beside this one.
 import { asc, eq } from "drizzle-orm";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { useTestDatabase } from "../../testing/database.ts";
+import { useTestBackend } from "../../testing/backend.ts";
 import { definitionsStored, onForEveryone, postHogDeciding } from "../../testing/flags.ts";
-import { seeder } from "../../testing/seed.ts";
-import { createClock } from "../clock.ts";
+import { stillWaiting } from "../../testing/waiting.ts";
 import type { DomainEvent } from "../bus/events.ts";
 import type { Id } from "../db/columns.ts";
 import { jobs } from "../db/schema/index.ts";
 import type { MessageRef } from "../engine/messageEvent.ts";
-import { createWorker } from "../jobs/worker.ts";
-import type { Log } from "../log.ts";
-import { createOperations, type MutationContext, type QueryContext } from "../operations.ts";
+import type { MutationContext, QueryContext } from "../operations.ts";
 import { serviceRegistry } from "../registry.ts";
 import type { MemberId } from "../workspace/directory.ts";
+import { findsOnHug } from "./hoggies/draw.ts";
+import { drawSecret } from "./hoggies/drops.ts";
 import { turnedFindOf } from "./items/finds.ts";
 import { hypeWaitsForItsItem } from "./items/hypes.ts";
 import { earnItem, markTurned } from "./items/ledger.ts";
@@ -24,48 +23,42 @@ import type { Turned } from "./items/turn.ts";
 import { lessonAfter, shownWaitingHoggiesAtTheWelcomeOf, welcomeCrateKey, welcomeItemOwedTo } from "./items/welcome.ts";
 import { crateKeyOf, thanksEarningOf } from "./packs.ts";
 
-const database = useTestDatabase();
-const quiet: Log = { info: () => {}, error: () => {} };
 const at = new Date("2026-10-13T10:00:00Z").getTime();
 const ref: MessageRef = { workspace: "T1", conversation: "C1", message: "1760000000.000001" };
 const links = { album: "https://kudos.example/album", book: "https://kudos.example/book" } as never;
+const startBackend = useTestBackend({ now: at });
 
 afterEach(() => {
   vi.unstubAllEnvs();
-  vi.unstubAllGlobals();
 });
 
-// The one setup of this file: the operation runner on the test database with the service's own subscribers, the
-// worker over the service's jobs, and the seeder. S4's in-process backend replaces it.
+// The one setup of this file, on S4's in-process backend: the operation runner with the service's own subscribers, the
+// worker over the service's jobs, and the seeder.
 function backend() {
-  const operations = createOperations({ pool: database.pool, clock: createClock({ real: () => at }), log: quiet, retryDelayMs: () => 1, subscribers: serviceRegistry.subscribers });
-  const worker = createWorker({ operations, log: quiet, registry: serviceRegistry.jobs, pollMs: 3_600_000 });
-  const seed = seeder(operations);
+  const t = startBackend();
+  const seed = t.seed;
   return {
     seed,
-    // Publishes the event on the bus and runs every job it queued, as the worker runs them.
+    // Publishes the event on the bus and runs every job it queued, as the worker runs them; a job that reached a stub
+    // throws its `NotPortedError` from here.
     published: async (event: DomainEvent) => {
-      await operations.mutation("test.publish", (ctx) => ctx.publish(event));
-      expect((await worker.settle(30_000)).done).toBe(true);
+      await t.run((ctx) => ctx.publish(event));
+      expect((await t.settle()).done).toBe(true);
     },
-    ran: (name: string) =>
-      operations.query("test.jobs", async ({ tx }) => tx.select({ state: jobs.state, error: jobs.error }).from(jobs).where(eq(jobs.name, name)).orderBy(asc(jobs._creationTime), asc(jobs._id))),
+    ran: (name: string) => t.query(async ({ tx }) => tx.select({ state: jobs.state, error: jobs.error }).from(jobs).where(eq(jobs.name, name)).orderBy(asc(jobs._creationTime), asc(jobs._id))),
     // Flags decide only with the flags key set and a subject: the workspace's key stands in for every member.
     flagsOn: async (...keys: string[]) => {
       postHogDeciding("sandbox");
       if ((await seed.all("workspaceKeys")).length === 0) await seed.insert("workspaceKeys", { workspace: "T1", workspaceKey: "workspace-key-T1" });
-      await definitionsStored(operations, ...keys.map(onForEveryone));
+      await definitionsStored(t.operations, ...keys.map(onForEveryone));
     },
-    mutation: <T>(handler: (ctx: MutationContext) => Promise<T>) => operations.mutation("test.mutation", handler),
-    query: <T>(handler: (ctx: QueryContext) => Promise<T>) => operations.query("test.query", handler),
+    mutation: <T>(handler: (ctx: MutationContext) => Promise<T>) => t.run(handler),
+    query: <T>(handler: (ctx: QueryContext) => Promise<T>) => t.query(handler),
     member: (user: string) => seed.insert("members", { workspace: "T1", user, kind: "member" }) as Promise<MemberId>,
     pack: (giver: MemberId, recipient: MemberId, holdsSticker = true) =>
       seed.insert("thoughtfulPacks", { workspace: "T1", giver, recipient, week: "2026-10-12", message: ref, holdsSticker, at }) as Promise<Id<"thoughtfulPacks">>,
-    welcomeItem: (member: MemberId) => earnItemFor(member, { source: "hoggie", key: welcomeCrateKey, reason: { kind: "welcome" } }),
+    welcomeItem: (member: MemberId) => t.run((ctx) => earnItem(ctx, { workspace: "T1", member, source: "hoggie", key: welcomeCrateKey, reason: { kind: "welcome" }, earnedAt: at })),
   };
-  function earnItemFor(member: MemberId, item: { source: "hoggie" | "sticker"; key: string; reason: { kind: "welcome" } }) {
-    return operations.mutation("test.mutation", (ctx) => earnItem(ctx, { workspace: "T1", member, ...item, earnedAt: at }));
-  }
 }
 
 describe("the album's item jobs run on their events", () => {
@@ -85,20 +78,48 @@ describe("the album's item jobs run on their events", () => {
     expect(await t.seed.all("items")).toEqual([]);
   });
 
-  // Waits on S3 and S10: a rewarding hug and a rewarded quest check membership in S3's directory first, and a greeting
-  // that owes the welcome item earns it through S10's rarity caps. Each job ends in that body's stub, which proves the
-  // event reached the job that owes the item; once those stacks land, the jobs earn and this test fails, to be turned
-  // into the earning tests of the ported ledger files.
-  test("a rewarding hug, a rewarded quest and a greeting that owes the welcome item reach the bodies that earn them (waits on S3 S10)", async () => {
+  // A rewarding hug from a member draws its find from the hug alone, and the find is S8's own earning. The draw is the
+  // hug's secret hash, so the test picks one hug that finds and one that doesn't, as the draw answers them.
+  test("a rewarding hug earns its giver the day's hug find once when its draw finds one, and nothing when it doesn't", async () => {
     const t = backend();
     const alice = await t.member("U_ALICE");
+    const hugOn = (message: string): DomainEvent => ({ type: "hugGiven", workspace: "T1", giver: alice, message: { ...ref, message }, onKudos: false, at, day: "2026-10-13", rewards: true });
+    const draws: Record<"finds" | "misses", string[]> = { finds: [], misses: [] };
+    for (let n = 0; n < 500 && (draws.finds.length < 2 || draws.misses.length < 1); n++) {
+      const message = `1760000000.${String(n).padStart(6, "0")}`;
+      draws[(await findsOnHug({ secret: drawSecret(), member: alice, hug: `${ref.conversation}:${message}` })) ? "finds" : "misses"].push(message);
+    }
+    const earned = async () => (await t.seed.all("items")).map(({ member, source, key, reason }) => ({ member, source, key, reason }));
 
-    for (const event of [hug(alice, true), quest(alice, "journey:first-thanks"), greeting(alice, true)]) await t.published(event);
+    await t.published(hugOn(draws.misses[0]!));
+    expect(await earned()).toEqual([]);
 
-    const notPorted = (path: string) => [{ state: "failed", error: `NotPortedError: ${path} is not ported yet` }];
-    expect(await t.ran("album.items.hugFinds.findOnHug")).toEqual(notPorted("workspace.directory.isMember"));
-    expect(await t.ran("album.items.questHoggies.earnQuestHoggie")).toEqual(notPorted("workspace.directory.isMember"));
-    expect(await t.ran("album.items.welcome.earnWelcomeItemOnGreeting")).toEqual(notPorted("album.hoggies.rarityCaps.earnHoggieItem"));
+    for (const message of draws.finds.slice(0, 2)) await t.published(hugOn(message));
+    expect(await earned()).toEqual([{ member: alice, source: "hoggie", key: "hug-find:2026-10-13", reason: { kind: "hug" } }]);
+  });
+
+  // A rewarded quest earns its hoggie, and a greeting that owes the welcome item earns it, through S10's rarity caps.
+  // Each job ends in that stub, which proves the event reached the job that owes the item; once S10 lands, the job earns
+  // and its test fails, to be turned into the earning tests of the ported ledger files.
+  const reaching = [
+    { name: "a rewarded quest reaches the hoggie it pays", stacks: ["S10"], event: (alice: MemberId) => quest(alice, "journey:first-thanks"), stub: "album.hoggies.rarityCaps.earnHoggieItem" },
+    { name: "a greeting that owes the welcome item reaches the body that earns it", stacks: ["S10"], event: (alice: MemberId) => greeting(alice, true), stub: "album.hoggies.rarityCaps.earnHoggieItem" },
+  ] as const;
+  for (const { name, stacks, event, stub } of reaching) {
+    test(`${name} (waits on ${stacks.join(" ")})`, async () => {
+      const t = backend();
+      const alice = await t.member("U_ALICE");
+      expect(await stillWaiting(stacks, () => t.published(event(alice)))).toBe(stub);
+    });
+  }
+});
+
+describe("the move finds every job the album's items own", () => {
+  // At the move, every job Convex scheduled must map to a registered job, or recovery stops (S18). These are the item
+  // jobs Convex scheduled or ran on an event, of the modules ported so far; the item fill joins them when it is ported.
+  test("the grant and the three item jobs of hugs, quests and greetings are registered", () => {
+    const owned = ["album.packs.grantThoughtfulPacks", "album.items.hugFinds.findOnHug", "album.items.questHoggies.earnQuestHoggie", "album.items.welcome.earnWelcomeItemOnGreeting"];
+    expect(owned.filter((name) => !serviceRegistry.jobs.has(name))).toEqual([]);
   });
 });
 
