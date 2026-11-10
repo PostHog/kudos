@@ -47,10 +47,23 @@ type Plain<T> =
 // An id inside a template literal, as `hype:${MemberId}`, is the same string on the wire on both sides, but TypeScript
 // keeps Convex's id and the service's apart there and infers no table through a template's placeholder. So every
 // branded placeholder of a template reads as an id of any table, on both sides: the template's text and its other
-// placeholders still compare, and only the table of an id inside a template goes unchecked.
+// placeholders still compare, and only the table of an id inside a template goes unchecked. An id is known by its
+// brand's key, never by `extends Id`: the service's brand is optional, so every string extends it. The walk goes one
+// character at a time, which holds templates of up to about 990 characters, far past any route's answer.
 type IsTemplate<T extends string> = {} extends Record<T, 0> ? true : false;
-type TemplatePart<Part extends string> = string extends Part ? Part : Part extends `${number}` ? Part : IsTemplate<Part> extends true ? `${Id<string>}` : Part;
-type WithPlainIds<T extends string, Done extends string = ""> = T extends `${infer Part}${infer Rest}` ? WithPlainIds<Rest, `${Done}${TemplatePart<Part>}`> : `${Done}${T}`;
+type IsBrandedId<Part> = "__tableName" extends keyof Part ? true : "__table" extends keyof Part ? true : false;
+type TemplatePart<Part extends string> =
+  IsBrandedId<Part> extends true
+    ? `${Id<string>}`
+    : string extends Part
+      ? Part
+      : Part extends `${number}` | `${bigint}`
+        ? Part
+        : IsTemplate<Part> extends true
+          ? `${Id<string>}`
+          : Part;
+// Inference can hand back a whole placeholder as a part, or leave one as the remainder: both go through TemplatePart.
+type WithPlainIds<T extends string, Done extends string = ""> = T extends `${infer Part}${infer Rest}` ? WithPlainIds<Rest, `${Done}${TemplatePart<Part>}`> : `${Done}${TemplatePart<T>}`;
 // A bare id, Convex's read as the service's above, splits into no parts and stays whole.
 type IdsInTemplate<T extends string> = string extends T ? T : IsTemplate<T> extends true ? (T extends `${infer _Part}${infer _Rest}` ? WithPlainIds<T> : T) : T;
 
@@ -228,6 +241,21 @@ export type ReadsAnIdInATemplate = Holds<
     `level:${number}` | `milestone:${GenericId<"milestones">}:${"gold" | "silver"}` | `team:${string}` | `hype:${GenericId<"members">}`
   >
 >;
+export type ReadsIdsBesidePlaceholders = Holds<
+  Same<
+    `${number}${Id<"members">}` | `${Id<"members">}${number}` | `${Id<"members">}${Id<"cards">}`,
+    `${number}${GenericId<"members">}` | `${GenericId<"members">}${number}` | `${GenericId<"members">}${GenericId<"cards">}`
+  >
+>;
+export type KeepsABigintPlaceholder = Holds<Same<`n:${bigint}`, `n:${bigint}`>>;
+// @ts-expect-error a bigint where the function had an id inside a template
+export type BigintForAnIdInATemplate = Holds<Same<`hype:${bigint}`, `hype:${GenericId<"members">}`>>;
+// @ts-expect-error a number where the function had an id inside a template
+export type NumberForAnIdInATemplate = Holds<Same<`hype:${number}`, `hype:${GenericId<"members">}`>>;
+// @ts-expect-error a number and an id that swapped places
+export type SwapsAnIdAndANumber = Holds<Same<`${number}${Id<"members">}`, `${GenericId<"members">}${number}`>>;
+// @ts-expect-error a literal of a union inside a template spelled otherwise
+export type RespellsALiteralInATemplate = Holds<Same<`m:${Id<"milestones">}:${"gold" | "silver"}`, `m:${GenericId<"milestones">}:${"gold" | "bronze"}`>>;
 // @ts-expect-error a template spelled otherwise around its id
 export type RespellsATemplate = Holds<Same<`pet:${Id<"members">}`, `hype:${GenericId<"members">}`>>;
 // @ts-expect-error any string where the function had an id inside a template
