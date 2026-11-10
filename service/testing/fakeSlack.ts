@@ -219,6 +219,11 @@ export class FakeSlack {
       const hasJoined = Date.now() >= (this.joinTimes.get(field("user")) ?? 0);
       return user && hasJoined ? { ok: true, user } : { ok: false, error: "user_not_found" };
     }
+    if (method === "users.lookupByEmail") {
+      const email = field("email").toLowerCase();
+      const user = [...this.users.values()].find(({ id, profile }) => profile?.email?.toLowerCase() === email && Date.now() >= (this.joinTimes.get(id) ?? 0));
+      return user ? { ok: true, user } : { ok: false, error: "users_not_found" };
+    }
     if (method === "users.list") return { ok: true, members: [...this.users.values()], response_metadata: { next_cursor: "" } };
     if (method === "emoji.list") return { ok: true, emoji: Object.fromEntries(this.customEmoji), cache_ts: "1760349600.000000" };
     if (method === "usergroups.list") return { ok: true, usergroups: this.userGroupsListed(args) };

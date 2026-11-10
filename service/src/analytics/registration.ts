@@ -3,5 +3,6 @@ import type { Registration } from "../registration.ts";
 import { cleanUpJob, recoverJob } from "./drain.ts";
 import { flagsRefresh } from "./refresh.ts";
 import { drainJob } from "./send.ts";
+import { sweepJob } from "./sweep.ts";
 
-export const registration: Registration = { jobs: [flagsRefresh, drainJob, recoverJob, cleanUpJob] };
+export const registration: Registration = { jobs: [flagsRefresh, drainJob, recoverJob, cleanUpJob, sweepJob] };
