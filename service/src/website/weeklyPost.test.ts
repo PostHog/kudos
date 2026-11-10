@@ -499,7 +499,7 @@ describe("only the maintainer picks the weekly post's channel, and only while we
     await aWorkspaceWithGroups({ flags: withPicker });
 
     handledByTheFrontDoor({ click: "homeClick" });
-    await t.interaction(blockActions("U_ADMIN", staleButtonOf({ type: "pickMondayPostChannel", channel: pickedChannel })));
+    await delivered(t.interaction(blockActions("U_ADMIN", staleButtonOf({ type: "pickMondayPostChannel", channel: pickedChannel }))));
     await settleUpTo(t.clock.now() + minuteMs);
 
     expect(await mondayPostSettings()).toBeNull();
@@ -604,20 +604,20 @@ function handledByTheFrontDoor(kind: { event: EventKind } | { click: ClickKind }
 async function giveKudos(giver: string, recipient: string) {
   handledByTheFrontDoor({ event: "message" });
   sentMessages += 1;
-  await t.send("/events", messageEvent([section(mention(recipient), emoji("taco"))], { user: giver, ts: `${Math.floor(t.clock.now() / 1000) + sentMessages}.000100` }));
+  await delivered(t.send("/events", messageEvent([section(mention(recipient), emoji("taco"))], { user: giver, ts: `${Math.floor(t.clock.now() / 1000) + sentMessages}.000100` })));
   await settleUpTo(t.clock.now() + minuteMs);
 }
 
 async function adminTabOpen(user: string) {
   handledByTheFrontDoor({ event: "homeOpened" });
-  await t.send("/events", appHomeOpened(user));
+  await delivered(t.send("/events", appHomeOpened(user)));
   await settleUpTo(t.clock.now() + minuteMs);
   await clickInHome(user, "Admin");
 }
 
 async function clickInHome(user: string, label: string) {
   handledByTheFrontDoor({ click: "homeClick" });
-  await t.interaction(blockActions(user, buttonInHome(user, label)));
+  await delivered(t.interaction(blockActions(user, buttonInHome(user, label))));
   await settleUpTo(t.clock.now() + minuteMs);
 }
 
@@ -719,4 +719,14 @@ function blockActions(user: string, action: BlockAction) {
     view: { id: "V_HOME", type: "home" },
     actions: [{ block_id: "b1", ...action, action_ts: "1760349600.000300" }],
   };
+}
+
+// The front door answers 500 when a registered handler fails, and the test would go on as if the event did nothing. A
+// failure that reached a stub still waits, as at the stub; any other answer but 200 fails the test as itself.
+async function delivered(response: Response | Promise<Response>): Promise<void> {
+  const { status } = await response;
+  if (status === 200) return;
+  const failure = t.logs.findLast(({ message }) => message === "slack request failed");
+  if (failure?.fields.error === "NotPortedError") throw notPorted("slack.frontDoor.handler");
+  throw new Error(`The front door answered ${status}`);
 }

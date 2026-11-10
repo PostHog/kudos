@@ -1,8 +1,8 @@
 // A newcomer's onboarding on the website: the how-it-works card until they give a kudos or close it, and the getting
 // started steps off the Monday path. Today's convex/website/onboarding.test.ts, on the service's test backend: each
-// reader is a `me` made from the seeded directory row, as S15's member check answers it. getAlbum and turnItem are S16's
-// website handlers, which the service doesn't have yet, so each album read ends in S16's stub for it; closeHowItWorks is
-// this stack's handler and runs as itself.
+// reader is a `me` made from the seeded directory row, as S15's member check answers it. getAlbum is S16's handler and
+// runs as itself; turnItem is S16's command, which has no route yet, so a turn ends at a stand-in for its stub;
+// closeHowItWorks is this stack's handler and runs as itself.
 import { getTableName } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, vi } from "vitest";
 import { useTestBackend, type TestBackend } from "../../testing/backend.ts";
@@ -21,7 +21,7 @@ import { xpToReach } from "../progression/levels.ts";
 import { serviceRegistry } from "../registry.ts";
 import type { HomeMember } from "../feedback/homes.ts";
 import { lookup, type MemberId } from "../workspace/directory.ts";
-import type { AlbumAnswer, AlbumRead, TurnAnswer } from "./album.ts";
+import { getAlbum, type AlbumAnswer, type AlbumRead, type TurnAnswer } from "./album.ts";
 import type { VerifiedMember } from "./memberQuery.ts";
 import { closeHowItWorks } from "./onboarding.ts";
 
@@ -285,11 +285,8 @@ describe("LP76: getAlbum answers the onboarding steps, each done from one read",
   );
 });
 
-// S16's website handlers, which the service doesn't have yet.
-async function getAlbum(_ctx: QueryContext, _me: VerifiedMember): Promise<AlbumRead> {
-  throw notPorted("website.album.getAlbum");
-}
-
+// S16's turn command, which has no route yet: website commands get no module-map stubs, so until S16 registers
+// `website.album.turnItem` a turn ends here, as at its stub.
 async function turnItem(_ctx: MutationContext, _me: VerifiedMember, _args: { item: string }): Promise<TurnAnswer> {
   throw notPorted("website.album.turnItem");
 }
@@ -321,14 +318,14 @@ async function thanks(giver: Person, words: string, recipient: Person) {
   handledByTheFrontDoor("message");
   messages += 1;
   t.time.advance(minuteMs);
-  await t.send("/events", messageEvent([section(text(`${words} `), mention(recipient.user), emoji("taco"))], { user: giver.user, ts: tsOf(messages) }));
+  await delivered(t.send("/events", messageEvent([section(text(`${words} `), mention(recipient.user), emoji("taco"))], { user: giver.user, ts: tsOf(messages) })));
   await t.settle();
 }
 
 async function hug(giver: Person, author: Person) {
   handledByTheFrontDoor("reactionAdded");
   t.time.advance(minuteMs);
-  await t.send("/events", reactionEvent({ user: giver.user, itemUser: author.user, ts: tsOf(messages) }));
+  await delivered(t.send("/events", reactionEvent({ user: giver.user, itemUser: author.user, ts: tsOf(messages) })));
   await t.settle();
 }
 
@@ -368,4 +365,14 @@ async function everyTable() {
   const tables: Record<string, unknown[]> = {};
   for (const table of dataModelTables) tables[getTableName(table)] = await t.seed.all(getTableName(table) as TableName);
   return tables;
+}
+
+// The front door answers 500 when a registered handler fails, and the test would go on as if the event did nothing. A
+// failure that reached a stub still waits, as at the stub; any other answer but 200 fails the test as itself.
+async function delivered(response: Response | Promise<Response>): Promise<void> {
+  const { status } = await response;
+  if (status === 200) return;
+  const failure = t.logs.findLast(({ message }) => message === "slack request failed");
+  if (failure?.fields.error === "NotPortedError") throw notPorted("slack.frontDoor.handler");
+  throw new Error(`The front door answered ${status}`);
 }

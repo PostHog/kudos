@@ -19,8 +19,11 @@ import * as schema from "../db/schema/index.ts";
 import * as loadTables from "../db/schema/load.ts";
 import * as serviceTables from "../db/schema/service.ts";
 import type { HomeMember } from "../feedback/homes.ts";
+import { notPorted } from "../notPorted.ts";
 import type { MutationContext } from "../operations.ts";
+import { serviceRegistry } from "../registry.ts";
 import { directoryRecordOfEvent, type MemberChanged } from "../slack/directory.ts";
+import type { ClickKind, EventKind } from "../slack/frontDoor.ts";
 import { receiveMemberChanged } from "../slack/receipts.ts";
 import { lookup, type MemberId } from "../workspace/directory.ts";
 import type { VerifiedMember } from "./memberQuery.ts";
@@ -225,22 +228,25 @@ async function settleForAMinute() {
 }
 
 async function giveKudos(giver: string, recipient: string, kudos: number) {
+  handledByTheFrontDoor({ event: "message" });
   sentMessages += 1;
   const blocks = [section(mention(recipient), ...Array.from({ length: kudos }, () => emoji("taco")))];
-  await t.send("/events", messageEvent(blocks, { user: giver, ts: `${Math.floor(t.clock.now() / 1000) + sentMessages}.000100` }));
+  await delivered(t.send("/events", messageEvent(blocks, { user: giver, ts: `${Math.floor(t.clock.now() / 1000) + sentMessages}.000100` })));
   await settleForAMinute();
 }
 
 async function adminTabOpen(user: string) {
-  await t.send("/events", appHomeOpened(user, { eventTime: new Date(t.clock.now()) }));
+  handledByTheFrontDoor({ event: "homeOpened" });
+  await delivered(t.send("/events", appHomeOpened(user, { eventTime: new Date(t.clock.now()) })));
   await settleForAMinute();
   await clickInHome(user, "Admin");
   expect(publishedHome(user)).toContain("section: *Public celebrations*");
 }
 
 async function clickInHome(user: string, label: string) {
+  handledByTheFrontDoor({ click: "homeClick" });
   const action = buttonInHome(user, label);
-  await t.interaction({
+  await delivered(t.interaction({
     type: "block_actions",
     team: { id: allowedWorkspace, domain: "kudos" },
     user: { id: user, team_id: allowedWorkspace },
@@ -249,7 +255,7 @@ async function clickInHome(user: string, label: string) {
     container: { type: "view", view_id: "V_HOME" },
     view: { id: "V_HOME", type: "home" },
     actions: [{ block_id: "b1", ...action, action_ts: "1760349600.000300" }],
-  });
+  }));
   await settleForAMinute();
 }
 
@@ -302,4 +308,22 @@ function everyTable(): Promise<Record<string, Row[]>> {
 
 async function exposuresOf(...flags: string[]) {
   return (await t.seed.all("flagExposures")).filter(({ flag }) => flags.includes(flag)).map(({ flag, member, value }) => ({ flag, member, value }));
+}
+
+// The front door answers 500 when a registered handler fails, and the test would go on as if the event did nothing. A
+// failure that reached a stub still waits, as at the stub; any other answer but 200 fails the test as itself.
+async function delivered(response: Response | Promise<Response>): Promise<void> {
+  const { status } = await response;
+  if (status === 200) return;
+  const failure = t.logs.findLast(({ message }) => message === "slack request failed");
+  if (failure?.fields.error === "NotPortedError") throw notPorted("slack.frontDoor.handler");
+  throw new Error(`The front door answered ${status}`);
+}
+
+// The front door acknowledges an event or click no domain registered a handler for and takes nothing in, so a kudos, an
+// App Home opening or a click sent before the stack that handles it lands would go nowhere: until then it ends here, as
+// at a stub.
+function handledByTheFrontDoor(kind: { event: EventKind } | { click: ClickKind }) {
+  const [handlers, name] = "event" in kind ? [serviceRegistry.slack.events, kind.event] : [serviceRegistry.slack.clicks, kind.click];
+  if (!Object.hasOwn(handlers ?? {}, name)) throw notPorted(`slack.${"event" in kind ? "events" : "clicks"}.${name}`);
 }
