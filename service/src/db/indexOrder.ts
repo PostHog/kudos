@@ -14,6 +14,8 @@ export interface IndexOrder {
   orderBy(direction?: Direction): SQL[];
   /** Holds for the rows after `document` in this order: a document as `toDocument` reads it, a missing field absent. */
   after(document: Readonly<Record<string, unknown>>, direction?: Direction): SQL;
+  /** The part of `document` its place in this order needs: the index's fields, `_creationTime` and `_id`. `after` takes it. */
+  keyOf(document: Readonly<Record<string, unknown>>): Record<string, unknown>;
 }
 
 /**
@@ -28,11 +30,12 @@ export function indexOrder<Table extends PgTable>(table: Table, fields: Readonly
     if (!column) throw new Error(`The table has no field ${field}`);
     // A nested field's generated column, `chatIdentity$workspace`, holds the document's `chatIdentity.workspace`.
     const path = field.split("$");
-    const key: Key = { expression: column, valueOf: (document) => valueAt(document, path) };
+    const key: Key = { expression: column, path, valueOf: (document) => valueAt(document, path) };
     if (column.getSQLType() !== "double precision") return [key];
     // Postgres holds -0 equal to 0, where Convex orders -0 first: a second key tells them apart, false for -0.
     const zeroSign: Key = {
       expression: sql`(${column}::text <> '-0')`,
+      path,
       valueOf: (document) => {
         const value = key.valueOf(document);
         return value === null ? null : !Object.is(value, -0);
@@ -48,11 +51,23 @@ export function indexOrder<Table extends PgTable>(table: Table, fields: Readonly
       const terms = keys.map((key, i) => and(...keys.slice(0, i).map((earlier, j) => same(earlier.expression, values[j])), follows(key.expression, values[i], direction)));
       return or(...terms)!;
     },
+    keyOf(document) {
+      const key: Record<string, unknown> = {};
+      for (const { path } of keys) {
+        let into = key;
+        for (const step of path.slice(0, -1)) into = (into[step] ??= {}) as Record<string, unknown>;
+        // A missing field and a null one hold the same place, as `after` reads them: both are kept as null.
+        into[path.at(-1)!] = valueAt(document, path);
+      }
+      return key;
+    },
   };
 }
 
 interface Key {
   expression: Column | SQL;
+  /** The field's path in a document: `["chatIdentity", "workspace"]` for the column `chatIdentity$workspace`. */
+  path: readonly string[];
   /** The document's value for the key; null for a missing field. */
   valueOf(document: Readonly<Record<string, unknown>>): unknown;
 }
