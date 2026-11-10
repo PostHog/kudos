@@ -1,14 +1,14 @@
 // The failed-job sweep, today's convex/analytics/sweep.ts on the service's one job history: every 15 minutes it reports
-// each job that failed, once, as a PostHog $exception named by the job's operation. It reads failed jobs in the order
-// they finished, from where the last sweep stopped, once they have been finished a minute, so a job marked failed in
-// a transaction still committing is read by a later sweep. A job is finished when it reaches `failed`, so no job is
-// watched while it waits: `watchedJobs` and the cursor that read it are no longer written.
-import { and, asc, eq, getTableName, gt, inArray, is, lt, or } from "drizzle-orm";
+// each job that failed, once, as a PostHog $exception named by the job's operation. It reads the failed jobs it has not
+// taken in yet (`sweptAt` is NULL), in the order they finished, and takes in every one it reads, reported or not. So a
+// failure is read however late its transaction commits, and never twice. A failure older than a week, such as a job a
+// load moved from Convex long after it failed, is taken in without a report, as today's sweep never read so far back.
+import { and, asc, eq, getTableName, inArray, is, isNull, lt } from "drizzle-orm";
 import { PgTable } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import type { Id } from "../db/columns.ts";
 import * as schema from "../db/schema/index.ts";
-import { errorSweep, reportedJobs } from "../db/schema/index.ts";
+import { reportedJobs } from "../db/schema/index.ts";
 import { jobs } from "../db/schema/service.ts";
 import { mutationJob } from "../jobs/define.ts";
 import type { MutationContext, QueryContext } from "../operations.ts";
@@ -19,7 +19,6 @@ type FailedJob = { _id: string; name: string; kind: "mutation" | "action"; error
 
 const pageSize = 100;
 const pagesPerSweep = 10;
-const settledAfterMs = 60 * 1000;
 const reportsKeptMs = 7 * 24 * 60 * 60 * 1000;
 const analyticsModule = "analytics.";
 
@@ -44,53 +43,34 @@ export function operationPathOf(name: string): string {
 }
 
 async function reportNewFailures(ctx: MutationContext) {
-  const state = await stateOf(ctx);
-  const settledBefore = ctx.now - settledAfterMs;
-  // A sweep starts at its cursor's instant, so a job that finished then and wasn't read is; within a sweep, a page
-  // starts after the last job read, so jobs that finished at one instant never hold a page.
-  let after: { completedAt: number; _id: string } = { completedAt: state.cursor, _id: "" };
+  const reportedSince = ctx.now - reportsKeptMs;
   for (let page = 0; page < pagesPerSweep; page += 1) {
-    const failed = await failedJobsAfter(ctx, after, settledBefore);
-    for (const job of failed) await reportOnce(ctx, job);
-    const last = failed.at(-1);
-    if (last !== undefined) after = last;
-    if (failed.length < pageSize) break;
+    const failed = await unsweptFailures(ctx);
+    for (const job of failed) if (job.completedAt >= reportedSince) await reportOnce(ctx, job);
+    if (failed.length > 0) await ctx.tx.update(jobs).set({ sweptAt: ctx.now }).where(inArray(jobs._id, failed.map(({ _id }) => _id)));
+    if (failed.length < pageSize) return;
   }
-  await ctx.tx.update(errorSweep).set({ cursor: after.completedAt }).where(eq(errorSweep._id, state._id));
 }
 
-async function stateOf(ctx: MutationContext) {
-  const [existing] = await ctx.tx.select({ _id: errorSweep._id, cursor: errorSweep.cursor }).from(errorSweep).limit(1);
-  if (existing !== undefined) return existing;
-  const row = { ...ctx.newRow(), cursor: 0, watchCursor: 0 };
-  await ctx.tx.insert(errorSweep).values(row);
-  return row;
-}
-
-async function failedJobsAfter(ctx: QueryContext, after: { completedAt: number; _id: string }, settledBefore: number): Promise<FailedJob[]> {
+/** Read through `jobs_failed_and_unswept`, which holds only the failed jobs no sweep has taken in yet. */
+async function unsweptFailures(ctx: QueryContext): Promise<FailedJob[]> {
   const rows = await ctx.tx
     .select({ _id: jobs._id, name: jobs.name, kind: jobs.kind, error: jobs.error, completedAt: jobs.completedAt })
     .from(jobs)
-    .where(
-      and(
-        eq(jobs.state, "failed"),
-        lt(jobs.completedAt, settledBefore),
-        or(gt(jobs.completedAt, after.completedAt), and(eq(jobs.completedAt, after.completedAt), gt(jobs._id, after._id))),
-      ),
-    )
+    .where(and(eq(jobs.state, "failed"), isNull(jobs.sweptAt)))
     .orderBy(asc(jobs.completedAt), asc(jobs._id))
     .limit(pageSize);
-  return rows.map((row) => ({ ...row, completedAt: row.completedAt! }));
+  return rows.map((row) => ({ ...row, completedAt: row.completedAt ?? ctx.now }));
 }
 
 async function reportOnce(ctx: MutationContext, job: FailedJob) {
   const error = job.error ?? undefined;
-  if (job.name.startsWith(analyticsModule) || carriesReportedMarker(error) || (await wasReported(ctx, job))) return;
-  await ctx.tx.insert(reportedJobs).values({ ...ctx.newRow(), job: job._id as Id<"_scheduled_functions"> });
+  if (job.name.startsWith(analyticsModule) || carriesReportedMarker(error) || (await reportedByConvex(ctx, job))) return;
   await recordException(ctx, { path: operationPathOf(job.name), kind: job.kind }, exceptionOfJobError(error, schemaTables), job.completedAt);
 }
 
-async function wasReported(ctx: QueryContext, job: FailedJob) {
+/** A job Convex already reported, by its sweep or its boundary, before the load moved it here. */
+async function reportedByConvex(ctx: QueryContext, job: FailedJob) {
   const [report] = await ctx.tx
     .select({ _id: reportedJobs._id })
     .from(reportedJobs)
@@ -99,6 +79,7 @@ async function wasReported(ctx: QueryContext, job: FailedJob) {
   return report !== undefined;
 }
 
+/** Convex's reports, which only a moved job's first sweep reads, go after a week, as today's did. */
 async function forgetOldReports(ctx: MutationContext) {
   const old = await ctx.tx
     .select({ _id: reportedJobs._id })

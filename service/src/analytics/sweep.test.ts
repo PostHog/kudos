@@ -1,18 +1,20 @@
 // The failed-job sweep, ported from convex/analytics/sweep.test.ts onto the service's job history. A failing job here
 // is one of the test's own, registered beside the analytics jobs under the name of the operation it stands for.
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq, isNull } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { useTestBackend, type TestBackend } from "../../testing/backend.ts";
 import { postHogHost, projectToken } from "../../testing/fakePostHog.ts";
 import type { Id } from "../db/columns.ts";
 import { encodeStored } from "../db/codec.ts";
-import { errorSweep, reportedJobs } from "../db/schema/index.ts";
+import { reportedJobs } from "../db/schema/index.ts";
 import { jobs } from "../db/schema/service.ts";
+import { cronSchedules } from "../jobs/crons.ts";
 import { actionJob, jobRegistry, mutationJob } from "../jobs/define.ts";
 import { serviceRegistry } from "../registry.ts";
-import type { Registry } from "../registration.ts";
+import { createRegistry, type Registry } from "../registration.ts";
 import { cleanUpJob, recoverJob } from "./drain.ts";
 import { carriesReportedMarker, exceptionOfJobError, ReportableError } from "./exceptions.ts";
+import { registration } from "./registration.ts";
 import { drainJob } from "./send.ts";
 import { sweep, sweepJob } from "./sweep.ts";
 import { z } from "zod";
@@ -51,6 +53,7 @@ const registry: Registry = {
   routes: [],
 };
 const backend = useTestBackend({ now: start, registry });
+const cronBackend = () => backend({ registry: createRegistry({ analytics: registration }) });
 
 let errors: ReturnType<typeof vi.spyOn>;
 
@@ -117,27 +120,16 @@ describe("O22: the failed-job sweep", () => {
     expect(paths(t)).toEqual(["welcome/welcome:welcomeNewMembers"]);
   });
 
-  test("leaves a job that failed within the last minute to the next sweep", async () => {
+  test("records a failure whose transaction committed after the sweep read a later one", async () => {
     const t = backend();
-    await enqueue(t, welcomeNewMembers, minutes(15) - 30_000);
-
+    await failedJob(t, "welcome.welcome.welcomeNewMembers", "Error: gone");
     await sweepAfter(t, minutes(15));
-    expect(exceptions(t)).toEqual([]);
-    await sweepAfter(t, minutes(15));
-
-    expect(paths(t)).toEqual(["welcome/welcome:welcomeNewMembers"]);
-  });
-
-  test("records a failed job that finished at the same instant as the last job the previous sweep read", async () => {
-    const t = backend();
-    await enqueue(t, welcomeNewMembers);
-    await t.settle();
-    const [job] = await t.query(({ tx }) => tx.select({ completedAt: jobs.completedAt }).from(jobs).where(eq(jobs.name, welcomeNewMembers.name)));
-    await t.seed.insert("errorSweep", { cursor: job!.completedAt!, watchCursor: 0 });
+    // Marked failed at an instant before the one the sweep already read, by a transaction that committed only now.
+    await failedJob(t, "slack.delivery.deliver", "Error: gone", { completedAt: start - minutes(1) });
 
     await sweepAfter(t, minutes(15));
 
-    expect(paths(t)).toEqual(["welcome/welcome:welcomeNewMembers"]);
+    expect(paths(t)).toEqual(["welcome/welcome:welcomeNewMembers", "slack/delivery:deliver"]);
   });
 
   test("O20: never records the analytics module's own jobs", async () => {
@@ -160,18 +152,39 @@ describe("O22: the failed-job sweep", () => {
     expect(exceptions(t)).toEqual([]);
   });
 
-  test("records nothing of a job reported before, and forgets the report a week on", async () => {
+  test("records nothing of a job Convex reported before the move, however long it sweeps after", async () => {
     const t = backend();
     const job = await failedJob(t, "welcome.welcome.welcomeNewMembers", "Uncaught Error: gone");
     await t.seed.insert("reportedJobs", { job });
-    await t.seed.insert("errorSweep", { cursor: 0, watchCursor: 0 });
 
     await sweepAfter(t, minutes(15));
-    expect(exceptions(t)).toEqual([]);
     await sweepAfter(t, days(7));
+    await sweepAfter(t, minutes(15));
 
-    expect(await t.query(({ tx }) => tx.select().from(reportedJobs))).toEqual([]);
+    expect(await t.query(({ tx }) => tx.select().from(reportedJobs)), "Convex's report forgotten after a week").toEqual([]);
     expect(exceptions(t)).toEqual([]);
+  });
+
+  test("records a job Convex was still watching when it moved, whatever cursor Convex's sweep had reached", async () => {
+    const t = backend();
+    const job = await failedJob(t, "welcome.welcome.welcomeNewMembers", "Uncaught Error: gone", { completedAt: start - minutes(30) });
+    await t.seed.insert("errorSweep", { cursor: start, watchCursor: 0 });
+    await t.seed.insert("watchedJobs", { job });
+
+    await sweepAfter(t, minutes(15));
+
+    expect(paths(t)).toEqual(["welcome/welcome:welcomeNewMembers"]);
+  });
+
+  test("takes in a failure older than a week without recording it, as today's sweep never read so far back", async () => {
+    const t = backend();
+    await failedJob(t, "welcome.welcome.welcomeNewMembers", "Uncaught Error: gone", { completedAt: start - days(8) });
+
+    await sweepAfter(t, minutes(15));
+    await sweepAfter(t, minutes(15));
+
+    expect(exceptions(t)).toEqual([]);
+    expect(await unswept(t)).toEqual([]);
   });
 });
 
@@ -191,14 +204,22 @@ describe("O22: the failed-job sweep keeps up", () => {
     expect(paths(t)).toEqual(["welcome/welcome:welcomeNewMembers"]);
   });
 
-  test("records every job that failed at one instant, more than a page of them, in one sweep", async () => {
+  test("records every job, more than a sweep reads, that failed at one instant, and the one after them, each once", async () => {
     const t = backend();
-    for (let job = 0; job < 150; job += 1) await failedJob(t, "welcome.welcome.welcomeNewMembers", "Error: gone");
+    await t.run(async (ctx) => {
+      const failed = (completedAt: number) => ({ ...ctx.newRow(), name: "welcome.welcome.welcomeNewMembers", args: encodeStored({}), runAt: completedAt, kind: "mutation" as const, state: "failed" as const, error: "Error: gone", completedAt });
+      await ctx.tx.insert(jobs).values(Array.from({ length: 1001 }, () => failed(ctx.now)));
+      await ctx.tx.insert(jobs).values(failed(ctx.now + 1));
+    });
 
     await sweepAfter(t, minutes(15));
+    expect(paths(t), "a sweep reads 1,000").toHaveLength(1000);
+    await sweepAfter(t, minutes(15));
+    await sweepAfter(t, minutes(15));
 
-    expect(paths(t)).toHaveLength(150);
-    expect(await t.query(({ tx }) => tx.select().from(reportedJobs))).toHaveLength(150);
+    expect(paths(t)).toHaveLength(1002);
+    expect(new Set(exceptions(t).map(({ uuid }) => uuid)).size, "each once").toBe(1002);
+    expect(await unswept(t)).toEqual([]);
   });
 
   test("O20: a sweep that fails logs a fixed code and records nothing", async () => {
@@ -212,13 +233,22 @@ describe("O22: the failed-job sweep keeps up", () => {
 
     randomness.fails = false;
     expect(errors).toHaveBeenCalledWith("analytics.sweep_failed");
-    expect(await t.query(({ tx }) => tx.select().from(errorSweep))).toEqual([]);
+    expect(await unswept(t), "the failure waits for the next sweep").toHaveLength(1);
     await t.settle();
     expect(exceptions(t)).toEqual([]);
   });
 
-  test("the service runs the sweep on its 15-minute cron", () => {
-    expect(serviceRegistry.jobs.get("analytics.sweep.sweep")).toBe(sweepJob);
+  test("the sweep's cron, every 15 minutes, runs the analytics registration's sweep, which the service holds", async () => {
+    const t = cronBackend();
+    await failedJob(t, "welcome.welcome.welcomeNewMembers", "Error: gone");
+
+    t.time.advance(minutes(15));
+    await t.time.runCron("analytics.sweep.sweep");
+    await t.settle();
+
+    expect(paths(t)).toEqual(["welcome/welcome:welcomeNewMembers"]);
+    expect(cronSchedules["analytics.sweep.sweep"]).toEqual({ everyMs: minutes(15) });
+    expect(serviceRegistry.jobs.get(sweepJob.name), "the service's registry").toBe(registration.jobs!.find(({ name }) => name === sweepJob.name));
   });
 });
 
@@ -268,13 +298,18 @@ async function enqueue(t: TestBackend, job: { name: string }, delayMs = 0) {
   await t.run((ctx) => ctx.jobs.enqueue(job as typeof welcomeNewMembers, {}, { after: delayMs }));
 }
 
-/** A job that failed by the app's clock now, as the loader brings today's failed jobs over or the worker marks one. */
-async function failedJob(t: TestBackend, name: string, error: string) {
+/** A job that failed by the app's clock now, or at `completedAt`, as the loader moves today's failed jobs or the worker marks one. */
+async function failedJob(t: TestBackend, name: string, error: string, { completedAt }: { completedAt?: number } = {}) {
   return t.run(async (ctx) => {
-    const row = { ...ctx.newRow(), name, args: encodeStored({}), runAt: ctx.now, kind: "mutation" as const, state: "failed" as const, error, completedAt: ctx.now };
+    const at = completedAt ?? ctx.now;
+    const row = { ...ctx.newRow(), name, args: encodeStored({}), runAt: at, kind: "mutation" as const, state: "failed" as const, error, completedAt: at };
     await ctx.tx.insert(jobs).values(row);
     return row._id as Id<"_scheduled_functions">;
   });
+}
+
+async function unswept(t: TestBackend) {
+  return t.query(({ tx }) => tx.select({ _id: jobs._id }).from(jobs).where(and(eq(jobs.state, "failed"), isNull(jobs.sweptAt))));
 }
 
 async function sweepAfter(t: TestBackend, delayMs: number) {
