@@ -3,12 +3,15 @@
 // and emojis; its tests are in the ported files beside this one.
 import { asc } from "drizzle-orm";
 import { describe, expect, test } from "vitest";
+import { z } from "zod";
 import { useTestDatabase } from "../../testing/database.ts";
 import { seeder } from "../../testing/seed.ts";
+import { subscribersOf, type Subscription } from "../bus/publish.ts";
 import { createClock } from "../clock.ts";
 import type { Id } from "../db/columns.ts";
 import { jobs } from "../db/schema/index.ts";
 import type { MessageRef } from "../engine/messageEvent.ts";
+import { mutationJob } from "../jobs/define.ts";
 import type { Log } from "../log.ts";
 import { createOperations, type MutationContext } from "../operations.ts";
 import type { MemberId } from "../workspace/directory.ts";
@@ -21,10 +24,13 @@ const quiet: Log = { info: () => {}, error: () => {} };
 const at = new Date("2026-10-13T10:00:00Z").getTime();
 const ref: MessageRef = { workspace: "T1", conversation: "C1", message: "1760000000.000001" };
 
-// The one setup of this file: the operation runner on the test database and the seeder. S4's in-process backend
+// The one setup of this file: the operation runner on the test database and the seeder, with a recording subscriber
+// on the events a put-in and a turn publish, so a refusal that publishes queues a job. S4's in-process backend
 // replaces it.
+const recorder = mutationJob("test.published", z.object({ event: z.looseObject({ type: z.string() }) }), async () => {});
 function backend() {
-  const operations = createOperations({ pool: database.pool, clock: createClock({ real: () => at }), log: quiet, retryDelayMs: () => 1 });
+  const subscriptions = [{ event: "itemTurned", job: recorder }, { event: "stickerPutIn", job: recorder }] as Subscription<any>[];
+  const operations = createOperations({ pool: database.pool, clock: createClock({ real: () => at }), log: quiet, retryDelayMs: () => 1, subscribers: subscribersOf(subscriptions) });
   const seed = seeder(operations);
   return {
     seed,
@@ -85,6 +91,7 @@ describe("LP10: turnItem refuses and writes nothing", () => {
     expect(await t.mutation((ctx) => turn(ctx, owner(alice), bobs as Id<"items">, at))).toBeNull();
     expect(await t.mutation((ctx) => turn(ctx, owner(alice), "no-such-item" as Id<"items">, at))).toBeNull();
     expect((await t.seed.all("items")).map(({ turnedAt }) => turnedAt)).toEqual([undefined]);
+    expect(await t.scheduled()).toEqual([]);
   });
 
   test("an achievement's item is refused while achievement hoggies are off", async () => {
@@ -121,6 +128,7 @@ describe("LP10: turnItem refuses and writes nothing", () => {
 
     expect(await t.mutation((ctx) => turn(ctx, owner(alice), sticker as Id<"items">, at))).toBeNull();
     expect((await t.seed.all("items")).map(({ turnedAt }) => turnedAt)).toEqual([undefined]);
+    expect(await t.scheduled()).toEqual([]);
   });
 });
 
