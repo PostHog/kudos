@@ -1,11 +1,11 @@
 // The module map's skeleton of convex/album/tallies.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
 // notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
 import { hugGivenEventValidator, kudosGivenEventValidator } from "../bus/events.ts";
-import { type DayKey } from "../engine/allowance.ts";
-import { type AwardId } from "../engine/awards.ts";
-import { type MessageRef } from "../engine/messageEvent.ts";
-import { type Hug } from "../hugs/records.ts";
-import { type MemberId } from "../workspace/directory.ts";
+import type { DayKey } from "../engine/allowance.ts";
+import type { AwardId } from "../engine/awards.ts";
+import type { MessageRef } from "../engine/messageEvent.ts";
+import type { Hug } from "../hugs/records.ts";
+import type { MemberId } from "../workspace/directory.ts";
 import { pairTallyValidator, weekTallyValidator, type HoggieFound } from "./records.ts";
 import { z } from "zod";
 import { zv } from "../values.ts";

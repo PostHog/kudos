@@ -2,7 +2,7 @@
 // notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
 import type { KudosGivenEvent } from "../bus/events.ts";
 import { awardIdValidator, type AwardId } from "../engine/awards.ts";
-import { type MemberId } from "../workspace/directory.ts";
+import type { MemberId } from "../workspace/directory.ts";
 import { z } from "zod";
 import { zv } from "../values.ts";
 import type { MutationContext } from "../operations.ts";
