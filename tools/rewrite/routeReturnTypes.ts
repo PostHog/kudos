@@ -32,6 +32,8 @@ type Plain<T> =
       ? T
       : T extends GenericId<infer Table>
         ? Id<Table>
+        : T extends string
+          ? IdsInTemplate<T>
         : T extends Primitive
           ? T
           : T extends (...args: never[]) => unknown
@@ -41,6 +43,16 @@ type Plain<T> =
                 ? Plain<T[number]>[]
                 : { -readonly [Index in keyof T]: Plain<T[Index]> }
               : { -readonly [Key in keyof T]: Plain<T[Key]> };
+
+// An id inside a template literal, as `hype:${MemberId}`, is the same string on the wire on both sides, but TypeScript
+// keeps Convex's id and the service's apart there and infers no table through a template's placeholder. So every
+// branded placeholder of a template reads as an id of any table, on both sides: the template's text and its other
+// placeholders still compare, and only the table of an id inside a template goes unchecked.
+type IsTemplate<T extends string> = {} extends Record<T, 0> ? true : false;
+type TemplatePart<Part extends string> = string extends Part ? Part : Part extends `${number}` ? Part : IsTemplate<Part> extends true ? `${Id<string>}` : Part;
+type WithPlainIds<T extends string, Done extends string = ""> = T extends `${infer Part}${infer Rest}` ? WithPlainIds<Rest, `${Done}${TemplatePart<Part>}`> : `${Done}${T}`;
+// A bare id, Convex's read as the service's above, splits into no parts and stays whole.
+type IdsInTemplate<T extends string> = string extends T ? T : IsTemplate<T> extends true ? (T extends `${infer _Part}${infer _Rest}` ? WithPlainIds<T> : T) : T;
 
 /** True somewhere in the union when `any` hides in T at any depth. */
 type HasAny<T> =
@@ -209,3 +221,16 @@ export type MovesAFieldToAnotherKind = Holds<Same<{ kind: "a"; f?: number } | { 
 // @ts-expect-error an optional field moved to a member of another kind, one field down
 export type MovesAFieldToAnotherKindOneDown = Holds<Same<{ card: { kind: "a"; f?: number } | { kind: "b" } }, { card: { kind: "a" } | { kind: "b"; f?: number } }>>;
 export type SplitsAKind = Holds<Same<{ kind: "a" | "b"; f?: number }, { kind: "a"; f?: number } | { kind: "b"; f?: number }>>;
+export type ReadsAConvexId = Holds<Same<{ member: Id<"members"> }, { member: GenericId<"members"> }>>;
+export type ReadsAnIdInATemplate = Holds<
+  Same<
+    `level:${number}` | `milestone:${Id<"milestones">}:${"gold" | "silver"}` | `team:${string}` | `hype:${Id<"members">}`,
+    `level:${number}` | `milestone:${GenericId<"milestones">}:${"gold" | "silver"}` | `team:${string}` | `hype:${GenericId<"members">}`
+  >
+>;
+// @ts-expect-error a template spelled otherwise around its id
+export type RespellsATemplate = Holds<Same<`pet:${Id<"members">}`, `hype:${GenericId<"members">}`>>;
+// @ts-expect-error any string where the function had an id inside a template
+export type AnyStringForAnIdInATemplate = Holds<Same<`hype:${string}`, `hype:${GenericId<"members">}`>>;
+// @ts-expect-error a template of one id for a template of two
+export type DropsAnIdFromATemplate = Holds<Same<`pair:${Id<"members">}`, `pair:${GenericId<"members">}:${GenericId<"members">}`>>;
