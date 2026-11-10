@@ -8,7 +8,6 @@ import { welcomeNudgeSwitches, workspaces } from "../db/schema/index.ts";
 import { indexOrder } from "../db/indexOrder.ts";
 import type { MutationContext, QueryContext } from "../operations.ts";
 import { xpLevelsShownIn } from "../progression/xpLevels.ts";
-import { republishAdminsInJob } from "../feedback/homes.ts";
 import { zv } from "../values.ts";
 import { insertRow, patchRow, uniqueRow } from "./rows.ts";
 
@@ -70,6 +69,9 @@ export async function setAnnouncementChannel(ctx: MutationContext, workspace: st
 async function announceIn(ctx: MutationContext, workspace: string, channel: string | null): Promise<boolean> {
   if (!(await xpLevelsShownIn(ctx, workspace))) return false;
   await saveWorkspaceSettings(ctx, workspace, { announcementChannel: channel ?? undefined });
+  // Loaded here, not at the top: feedback/homes.ts's skeleton loads the weekly post, which reaches Slack's blocks and
+  // analytics/projections.ts, which imports this module, so a top-level import leaves projections' validators undefined.
+  const { republishAdminsInJob } = await import("../feedback/homes.ts");
   await ctx.jobs.enqueue(republishAdminsInJob, { workspace });
   return true;
 }
