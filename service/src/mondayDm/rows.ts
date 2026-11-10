@@ -8,14 +8,14 @@ import { mondayDms } from "../db/schema/mondayDm.ts";
 import type { DayKey } from "../engine/allowance.ts";
 import type { MutationContext, QueryContext, Transaction } from "../operations.ts";
 import type { MemberId } from "../workspace/directory.ts";
+import { unique } from "../db/unique.ts";
 
 export type MondayDmRow = Doc<"mondayDms">;
 
 /** One DM per member and week, as Convex's `unique()` asked. */
 export async function mondayDmOf(ctx: QueryContext, member: MemberId, monday: DayKey): Promise<MondayDmRow | null> {
-  const rows = await ctx.tx.select().from(mondayDms).where(and(eq(mondayDms.member, member), eq(mondayDms.monday, monday))).limit(2);
-  if (rows.length > 1) throw new Error(`More than one Monday DM is held for ${monday}`);
-  return rows[0] ? toDocument<MondayDmRow>(mondayDms, rows[0]) : null;
+  const row = unique("mondayDms", await ctx.tx.select().from(mondayDms).where(and(eq(mondayDms.member, member), eq(mondayDms.monday, monday))).limit(2));
+  return row ? toDocument<MondayDmRow>(mondayDms, row) : null;
 }
 
 export async function mondayDmRow(tx: Transaction, dm: Id<"mondayDms">): Promise<MondayDmRow | null> {

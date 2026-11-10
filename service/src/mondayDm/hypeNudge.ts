@@ -11,6 +11,7 @@ import { mondayDmNudges } from "../db/schema/mondayDm.ts";
 import { hypeNudgeLineOf } from "../feedback/hypeNudge.ts";
 import type { MutationContext, QueryContext, Transaction } from "../operations.ts";
 import type { MemberId } from "../workspace/directory.ts";
+import { unique } from "../db/unique.ts";
 
 export const hypeNudgeFlag = { key: "hype-nudge", safeDefault: false, values: [false, true] } as const satisfies Flag<boolean>;
 
@@ -38,7 +39,6 @@ export async function hypeNudgeOf(ctx: QueryContext, dm: Id<"mondayDms">): Promi
 
 // One nudge per DM, as Convex's `unique()` asked.
 async function keptNudgeOf(tx: Transaction, dm: Id<"mondayDms">): Promise<Doc<"mondayDmNudges"> | null> {
-  const rows = await tx.select().from(mondayDmNudges).where(eq(mondayDmNudges.dm, dm)).limit(2);
-  if (rows.length > 1) throw new Error(`More than one hype nudge is kept for the Monday DM ${dm}`);
-  return rows[0] ? toDocument<Doc<"mondayDmNudges">>(mondayDmNudges, rows[0]) : null;
+  const row = unique("mondayDmNudges", await tx.select().from(mondayDmNudges).where(eq(mondayDmNudges.dm, dm)).limit(2));
+  return row ? toDocument<Doc<"mondayDmNudges">>(mondayDmNudges, row) : null;
 }
