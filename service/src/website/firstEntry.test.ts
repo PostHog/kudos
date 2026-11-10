@@ -190,16 +190,23 @@ describe("the first entry", () => {
 describe("WS8: a person the directory doesn't know yet is verified with users.info", () => {
   const verification = async () => (await t.seed.all("memberVerifications"))[0];
   const directory = () => t.seed.all("members");
-  // Runs the verification's tries as they come due, as today's `settleInTimeOrder`; a try waits a minute at most here.
-  async function settleTheChecks() {
+  // Runs the verification's tries as they come due, as today's `settleInTimeOrder`: settles, then moves the app's clock to
+  // the verification's next try. Answers the app's time at each users.info call, since the Slack fake stamps calls with
+  // real time.
+  async function settleTheChecks(): Promise<number[]> {
+    const triedAt: number[] = [];
     for (let step = 0; step < 20; step += 1) {
+      const asked = t.slack.callsTo("users.info").length;
       await t.settle();
-      if ((await verification())?.state !== "pending") return;
-      t.time.advance(60_000);
+      for (let call = asked; call < t.slack.callsTo("users.info").length; call += 1) triedAt.push(t.clock.now());
+      const pending = await verification();
+      if (pending?.state !== "pending") return triedAt;
+      t.time.advance(Math.max(0, (pending.nextTryAt ?? t.clock.now() + 60_000) - t.clock.now()));
     }
+    return triedAt;
   }
 
-  waitsOn(["S3", "S15"], "they read verifying, then member once users.info answers, with the directory filled", async () => {
+  waitsOn(["S3", "S8", "S15"], "they read verifying, then member once users.info answers, with the directory filled", async () => {
     t.slack.withMember("U_JUNO", { tz: "Europe/London" });
     await enters(juno);
     expect(await verification()).toMatchObject({ state: "pending" });
@@ -224,10 +231,10 @@ describe("WS8: a person the directory doesn't know yet is verified with users.in
     const start = t.clock.now();
     await enters(juno);
 
-    await settleTheChecks();
+    const triedAt = await settleTheChecks();
 
     expect(await verification()).toMatchObject({ state: "failed" });
-    expect(t.slack.timesOf("users.info").map((at) => (at - start) / 1000)).toEqual([0, 30, 60]);
+    expect(triedAt.map((at) => (at - start) / 1000)).toEqual([0, 30, 60]);
     expect(await directory()).toEqual([]);
   });
 
@@ -242,7 +249,7 @@ describe("WS8: a person the directory doesn't know yet is verified with users.in
     expect(t.slack.callsTo("users.info")).toHaveLength(3);
   });
 
-  waitsOn(["S3", "S15"], "entering again after a failed verification starts a fresh check", async () => {
+  waitsOn(["S3", "S8", "S15"], "entering again after a failed verification starts a fresh check", async () => {
     t.slack.withMember("U_JUNO").answering("users.info", httpStatus(500), httpStatus(500), httpStatus(500));
     const user = await enters(juno);
     await settleTheChecks();
@@ -256,7 +263,7 @@ describe("WS8: a person the directory doesn't know yet is verified with users.in
     expect(t.slack.callsTo("users.info")).toHaveLength(4);
   });
 
-  waitsOn(["S3", "S15"], "entering again while a check is pending asks Slack once", async () => {
+  waitsOn(["S3", "S8", "S15"], "entering again while a check is pending asks Slack once", async () => {
     t.slack.withMember("U_JUNO");
     await enters(juno);
     await enters(juno);
@@ -266,7 +273,7 @@ describe("WS8: a person the directory doesn't know yet is verified with users.in
     expect(t.slack.callsTo("users.info")).toHaveLength(1);
   });
 
-  waitsOn(["S3", "S15"], "a member the directory already knows is not looked up", async () => {
+  waitsOn(["S3", "S8", "S15"], "a member the directory already knows is not looked up", async () => {
     await aMember("U_JUNO");
     await enters(juno);
     await t.settle();
