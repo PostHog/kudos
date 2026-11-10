@@ -1,53 +1,91 @@
 // A route of the website's API: one read or one command the website's code calls, named by its former Convex path
-// (`website.album.getAlbum`), with the zod schema its arguments must pass and its handler. Only a verified member
-// reaches a handler; anyone else gets the denial today's member check answers, as the result.
-import type { z } from "zod";
+// (`website.album.getAlbum`), with the shape of its arguments, as a Convex function's `args`, and its handler. Only a
+// verified member reaches a handler; anyone else gets the denial today's member check answers, as the result.
+import { z } from "zod";
 import type { HomeMember } from "../../feedback/homes.ts";
 import type { MutationContext, QueryContext } from "../../operations.ts";
 import type { Denial, VerifiedMember } from "../memberQuery.ts";
 
-/** A route's arguments: an object, as a Convex function's were. */
-export type RouteArgs = z.ZodType<Record<string, unknown>, Record<string, unknown>>;
+/** A route's arguments, field by field, as a Convex function's `args` were. */
+export type ArgsShape = Record<string, z.ZodType>;
+
+/** The schema a route's arguments must pass: its shape, refusing any field the shape doesn't name. */
+export type ArgsOf<Shape extends ArgsShape> = z.ZodObject<Shape, z.core.$strict>;
 
 export type ReadHandler<Args, Result> = (ctx: QueryContext, me: VerifiedMember, args: Args) => Promise<Result>;
 
 export type CommandHandler<Args, Result> = (ctx: MutationContext, me: VerifiedMember, person: HomeMember, args: Args) => Promise<Result>;
 
-export interface ReadRoute<Name extends string = string, Args extends RouteArgs = RouteArgs, Result = unknown> {
+export interface ReadRoute<Name extends string = string, Shape extends ArgsShape = ArgsShape, Result = unknown> {
   kind: "query";
   name: Name;
-  args: Args;
-  handler: ReadHandler<z.output<Args>, Result>;
+  args: ArgsOf<Shape>;
+  handler: ReadHandler<z.output<ArgsOf<Shape>>, Result>;
   /** Only the types use it: what a reader gets back, the denial included. */
   readonly answer?: Result | Denial;
 }
 
-export interface CommandRoute<Name extends string = string, Args extends RouteArgs = RouteArgs, Result = unknown> {
+export interface CommandRoute<Name extends string = string, Shape extends ArgsShape = ArgsShape, Result = unknown> {
   kind: "mutation";
   name: Name;
-  args: Args;
-  handler: CommandHandler<z.output<Args>, Result>;
+  args: ArgsOf<Shape>;
+  handler: CommandHandler<z.output<ArgsOf<Shape>>, Result>;
   /** Only the types use it: what a sender gets back, the denial included. */
   readonly answer?: Result | Denial;
 }
 
-export type Route = ReadRoute<string, RouteArgs, any> | CommandRoute<string, RouteArgs, any>;
+export type Route = ReadRoute<string, any, any> | CommandRoute<string, any, any>;
 
 // A former Convex path of a website function: `website.<module>.<function>`, letters and digits only.
 const routeName = /^website\.[A-Za-z][A-Za-z0-9]*\.[A-Za-z][A-Za-z0-9]*$/;
 
-function named(name: string): void {
+function defined<Shape extends ArgsShape>(name: string, shape: Shape): ArgsOf<Shape> {
   if (!routeName.test(name)) throw new Error(`A website route is named website.<module>.<function>, not ${JSON.stringify(name)}`);
+  for (const [field, schema] of Object.entries(shape)) refuseLooseObjects(schema, `${name}(${field})`);
+  return z.strictObject(shape);
 }
 
 /** A read only a member who passes today's member check reaches: Convex's `memberQuery`. */
-export function memberRead<const Name extends string, Args extends RouteArgs, Result>(name: Name, args: Args, handler: ReadHandler<z.output<Args>, Result>): ReadRoute<Name, Args, Result> {
-  named(name);
-  return { kind: "query", name, args, handler };
+export function memberRead<const Name extends string, Shape extends ArgsShape, Result>(name: Name, args: Shape, handler: ReadHandler<z.output<ArgsOf<Shape>>, Result>): ReadRoute<Name, Shape, Result> {
+  return { kind: "query", name, args: defined(name, args), handler };
 }
 
 /** A command only a member the website admits reaches: Convex's `memberMutation`. */
-export function memberCommand<const Name extends string, Args extends RouteArgs, Result>(name: Name, args: Args, handler: CommandHandler<z.output<Args>, Result>): CommandRoute<Name, Args, Result> {
-  named(name);
-  return { kind: "mutation", name, args, handler };
+export function memberCommand<const Name extends string, Shape extends ArgsShape, Result>(name: Name, args: Shape, handler: CommandHandler<z.output<ArgsOf<Shape>>, Result>): CommandRoute<Name, Shape, Result> {
+  return { kind: "mutation", name, args: defined(name, args), handler };
+}
+
+/**
+ * Convex refused a field its validator didn't name, at any depth. A nested `z.object` would drop one silently, so every
+ * object inside a route's arguments must be `z.strictObject`; the service refuses to start otherwise.
+ */
+function refuseLooseObjects(schema: z.ZodType, at: string): void {
+  const def = schema._zod.def as unknown as Record<string, unknown> & { type: string };
+  const inner = (value: unknown, where = at) => refuseLooseObjects(value as z.ZodType, where);
+  switch (def.type) {
+    case "object": {
+      const catchall = def.catchall as { _zod: { def: { type: string } } } | undefined;
+      if (catchall?._zod.def.type !== "never") throw new Error(`${at} is an object that keeps unknown fields; use z.strictObject, as Convex refused them`);
+      for (const [field, value] of Object.entries(def.shape as Record<string, unknown>)) inner(value, `${at}.${field}`);
+      return;
+    }
+    case "optional":
+    case "nullable":
+    case "default":
+    case "readonly":
+    case "nonoptional":
+      return inner(def.innerType);
+    case "array":
+      return inner(def.element, `${at}[]`);
+    case "union":
+      for (const option of def.options as unknown[]) inner(option);
+      return;
+    case "record":
+      return inner(def.valueType, `${at}[*]`);
+    case "tuple":
+      for (const item of def.items as unknown[]) inner(item);
+      return;
+    default:
+      return;
+  }
 }

@@ -83,7 +83,7 @@ Peer recognition for Slack on one Convex deployment per workspace; the product r
 - route POST /api/query/*: the website reads one of the route table's reads, named by its former Convex path, for the member the request signs in as
   handler: apiTransport in service/src/website/api/transport.ts
   trust: browser
-  control: none — a request without the x-hedgehug-api header, as anything but JSON, or marked cross-site by the browser gets 403, and arguments the route's zod schema refuses get 400, before anyone is looked up; only a member today's check verifies reaches the read, and anyone else gets the check's denial (service/src/website/api/transport.test.ts)
+  control: none — a request without the x-hedgehug-api header, as anything but JSON, or marked cross-site by the browser gets 403, a body over 64 KiB gets 413, and arguments the route's shape refuses, an unknown field at any depth included, get 400, before anyone is looked up; only a member today's check verifies reaches the read, and anyone else gets the check's denial (service/src/website/api/transport.test.ts)
 - route POST /api/mutation/*: the website sends one of the route table's commands, named by its former Convex path, for the member the request signs in as
   handler: apiTransport in service/src/website/api/transport.ts
   trust: browser

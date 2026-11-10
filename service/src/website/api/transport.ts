@@ -5,6 +5,7 @@
 // A request must be JSON and carry the API's own header. A cross-site page can send neither without the browser asking
 // first (a CORS preflight), which the service never grants, so no form or link on another site runs a command.
 import { Hono, type Context } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import type { HomeMember } from "../../feedback/homes.ts";
 import type { Log } from "../../log.ts";
 import type { MutationContext, Operations, QueryContext } from "../../operations.ts";
@@ -13,6 +14,9 @@ import type { Route } from "./route.ts";
 
 /** The header every API request carries; its value is `1`. */
 export const apiHeader = "x-hedgehug-api";
+
+/** The largest body a request may send, read before anything parses it; the website's arguments are a few fields. */
+export const maxBodyBytes = 64 * 1024;
 
 /** Who a request says it is, once the edge's identity is mapped to a chat identity; null when it names nobody. */
 export type SignedIn = Omit<VerifiedMember, "member">;
@@ -47,8 +51,9 @@ export function apiTransport({ operations, log, routes, identify, check }: Trans
   }
 
   const api = new Hono();
-  api.post("/api/query/:name", (c) => answer(c, reads.get(c.req.param("name"))));
-  api.post("/api/mutation/:name", (c) => answer(c, commands.get(c.req.param("name"))));
+  const limited = bodyLimit({ maxSize: maxBodyBytes, onError: (c) => c.json({ error: "the request is too large" }, 413, { "cache-control": "no-store" }) });
+  api.post("/api/query/:name", limited, (c) => answer(c, reads.get(c.req.param("name"))));
+  api.post("/api/mutation/:name", limited, (c) => answer(c, commands.get(c.req.param("name"))));
   // Every other API path, and any other method on these, is no route: never the website's page.
   api.all("/api", (c) => c.json({ error: "no such route" }, 404));
   api.all("/api/*", (c) => c.json({ error: "no such route" }, 404));
@@ -61,17 +66,21 @@ export function apiTransport({ operations, log, routes, identify, check }: Trans
     const args = route.args.safeParse(body);
     if (!args.success) return refused(c, 400, "the arguments don't fit the route");
     const signedIn = await identify(c.req.raw);
+    // Set where the check denies, never read off the result: a handler may answer `{ kind: "closed" }` itself.
+    let denied: Denial | undefined;
     const result =
       route.kind === "query"
         ? await operations.query(route.name, async (ctx) => {
             const verified = await check.read(ctx, signedIn);
-            return "kind" in verified ? verified : route.handler(ctx, verified.me, args.data);
+            if ("kind" in verified) return (denied = verified);
+            return route.handler(ctx, verified.me, args.data);
           })
         : await operations.mutation(route.name, async (ctx) => {
             const verified = await check.command(ctx, signedIn);
-            return "kind" in verified ? verified : route.handler(ctx, verified.me, verified.person as HomeMember, args.data);
+            if ("kind" in verified) return (denied = verified);
+            return route.handler(ctx, verified.me, verified.person as HomeMember, args.data);
           });
-    if (isDenial(result)) log.info("website request denied", { route: route.name, denial: result.kind });
+    if (denied) log.info("website request denied", { route: route.name, denial: denied.kind });
     // Convex answered a function that returned nothing with null.
     return c.json(result === undefined ? null : result, 200, { "cache-control": "no-store" });
   }
@@ -83,10 +92,4 @@ function refused(c: Context, status: 400 | 403 | 404, error: string): Response {
 
 function isJson(contentType: string | undefined): boolean {
   return /^application\/json\s*(;|$)/i.test(contentType ?? "");
-}
-
-const denials: ReadonlySet<string> = new Set(["closed", "signed-out", "verifying", "unverified", "not-a-member"]);
-
-function isDenial(result: unknown): result is Denial {
-  return typeof result === "object" && result !== null && "kind" in result && Object.keys(result).length === 1 && denials.has(String(result.kind));
 }
