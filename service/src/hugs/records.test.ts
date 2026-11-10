@@ -109,6 +109,31 @@ describe("a hug given", () => {
     expect(older).toEqual(messages.toReversed().slice(11));
   });
 
+  test("its timeline misses and repeats no hug where a batch ends among hugs created at the same instant, and keeps its bounds", async () => {
+    const t = backend();
+    const stamp = at - hourMs;
+    const messages = Array.from({ length: 55 }, (_, index) => `4.${String(index).padStart(2, "0")}`);
+    for (const message of messages) await t.seed.insert("hugs", { ...hugBy(bob, message), _creationTime: stamp });
+    await t.seed.insert("hugs", { ...hugBy(bob, "5.1"), _creationTime: stamp + 1 });
+    await t.seed.insert("hugs", { ...hugBy(bob, "5.0"), _creationTime: stamp - 1 });
+
+    const timeline = (below: { decided: number; inclusive: boolean; above?: number }) =>
+      t.query(async (ctx) => {
+        const hugs = [];
+        for await (const hug of hugsGivenByDecision(ctx, bob, below)) hugs.push(hug.message.message);
+        return hugs;
+      });
+
+    const all = await timeline(fromTheNewestDecided);
+    expect(all).toHaveLength(57);
+    expect(new Set(all).size).toBe(57);
+    expect(all[0]).toBe("5.1");
+    expect(all.at(-1)).toBe("5.0");
+    expect((await timeline({ decided: stamp, inclusive: true })).toSorted()).toEqual([...messages, "5.0"]);
+    expect(await timeline({ decided: stamp, inclusive: false })).toEqual(["5.0"]);
+    expect((await timeline({ decided: Infinity, inclusive: true, above: stamp - 1 })).toSorted()).toEqual([...messages, "5.1"]);
+  });
+
   test("the people hugged in a week are each hug's author, at the hug's time", async () => {
     const t = backend();
     await t.run(async (ctx) => {
@@ -172,6 +197,25 @@ describe("a hug paid", () => {
     expect(await t.query((ctx) => hugsOnTheMessageAsOf(ctx, alice, ref, snapshots[3]!))).toBe(4);
     expect(await t.query((ctx) => hugsOnTheMessageAsOf(ctx, alice, ref, snapshots[0]! - 1))).toBe(0);
     expect(await t.query((ctx) => hugsOnTheMessageAsOf(ctx, bob, ref, snapshots[5]!))).toBe(0);
+  });
+
+  test("a message counted past one batch of versions still reads once: live, and at a snapshot", async () => {
+    const t = backend();
+    const ref = { workspace: "T1", conversation: "C1", message: "1.1" };
+    const snapshots: number[] = [];
+    for (let index = 0; index < 55; index += 1) {
+      await t.run(async (ctx) => countReceivedOnTheMessage(ctx, await given(ctx, hugBy(`m_g${index}` as MemberId, ref.message, { at: at + index })), alice));
+      snapshots.push(await t.query((ctx) => hugsReceivedSnapshot(ctx, alice)));
+    }
+
+    const received = (snapshot?: number) =>
+      t.query(async (ctx) => {
+        const versions = [];
+        for await (const version of hugsReceivedByDecision(ctx, alice, fromTheNewestDecided, snapshot)) versions.push(version.hugs);
+        return versions;
+      });
+    expect(await received()).toEqual([55]);
+    expect(await received(snapshots[3])).toEqual([4]);
   });
 });
 

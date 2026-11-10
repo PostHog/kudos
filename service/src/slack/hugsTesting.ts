@@ -18,6 +18,7 @@ import { standingOf } from "../progression/progression.ts";
 import { serviceRegistry } from "../registry.ts";
 import type { EventKind } from "./frontDoor.ts";
 import type { MemberId } from "../workspace/directory.ts";
+import { setHugBudget as setHugBudgetOf } from "../workspace/settings.ts";
 import { useTestBackend, type TestBackend } from "../../testing/backend.ts";
 import type { Stack } from "../../testing/waiting.ts";
 import { flagsFromPostHog, onForEveryone } from "../../testing/flags.ts";
@@ -86,26 +87,30 @@ export async function flagsLoaded(t: TestBackend, ...definitions: FlagDefinition
  * then the front door acks a reaction and does nothing, so the step stops here.
  */
 export async function react(t: TestBackend, options: ReactionOptions = {}) {
-  handledOrNotPorted("reactionAdded", "slack.reactions.reactionAdded");
-  return t.send("/events", reactionEvent(options));
+  return sentTo(t, "reactionAdded", "slack.reactions.reactionAdded", reactionEvent(options));
 }
 
 /** A message through the front door. S4 registers the `message` handler, the event pipeline. */
 export async function post(t: TestBackend, blocks: RichElement[], options: MessageOptions = {}) {
-  handledOrNotPorted("message", "slack.processEvent.processEvent");
-  return t.send("/events", messageEvent(blocks, options));
+  return sentTo(t, "message", "slack.processEvent.processEvent", messageEvent(blocks, options));
 }
 
 /** Today's `memberChanged`: a `team_join` or `user_change` through the front door. S3 registers `memberChanged`. */
 export async function memberChanged(t: TestBackend, ...event: Parameters<typeof memberEvent>) {
-  handledOrNotPorted("memberChanged", "slack.directory.recordPerson");
-  return t.send("/events", memberEvent(...event));
+  return sentTo(t, "memberChanged", "slack.directory.recordPerson", memberEvent(...event));
 }
 
 // A kind nobody registered is acked and dropped at the front door, which would let a test go on past a step that did
-// nothing; it ends at the handler's stub instead, as a test that waits on its stack must.
-function handledOrNotPorted(kind: EventKind, path: string) {
+// nothing; it ends at the handler's stub instead, as a test that waits on its stack must. A registered handler that
+// reaches another stack's stub answers 500 and logs only the error's class, so the step ends at a stub then too, not at
+// a later assertion. Any other failure answers as it is.
+async function sentTo(t: TestBackend, kind: EventKind, path: string, body: string) {
   if (!Object.hasOwn(serviceRegistry.slack.events ?? {}, kind)) throw notPorted(path);
+  const logged = t.logs.length;
+  const response = await t.send("/events", body);
+  const reachedAStub = t.logs.slice(logged).some(({ message, fields }) => message === "slack request failed" && fields.error === "NotPortedError");
+  if (response.status === 500 && reachedAStub) throw notPorted(`a stub behind ${path}`);
+  return response;
 }
 
 export async function kudosMessage(t: TestBackend, giver: string, recipients: string[], ts: string) {
@@ -178,9 +183,9 @@ export async function refusalOf(step: Promise<unknown>): Promise<Error> {
   throw new Error("The step was expected to be refused, and went through");
 }
 
-/** S3 ports `workspace.settings.setHugBudget`, an internal mutation the module map left out. */
-export async function setHugBudget(_t: TestBackend, _args: { workspace: string; hugBudget: number }): Promise<void> {
-  throw notPorted("workspace.settings.setHugBudget");
+/** Today's `setHugBudget`: the operator's internal mutation, S3's. */
+export async function setHugBudget(t: TestBackend, args: { workspace: string; hugBudget: number }): Promise<void> {
+  await t.run((ctx) => setHugBudgetOf(ctx, args));
 }
 
 const serviceOwned = new Set((Object.values(serviceTables) as unknown[]).filter((table): table is PgTable => is(table, PgTable)).map(getTableName));
