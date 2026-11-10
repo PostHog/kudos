@@ -79,6 +79,21 @@ export function reachedByName(sourceFiles: readonly ts.SourceFile[]): Map<string
   return reached;
 }
 
+/**
+ * Whether a module is over a context even where it names nothing of Convex: it registers a function, through any
+ * builder (the app's own `memberQuery` too), or a function of it takes a context.
+ */
+export function overContext(checker: ts.TypeChecker, sourceFile: ts.SourceFile): boolean {
+  return sourceFile.statements.some((statement) => {
+    if (registrationOf(checker, statement)) return true;
+    let found = false;
+    walk(statement, (node, inType) => {
+      if (!inType && ts.isFunctionLike(node) && node.parameters.some((parameter) => isContext(checker.getTypeAtLocation(parameter)))) found = true;
+    });
+    return found;
+  });
+}
+
 interface Declaration {
   statement: ts.Statement;
   names: string[];

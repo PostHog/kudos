@@ -12,6 +12,7 @@ import { NotPortedError } from "../../../service/src/notPorted.ts";
 import { zv } from "../../../service/src/values.ts";
 import { closureCheck, servicePackages } from "./closure.ts";
 import { convertModule } from "./codemod.ts";
+import { toolOf } from "./bootstrap.ts";
 import { copyModule, importOnlyDiff } from "./copy.ts";
 import { convexAccepts, disagreements } from "./equivalence.ts";
 import { reachedByName, skeletonModule } from "./skeleton.ts";
@@ -115,7 +116,7 @@ describe("the closure check", () => {
           'import { gone } from "./gone.ts";',
           'import { two } from "./two";',
           'import { v } from "convex/values";',
-          'import satori from "satori";',
+          'import pad from "left-pad";',
           'import { outside } from "../../../convex/schema.ts";',
           "const lazy = await import(`./${name}.ts`);",
           'import type Two = require("./two.ts");',
@@ -127,7 +128,7 @@ describe("the closure check", () => {
       "service/src/a/one.ts: ./gone.ts: no module in the batch, an earlier batch or the foundation",
       "service/src/a/one.ts: ./two: a relative import names its .ts file in the service",
       "service/src/a/one.ts: convex/values: a Convex package",
-      "service/src/a/one.ts: satori: a package the service doesn't list",
+      "service/src/a/one.ts: left-pad: a package the service doesn't list",
       "service/src/a/one.ts: ../../../convex/schema.ts: outside the service",
       "service/src/a/one.ts: <computed>: an import of a computed specifier",
       "service/src/a/one.ts: ./two.ts: an import = require(), which an ES module can't use",
@@ -256,6 +257,20 @@ describe("the equivalence check", () => {
       '{"tab\\t":true}: Convex rejects, zod accepts',
       `{"${"k".repeat(1025)}":true}: Convex rejects, zod accepts`,
     ]);
+  });
+});
+
+describe("the bootstrap's choice of tool", () => {
+  const modules = ["convex/pure/format.ts", "convex/rules/events.ts", "convex/skeleton/awards.ts", "convex/wrapping/builder.ts", "convex/wrapping/routes.ts", "convex/wrapping/hook.ts"];
+  const program = ts.createProgram(modules.map(onDisk), compilerOptions);
+  const toolFor = (convexPath: string) => toolOf(program, program.getSourceFile(onDisk(convexPath))!, convexPath);
+
+  test("copies what names nothing of Convex, converts validators and skeletons Convex's machinery", () => {
+    expect(["convex/pure/format.ts", "convex/rules/events.ts", "convex/skeleton/awards.ts", "convex/wrapping/builder.ts"].map(toolFor)).toEqual(["copy", "convert", "skeleton", "skeleton"]);
+  });
+
+  test("skeletons a module over a context that imports nothing of Convex: a registration through the app's builder, a context-typed parameter", () => {
+    expect(["convex/wrapping/routes.ts", "convex/wrapping/hook.ts"].map(toolFor)).toEqual(["skeleton", "skeleton"]);
   });
 });
 
