@@ -12,6 +12,7 @@ import type { MutationContext, QueryContext } from "../operations.ts";
 import { memberRowsIn, type MemberId } from "../workspace/directory.ts";
 import type { CompanyFace } from "./faces.ts";
 import { companyProfilesIn } from "./matcher.ts";
+import { unique } from "../db/unique.ts";
 
 export type StoredCompanyMatch = { face: CompanyFace | null; profile: number | null };
 
@@ -25,9 +26,8 @@ export async function storedCompanyFaceOf(ctx: QueryContext, workspace: string, 
 
 /** One row per member, as Convex's `unique()` asked. */
 export async function storedCompanyMatchOf(ctx: QueryContext, workspace: string, member: MemberId): Promise<StoredCompanyMatch | undefined> {
-  const rows = await ctx.tx.select().from(companyFaces).where(and(eq(companyFaces.workspace, workspace), eq(companyFaces.member, member))).limit(2);
-  if (rows.length > 1) throw new Error(`More than one company face is kept for ${member}`);
-  const row = rows[0] ? toDocument<FaceRow>(companyFaces, rows[0]) : null;
+  const stored = unique("companyFaces", await ctx.tx.select().from(companyFaces).where(and(eq(companyFaces.workspace, workspace), eq(companyFaces.member, member))).limit(2));
+  const row = stored ? toDocument<FaceRow>(companyFaces, stored) : null;
   return row === null ? undefined : { face: row.face, profile: row.profile ?? null };
 }
 
