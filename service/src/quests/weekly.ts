@@ -5,9 +5,9 @@ import { and, eq } from "drizzle-orm";
 import type { KudosGivenEvent, QuestsDrawnEvent } from "../bus/events.ts";
 import { fromDocument, toDocument } from "../db/documents.ts";
 import { indexOrder } from "../db/indexOrder.ts";
-import { awards, questDraws, questProgress as questProgressRows } from "../db/schema/index.ts";
+import { questDraws, questProgress as questProgressRows } from "../db/schema/index.ts";
 import { unique } from "../db/unique.ts";
-import { awardIdValidator, firstDecidedOf, lastThankedBefore, type AwardId } from "../engine/awards.ts";
+import { awardIdValidator, awardMessageOf, firstDecidedOf, lastThankedBefore, type AwardId } from "../engine/awards.ts";
 import { republish } from "../feedback/homes.ts";
 import { gateDecisionOf } from "../progression/gate.ts";
 import { chatUserOf, type MemberId } from "../workspace/directory.ts";
@@ -244,8 +244,8 @@ async function withDecided(ctx: QueryContext, counted: Array<Doc<"questProgress"
 }
 
 async function decidedOf(ctx: QueryContext, award: AwardId): Promise<number | null> {
-  const [row] = await ctx.tx.select({ workspace: awards.workspace, conversation: awards.conversation, message: awards.message }).from(awards).where(eq(awards._id, award));
-  return row === undefined ? null : firstDecidedOf(ctx, row);
+  const message = await awardMessageOf(ctx, award);
+  return message === null ? null : firstDecidedOf(ctx, message);
 }
 
 function weeklyQuest(week: WeekKey, { slot }: Slot): WeeklyQuest {

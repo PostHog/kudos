@@ -193,6 +193,12 @@ export async function recipientsAfter({ tx }: QueryContext, ref: MessageRef, aft
   return later.map(({ recipient }) => recipient);
 }
 
+/** The message the award was given on, or null when there is no such award: today's `ctx.db.get`. */
+export async function awardMessageOf({ tx }: QueryContext, award: AwardId): Promise<MessageRef | null> {
+  const row = await awardById(tx, award);
+  return row === null ? null : { workspace: row.workspace, conversation: row.conversation, message: row.message };
+}
+
 export async function dayThankedBefore({ tx }: QueryContext, award: AwardId): Promise<DayKey | null> {
   const current = await awardById(tx, award);
   if (current === null) return null;

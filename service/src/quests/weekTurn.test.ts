@@ -366,6 +366,7 @@ describe("a kudos moves the week's three quests", () => {
     expect(await t.read((ctx) => mondayQuestsMovedSince(ctx, bob, { since: firstDecided - 1, until: ctx.now, mostAwards: 10 })), "moved since just before the first kudos, short of its target").toEqual([
       { name: "Thank someone on two different days", from: 0, to: 1, of: 2 },
     ]);
+    expect(await t.read((ctx) => mondayQuestsMovedSince(ctx, bob, { since: firstDecided, until: ctx.now, mostAwards: 10 })), "nothing moved since its kudos was decided, though it was counted later").toEqual([]);
   });
 });
 
