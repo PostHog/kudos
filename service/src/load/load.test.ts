@@ -563,11 +563,12 @@ describe("recovery", () => {
 
     const jobs = await jobsNow();
     const kept = { _creationTime: 7, runAt: 1_000 };
-    // A failed job arrives swept: Convex's sweep reported its failures, and the service's sweep reports only its own.
+    // A job Convex failed arrives swept: Convex's sweep reported it. An action the move fails arrives unswept: nobody has
+    // seen that failure yet, so the service's sweep reports it once.
     expect(jobs.map(({ completedAt, sweptAt, ...job }) => ({ ...job, completed: completedAt !== null, swept: sweptAt !== null }))).toStrictEqual([
       { ...kept, _id: "j1", name: "slack.delivery.sendReply", args: { attempt: 3n }, kind: "mutation", state: "pending", error: null, completed: false, swept: false },
       { ...kept, _id: "j2", name: "slack.delivery.sendReply", args: { attempt: 1n }, kind: "mutation", state: "pending", error: null, completed: false, swept: false },
-      { ...kept, _id: "j3", name: "slack.delivery.send", args: { text: "hi" }, kind: "action", state: "failed", error: "Running when Convex stopped: an action runs at most once", completed: true, swept: true },
+      { ...kept, _id: "j3", name: "slack.delivery.send", args: { text: "hi" }, kind: "action", state: "failed", error: "Running when Convex stopped: an action runs at most once", completed: true, swept: false },
       { ...kept, _id: "j4", name: "slack.delivery.send", args: { text: "hi" }, kind: "action", state: "success", error: null, completed: true, swept: false },
       { ...kept, _id: "j5", name: "slack.delivery.send", args: { text: "hi" }, kind: "action", state: "failed", error: "Slack said no", completed: true, swept: true },
       { ...kept, _id: "j6", name: "slack.delivery.sendReply", args: { attempt: 1n }, kind: "mutation", state: "canceled", error: null, completed: true, swept: false },
