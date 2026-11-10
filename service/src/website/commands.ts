@@ -2,13 +2,13 @@
 // notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
 import type { AdminLinkRefusal } from "../companyProfiles/admin.ts";
 import type { SelfLinkRefusal } from "../companyProfiles/links.ts";
-import { type MessagePlace } from "../messageSettings/kinds.ts";
-import { type Avatar } from "../album/hoggies/avatar.ts";
-import { type Drop } from "../album/hoggies/drops.ts";
+import type { MessagePlace } from "../messageSettings/kinds.ts";
+import type { Avatar } from "../album/hoggies/avatar.ts";
+import type { Drop } from "../album/hoggies/drops.ts";
 import type { AppliedReward } from "../progression/rewards.ts";
 import type { CrateRefusal } from "../album/hoggies/records.ts";
 import type { ItemRefusal } from "../store/rows.ts";
-import { type WorkspaceSettingsRefusal } from "../workspace/workspaceSettings.ts";
+import type { WorkspaceSettingsRefusal } from "../workspace/workspaceSettings.ts";
 import type { VerifiedMember } from "./memberQuery.ts";
 import type { QueryContext } from "../operations.ts";
 import { notPorted } from "../notPorted.ts";

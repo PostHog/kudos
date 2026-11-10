@@ -10,7 +10,8 @@
 // interleave; the load itself runs under an advisory lock, which reset takes too.
 //
 // The phases: `staging` takes chunks; `loading` writes every row; `verifying` runs the round trip on the untouched
-// copy; `recovering` turns what Convex had pending into jobs; `done` releases the hold. A round trip that differs stops
+// copy; `recovering` turns what Convex had scheduled into jobs and seeds the flag definitions (./recovery.ts), in one
+// transaction that ends in `done`; `done` releases the hold. A round trip that differs stops
 // the load in `verifying`, and only a reset starts it over.
 import { createHash, timingSafeEqual } from "node:crypto";
 import { getTableName } from "drizzle-orm";
@@ -21,7 +22,9 @@ import { errorFields, type Log } from "../log.ts";
 import type { LoadPhase } from "../db/schema/load.ts";
 import { decodeStored, encodeStored, type Value } from "../db/codec.ts";
 import { appTables, LoadError, loadSnapshot, type BatchLimits } from "./loader.ts";
+import { recover } from "./recovery.ts";
 import { roundTrip, type RoundTrip } from "./roundTrip.ts";
+import type { JobRegistry } from "../jobs/define.ts";
 
 export interface LoadControl {
   held(): boolean;
@@ -38,6 +41,9 @@ export interface LoadOptions {
   pool: pg.Pool;
   token: string | undefined;
   log: Log;
+  /** The jobs recovery maps Convex's scheduled functions to. */
+  jobs: JobRegistry;
+  now?: () => number;
   limits?: BatchLimits;
   /** How often a copy reads the load's state while it isn't done. */
   pollMs?: number;
@@ -58,9 +64,9 @@ const sha256 = (data: string | Buffer) => createHash("sha256").update(data).dige
 // Only 0001's columns: boot reads the state before it migrates, so a later column would fail on an older database.
 const selectState = `select phase, "tokenHash", chunks, sha256, error from "loadState" where key = 'load'`;
 
-/** A load this copy can take on: written or verifying, and not stopped. */
+/** A load this copy can take on: written, verifying or recovering, and not stopped. */
 function runnable(current: State | undefined): boolean {
-  return (current?.phase === "loading" || current?.phase === "verifying") && current.error === null;
+  return (current?.phase === "loading" || current?.phase === "verifying" || current?.phase === "recovering") && current.error === null;
 }
 
 async function readState(db: Queryable, forUpdate = false): Promise<State | undefined> {
@@ -68,7 +74,7 @@ async function readState(db: Queryable, forUpdate = false): Promise<State | unde
   return rows[0];
 }
 
-export function createLoadControl({ pool, token, log, limits = { rows: 500, bytes: 4 * 1024 * 1024 }, pollMs = 5_000 }: LoadOptions): LoadControl {
+export function createLoadControl({ pool, token, log, jobs, now = Date.now, limits = { rows: 500, bytes: 4 * 1024 * 1024 }, pollMs = 5_000 }: LoadOptions): LoadControl {
   let state: State | undefined | "unknown" = "unknown";
   let running: Promise<void> | undefined;
   let timer: NodeJS.Timeout | undefined;
@@ -118,14 +124,19 @@ export function createLoadControl({ pool, token, log, limits = { rows: 500, byte
             log.info("load written");
           }
           // The round trip runs on the untouched copy: only when it is equal does recovery (`recovering`) start.
-          const answer = await roundTrip(pool, client, current!.chunks!);
-          const differs = answer.tables.filter((table) => !table.equal).map((table) => table.table);
-          await client.query(`update "loadState" set "roundTrip" = $1, phase = $2, error = $3 where key = 'load'`, [
-            encodeStored(answer as unknown as Value),
-            answer.equal ? "recovering" : "verifying",
-            answer.equal ? null : `The round trip differs on ${differs.join(", ")}`,
-          ]);
-          log.info(answer.equal ? "round trip equal" : "round trip differs", { tables: answer.tables.length, differs: differs.length });
+          if (current!.phase !== "recovering") {
+            const answer = await roundTrip(pool, client, current!.chunks!);
+            const differs = answer.tables.filter((table) => !table.equal).map((table) => table.table);
+            await client.query(`update "loadState" set "roundTrip" = $1, phase = $2, error = $3 where key = 'load'`, [
+              encodeStored(answer as unknown as Value),
+              answer.equal ? "recovering" : "verifying",
+              answer.equal ? null : `The round trip differs on ${differs.join(", ")}`,
+            ]);
+            log.info(answer.equal ? "round trip equal" : "round trip differs", { tables: answer.tables.length, differs: differs.length });
+            if (!answer.equal) return;
+          }
+          const recovered = await recover(client, jobs, now());
+          log.info("load done", recovered);
         } catch (error) {
           // A lost connection is this copy's trouble, not the snapshot's: the load resumes from its checkpoints, here
           // or on another copy. Anything else stops it until `finish` is sent again or the load is reset.

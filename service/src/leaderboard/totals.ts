@@ -3,10 +3,10 @@
 import { kudosGivenEventValidator, type KudosGivenEvent } from "../bus/events.ts";
 import type { AwardWithId, GivenMessage } from "../engine/awards.ts";
 import type { BoardView } from "./board.ts";
-import { type Improvement } from "./improvement.ts";
-import { type Peer } from "./peer.ts";
+import type { Improvement } from "./improvement.ts";
+import type { Peer } from "./peer.ts";
 import { periodValidator, type Period, type PeriodKey } from "./periods.ts";
-import { type Ranked } from "./rankedBoard.ts";
+import type { Ranked } from "./rankedBoard.ts";
 import { z } from "zod";
 import { zv } from "../values.ts";
 import type { Doc } from "../db/schema/index.ts";

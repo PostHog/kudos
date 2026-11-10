@@ -2,9 +2,9 @@
 // notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
 // S9 ported the boards' counting (countOnTheBoards, hasGivenAThoughtfulAward); the boards' reads are still stubs.
 import type { CompanyFace } from "../companyProfiles/faces.ts";
-import { type TeamCrestArt } from "../companyProfiles/teams.ts";
-import { type DayKey } from "../engine/allowance.ts";
-import { type MemberId } from "../workspace/directory.ts";
+import type { TeamCrestArt } from "../companyProfiles/teams.ts";
+import type { DayKey } from "../engine/allowance.ts";
+import type { MemberId } from "../workspace/directory.ts";
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { indexOrder } from "../db/indexOrder.ts";
