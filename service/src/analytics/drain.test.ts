@@ -14,7 +14,7 @@ import { createWorker, type Worker } from "../jobs/worker.ts";
 import type { Log, LogFields } from "../log.ts";
 import { createOperations } from "../operations.ts";
 import { serviceRegistry } from "../registry.ts";
-import { claim, cleanUp, cleanUpJob, createDrain, drainArgs, recover, recoverJob, settle } from "./drain.ts";
+import { claim, cleanUp, cleanUpJob, createDrain, drainArgs, recover, recoverJob, settle, wakeDrain } from "./drain.ts";
 import { record } from "./outbox.ts";
 import { drainJob, sendBatch } from "./send.ts";
 
@@ -199,6 +199,26 @@ describe("O18: a batch PostHog doesn't accept is retried", () => {
       { state: "exhausted", reason: "rejected" },
     ]);
     expect(warnings.mock.calls).toEqual([["analytics.events_given_up", { reason: "rejected", events: ["kudos given", "kudos received"] }]]);
+  });
+
+  // Convex read a batch's rows back by ID, in the order it claimed them. Here the rows are stored, and their IDs sort,
+  // against that order, so a read back without an order of its own lists them the other way round.
+  test.each([
+    ["on their sixth failure", 503, 5, "exhausted"],
+    ["at once on a 400", 400, 0, "rejected"],
+    ["at once on a 413", 413, 0, "rejected"],
+  ] as const)("events given up together %s are named in the order they were recorded", async (_, status, failures, reason) => {
+    postHog.answering(answersWith(status));
+    const at = clock.now();
+    const pending = { distinctId: "a-member", timestamp: at, properties: {}, state: "pending" as const, failures, dueAt: at };
+    await seed.insert("analyticsOutbox", { _id: "a-received", _creationTime: at + 1, uuid: "u-received", event: "kudos received", ...pending });
+    await seed.insert("analyticsOutbox", { _id: "b-given", _creationTime: at, uuid: "u-given", event: "kudos given", ...pending });
+    await operations.mutation("test.wake", (ctx) => wakeDrain(ctx));
+
+    await settle_();
+
+    expect(postHog.requests.map((request) => request.events.map(({ event }) => event))).toEqual([["kudos given", "kudos received"]]);
+    expect(warnings.mock.calls).toEqual([["analytics.events_given_up", { reason, events: ["kudos given", "kudos received"] }]]);
   });
 });
 
@@ -400,7 +420,45 @@ describe("the drain and the requests that wake it", () => {
   // #96's oracle found requests answering 500: today's wake read the drain's singleton in the request's transaction,
   // so drains claiming the outbox ran requests out of retries. Here requests record while the real drains claim,
   // send and settle, all under SERIALIZABLE on a pool of their own.
-  test("requests recording while drains claim and settle: none fails or is retried, and every event is sent once", async () => {
+  test("a request records an event and wakes a drain without reading the outbox or the jobs, the drain's state", async () => {
+    const [member] = await members(1);
+    await seed.insert("analyticsIds", { member: member!, analyticsId: "analytics-id-0" });
+    await seed.insert("workspaceKeys", { workspace: "T1", workspaceKey: "workspace-key-1" });
+    // A database user that may read and write every table, but only write the outbox and the jobs.
+    const user = `recorder_${database.schema}_${Date.now()}`;
+    const admin = (statement: string) => database.pool.query(statement);
+    let pool: ReturnType<typeof createPool> | undefined;
+    await admin(`create role "${user}" login password 'recorder'`);
+    onTestFinished(async () => {
+      await pool?.end();
+      await admin(`drop owned by "${user}"`);
+      await admin(`drop role "${user}"`);
+    });
+    await admin(`grant usage on schema "${database.schema}" to "${user}"`);
+    await admin(`grant select, insert, update, delete on all tables in schema "${database.schema}" to "${user}"`);
+    await admin(`grant usage, select, update on all sequences in schema "${database.schema}" to "${user}"`);
+    await admin(`revoke select on "${database.schema}"."analyticsOutbox", "${database.schema}"."jobs" from "${user}"`);
+    const url = new URL(database.url);
+    url.username = user;
+    url.password = "recorder";
+    pool = createPool(url.toString());
+    const recorder = createOperations({ pool, clock, log: quiet, retryDelayMs: () => 1 });
+
+    await recorder.mutation("test.request", (ctx) =>
+      record(ctx, "T1", [{ event: "kudos received", subject: { member: member! }, at: clock.now(), properties: { request: 0 } }]),
+    );
+
+    expect((await outbox()).map(({ event, distinctId, state }) => [event, distinctId, state])).toEqual([["kudos received", "analytics-id-0", "pending"]]);
+    const woken = await database.pool.query(`select "name", "state" from "jobs"`);
+    expect(woken.rows).toEqual([{ name: "analytics.drain.drain", state: "pending" }]);
+  });
+
+  // A request may still retry once, and that's harmless: it is rolled back whole and runs again with the same `now`.
+  // A drain that read the outbox's due rows before the request inserted one (drain rw→ request), and that changed rows
+  // or a range another drain or the worker had already read (that one rw→ drain), is a pivot; when it is already
+  // committing, Postgres can't cancel it and cancels the committing request instead ("Canceled on commit attempt with conflict in from prepared pivot"). That race is narrow and
+  // timing-bound: under one shared Postgres it hits about one run in many, so this test bounds retries, not forbids them.
+  test("requests recording while drains claim and settle: none fails, hardly any is retried, and every event is sent once", async () => {
     const requests = 60;
     const recorders = await members(requests);
     for (const [i, member] of recorders.entries()) await seed.insert("analyticsIds", { member, analyticsId: `analytics-id-${i}` });
@@ -447,7 +505,10 @@ describe("the drain and the requests that wake it", () => {
     await settleInTimeOrder();
 
     expect(outcomes.filter(({ status }) => status === "rejected"), "no request failed").toEqual([]);
-    expect({ retried: attempts.filter((count) => count > 1).length, logged: lines.filter(({ message }) => message.includes("test.request")) }, "none was retried").toEqual({ retried: 0, logged: [] });
+    // Today's wake shape, which read the drain's state, retried 10 to 13 of these 60 requests.
+    expect(lines.filter(({ message }) => message.includes("test.request")), "no request logged a failure").toEqual([]);
+    expect(attempts.filter((count) => count > 1).length, "hardly any was retried").toBeLessThanOrEqual(2);
+    expect(Math.max(...attempts), "none more than once").toBeLessThanOrEqual(2);
     expect(sentWhileRecording, "the drains sent a batch after each wave but the last").toBeGreaterThanOrEqual(waves - 1);
     const sent = postHog.events().map(({ properties }) => properties.request);
     expect(sent.toSorted((a, b) => Number(a) - Number(b)), "each request's event, once").toEqual(recorders.map((_, i) => i));

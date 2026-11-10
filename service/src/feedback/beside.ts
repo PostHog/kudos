@@ -3,7 +3,7 @@ import { messageRefValidator } from "../engine/messageEvent.ts";
 import type { MessagePlace } from "../messageSettings/kinds.ts";
 import { placeOf } from "../messageSettings/messageSettings.ts";
 import { threadRootOf } from "../engine/engine.ts";
-import { messageKindOfNotification, notificationValidator } from "./notify.ts";
+import { messageKindOfNotification, notificationValidator } from "./notification.ts";
 import { z } from "zod";
 import { zv } from "../values.ts";
 import type { QueryContext } from "../operations.ts";
