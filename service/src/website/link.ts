@@ -3,7 +3,7 @@
 import { periodValidator } from "../leaderboard/periods.ts";
 import { perkValidator } from "../progression/tree.ts";
 import { signInWorkspace } from "../slack/signIn.ts";
-import { type MemberId } from "../workspace/directory.ts";
+import type { MemberId } from "../workspace/directory.ts";
 import { crateTargetValidator, homePanelValidator, settingsSectionValidator, type Page } from "./routes.ts";
 import { visitSourceValidator, type VisitSource } from "./visitSource.ts";
 import { z } from "zod";

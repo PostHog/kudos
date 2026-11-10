@@ -3,8 +3,8 @@
 import { tierRefValidator, type TierRef } from "../achievements/ladders.ts";
 import { unlockOpenedEventValidator } from "../bus/events.ts";
 import type { MessageRef } from "../engine/messageEvent.ts";
-import { type MemberId } from "../workspace/directory.ts";
-import { type CompletedTeam } from "./notify.ts";
+import type { MemberId } from "../workspace/directory.ts";
+import type { CompletedTeam } from "./notify.ts";
 import { z } from "zod";
 import { zv } from "../values.ts";
 import type { MutationContext } from "../operations.ts";

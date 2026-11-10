@@ -1,10 +1,10 @@
 // The module map's skeleton of convex/website/xpMoment.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
 // notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
-import { type QuestDone } from "../activity/entries.ts";
-import { type EntrySince } from "../activity/activity.ts";
-import { type WaitingCount } from "../album/items/ledger.ts";
-import { type Progressed } from "./progressed.ts";
-import { type ArrivalAnswer } from "./lastVisit.ts";
+import type { QuestDone } from "../activity/entries.ts";
+import type { EntrySince } from "../activity/activity.ts";
+import type { WaitingCount } from "../album/items/ledger.ts";
+import type { Progressed } from "./progressed.ts";
+import type { ArrivalAnswer } from "./lastVisit.ts";
 
 export type { EntrySince } from "../activity/activity.ts";
 

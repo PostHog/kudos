@@ -1,10 +1,9 @@
-// The module map's skeleton of convex/feedback/deepLinks.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
-// notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
+// Links from Slack into the website, as today's convex/feedback/deepLinks.ts: none where the workspace has no website.
+import { websiteOrigin } from "../website/link.ts";
 import { listed, urlOf, type Page } from "../website/routes.ts";
-import { type VisitSource, type Website } from "../website/visitSource.ts";
+import { websiteAt, type VisitSource, type Website } from "../website/visitSource.ts";
 import { openTheWebsite } from "./naming.ts";
 import type { QueryContext } from "../operations.ts";
-import { notPorted } from "../notPorted.ts";
 
 export type DeepLink = { url: string; label: string };
 
@@ -25,7 +24,7 @@ export function levelUpRevealOf(level: number): Destination {
 }
 
 export async function deepLinkOf(ctx: QueryContext, workspace: string, destination: Destination, source: VisitSource): Promise<DeepLink | null> {
-  throw notPorted("feedback.deepLinks.deepLinkOf");
+  return deepLinkFrom(websiteAt(await websiteOrigin(ctx, workspace), source), destination);
 }
 
 export function deepLinkFrom(website: Website | null, { page, label }: Destination): DeepLink | null {
