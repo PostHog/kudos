@@ -2,7 +2,7 @@ import { internal, internal as refs } from "../_generated/api";
 import { internalAction } from "../_generated/server";
 
 // What a cron table or the bus holds: references the scheduler runs later.
-export const scheduled = [internal.skeleton.awards.sweepAwards, internal.skeleton.edges.byValidator, internal.skeleton.edges.byShorthand, internal.skeleton.edges.viaAlias, refs.skeleton.appTypes.noArgs, internal.skeleton.wrapped.save, internal.skeleton.refused.spread];
+export const scheduled = [internal.skeleton.awards.sweepAwards, internal.skeleton.edges.byValidator, internal.skeleton.edges.byShorthand, internal.skeleton.edges.viaAlias, refs.skeleton.appTypes.noArgs, internal.skeleton.wrapped.save, internal.skeleton.refused.spread, internal.skeleton.refused.saveTwo, internal.skeleton.refused.hidden, internal.skeleton.refused.tokened, internal.skeleton.wrapped.mixed];
 
 export const kickOff = internalAction({
   args: {},

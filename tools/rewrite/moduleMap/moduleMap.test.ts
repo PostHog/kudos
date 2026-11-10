@@ -281,6 +281,10 @@ describe("the skeleton generator", () => {
       "skeleton.appTypes.noArgs": ["job"],
       "skeleton.wrapped.save": ["job"],
       "skeleton.refused.spread": ["job"],
+      "skeleton.refused.saveTwo": ["job"],
+      "skeleton.refused.hidden": ["job"],
+      "skeleton.refused.tokened": ["job"],
+      "skeleton.wrapped.mixed": ["job"],
       "skeleton.awards.memberOf": ["run"],
       "skeleton.awards.recordAward": ["run"],
     });
@@ -529,6 +533,21 @@ export async function row(ctx: QueryContext): Promise<Row> {
 export function frozen(ctx: QueryContext): { readonly value: number; readonly list: readonly number[] } {
   throw notPorted("skeleton.wrapped.frozen");
 }
+
+// A type named like a value over a context carries no context.
+export const Entry = (ctx: QueryContext): string => {
+  throw notPorted("skeleton.wrapped.Entry");
+};
+export type Entry = { value: string };
+export const entry: Entry = { value: "ok" };
+export function thawed(ctx: QueryContext): { x: number } {
+  throw notPorted("skeleton.wrapped.thawed");
+}
+
+export const mixedArgs = z.strictObject({});
+export async function mixed(ctx: QueryContext, args: z.infer<typeof mixedArgs>): Promise<string | number> {
+  throw notPorted("skeleton.wrapped.mixed");
+}
 `);
     expect(wrapped.omitted).toEqual([]);
   });
@@ -550,13 +569,16 @@ export function notPorted() {
   test("refuses what it can't stub without changing what other modules see, and any way of reaching Convex in what it writes", () => {
     expect(skeleton(4)).toEqual({
       refusals: [
-        "convex/skeleton/refused.ts:16: exports viaList by a list; export the declaration itself",
-        "convex/skeleton/refused.ts:18: declares one, two in one statement over a context; declare each on its own",
-        "convex/skeleton/refused.ts:21: a top-level statement over a context or Convex's machinery",
-        "convex/skeleton/refused.ts:35: spread spreads or computes its definition, so its args can't be read; write them out",
-        "convex/skeleton/refused.ts:24: declares the enum Mode, which the service's erasableSyntaxOnly forbids; port it as a union of literals",
+        "convex/skeleton/refused.ts:17: exports viaList by a list; export the declaration itself",
+        "convex/skeleton/refused.ts:19: declares one, two in one statement over a context; declare each on its own",
+        "convex/skeleton/refused.ts:22: a top-level statement over a context or Convex's machinery",
+        "convex/skeleton/refused.ts:36: spread spreads or computes its definition, so its args can't be read; write them out",
+        "convex/skeleton/refused.ts:39: declares saveTwo, extra in one statement over a context; declare each on its own",
+        "convex/skeleton/refused.ts:43: hidden registers through a type that hides Convex's args and return, so its args can't be read; write them out",
+        "convex/skeleton/refused.ts:48: tokened registers other args than its definition gives, so its args can't be read; write them out",
+        "convex/skeleton/refused.ts:25: declares the enum Mode, which the service's erasableSyntaxOnly forbids; port it as a union of literals",
         "convex/skeleton/refused.ts: declares or imports QueryContext, a name the skeleton writes for the service's own",
-        "convex/skeleton/refused.ts:29: declares notPorted, a name the skeleton writes for the service's own",
+        "convex/skeleton/refused.ts:30: declares notPorted, a name the skeleton writes for the service's own",
       ],
     });
     expect(skeleton(5)).toEqual({
@@ -621,6 +643,7 @@ export function notPorted() {
       const wrappedModule = await import(scratch.path(wrapped.servicePath));
       expect(wrappedModule.saveJob).toMatchObject({ name: "skeleton.wrapped.save", kind: "mutation" }); // a local wrapper's registration
       expect(wrappedModule.saveJob.args.safeParse({ note: "x", extra: 1 }).success).toBe(false);
+      expect(wrappedModule.entry).toEqual({ value: "ok" }); // a type named like a context helper carries no context
     });
   });
 });

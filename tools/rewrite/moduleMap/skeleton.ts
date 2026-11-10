@@ -85,6 +85,8 @@ interface Declaration {
   exported: boolean;
   /** Top-level names of this module it refers to. */
   uses: Set<string>;
+  /** Those it refers to as a value: a type named like a value over a context (`type Entry`) carries no context. */
+  valueUses: Set<string>;
   /** It refers to Convex's machinery by value (a builder, `internal`) or names a context in a value's signature. */
   convex: boolean;
   /** It refers to Convex's machinery by value, such as a table of `internal` references. */
@@ -152,7 +154,7 @@ export function skeletonModule(program: ts.Program, sourceFile: ts.SourceFile, c
     if (ts.isImportDeclaration(statement)) continue;
     const names = declaredNames(statement);
     const isType = ts.isTypeAliasDeclaration(statement) || ts.isInterfaceDeclaration(statement);
-    const declaration: Declaration = { statement, names, exported: isExported(statement), uses: new Set(), convex: false, machinery: false, isType };
+    const declaration: Declaration = { statement, names, exported: isExported(statement), uses: new Set(), valueUses: new Set(), convex: false, machinery: false, isType };
     walk(statement, (node, inType) => {
       // A function over a context, even one typed only by where it stands (a hook's `claims: async (ctx) => …`).
       if (!isType && !inType && ts.isFunctionLike(node) && node.parameters.some((parameter) => isContext(checker.getTypeAtLocation(parameter)))) declaration.convex = true;
@@ -161,12 +163,20 @@ export function skeletonModule(program: ts.Program, sourceFile: ts.SourceFile, c
       if (imported && !inType) declaration.machinery = true;
       if (imported && !(inType && imported in serverTypes)) declaration.convex = true;
       if (imported && inType && !isType && /Ctx$/.test(imported)) declaration.convex = true;
-      if (topLevel(node)) declaration.uses.add(node.text);
+      if (topLevel(node)) {
+        declaration.uses.add(node.text);
+        if (!inType) declaration.valueUses.add(node.text);
+      }
     });
     declarations.push(declaration);
     for (const name of names) byName.set(name, [...declarationsOf(name), declaration]);
   }
-  for (const declaration of declarations) for (const name of declaration.names) declaration.uses.delete(name);
+  for (const declaration of declarations) {
+    for (const name of declaration.names) {
+      declaration.uses.delete(name);
+      declaration.valueUses.delete(name);
+    }
+  }
   // A declaration the codemod can't convert (it reads a validator's own fields, say) is ported by hand, like one over a
   // context: a function of it becomes a stub. A refusal in what still lands refuses the module below.
   const { edits, refusals: editRefusals } = validatorEdits(checker, sourceFile, convexPath);
@@ -181,7 +191,7 @@ export function skeletonModule(program: ts.Program, sourceFile: ts.SourceFile, c
     changed = false;
     for (const declaration of declarations) {
       if (declaration.convex || declaration.isType) continue;
-      if ([...declaration.uses].some((name) => declarationsOf(name).some((used) => used.convex && !used.isType))) changed = declaration.convex = true;
+      if ([...declaration.valueUses].some((name) => declarationsOf(name).some((used) => used.convex && !used.isType))) changed = declaration.convex = true;
     }
   }
 
@@ -399,7 +409,8 @@ export function skeletonModule(program: ts.Program, sourceFile: ts.SourceFile, c
   function registeredStub(name: string, path: string, { kind, args, argsType, returns: returnsType }: Registration, reach: ReadonlySet<Reach>): string {
     const argsName = fresh(`${name}Args`);
     // What Convex registered, whatever wrapper built it: its own args and return types.
-    const settled = returnsType.getSymbol()?.name === "Promise" ? checker.getTypeArguments(returnsType as ts.TypeReference)[0]! : returnsType;
+    // What a caller awaits: `Promise<string> | number` settles to `string | number`.
+    const settled = checker.getAwaitedType(returnsType) ?? returnsType;
     const returns = printed.print(settled);
     // Args are a map of fields, or already a validator (`v.object(…)`), which the codemod made a schema of.
     let schema: string;
@@ -483,28 +494,50 @@ interface Registration {
 /**
  * `export const name = <call>`, where the call's type is Convex's `RegisteredQuery<Visibility, Args, Returns>` or its
  * kin: whichever builder, alias or wrapper made it, that type names its kind, args and return. Its args validator is
- * read from the definition, `{ args, handler }` or a handler alone.
+ * read from the definition, `{ args, handler }` or a handler alone. What can't be read is marked, and refused when
+ * another module reaches it.
  */
 function registrationOf(checker: ts.TypeChecker, statement: ts.Statement): Registration | undefined {
-  if (!ts.isVariableStatement(statement) || statement.declarationList.declarations.length !== 1) return undefined;
-  const initializer = statement.declarationList.declarations[0]!.initializer;
-  if (!initializer || !ts.isCallExpression(initializer)) return undefined;
-  const type = checker.getTypeAtLocation(initializer);
-  const alias = type.aliasSymbol;
-  const match = alias && /^Registered(Query|Mutation|Action)$/.exec(alias.name);
-  if (!match || !alias!.declarations?.some((declaration) => /\/node_modules\/convex\//.test(declaration.getSourceFile().fileName))) return undefined;
-  const [, argsType, returns] = type.aliasTypeArguments ?? [];
-  if (!argsType || !returns) return undefined;
-  const registration: Registration = { kind: match[1]!.toLowerCase() as Registration["kind"], argsType, returns };
-  const definition = initializer.arguments[0];
+  if (!ts.isVariableStatement(statement)) return undefined;
+  const all = statement.declarationList.declarations;
+  const found = all.map((declaration) => declaration.initializer && ts.isCallExpression(declaration.initializer) ? registeredCall(checker, declaration.initializer) : undefined).find(Boolean);
+  if (!found) return undefined;
+  const { call, registration } = found;
+  if (all.length !== 1) return { ...registration, unreadable: "registers a function beside other names" };
+  if (registration.unreadable) return registration;
+  const definition = call.arguments[0];
   if (definition && (ts.isArrowFunction(definition) || ts.isFunctionExpression(definition))) return registration;
   if (!definition || !ts.isObjectLiteralExpression(definition)) return { ...registration, unreadable: "registers a definition given by reference" };
   if (definition.properties.some((p) => ts.isSpreadAssignment(p) || (p.name !== undefined && ts.isComputedPropertyName(p.name)))) {
     return { ...registration, unreadable: "spreads or computes its definition" };
   }
   // `{ args }` names its value as `args: args` would.
-  const args = definition.properties.find((p) => (ts.isPropertyAssignment(p) || ts.isShorthandPropertyAssignment(p)) && p.name.getText() === "args");
-  return { ...registration, args: args && (ts.isPropertyAssignment(args) ? args.initializer : (args as ts.ShorthandPropertyAssignment).name) };
+  const property = definition.properties.find((p) => (ts.isPropertyAssignment(p) || ts.isShorthandPropertyAssignment(p)) && p.name.getText() === "args");
+  const args = property && (ts.isPropertyAssignment(property) ? property.initializer : (property as ts.ShorthandPropertyAssignment).name);
+  if (args) {
+    // A wrapper may register other args than it is given (adding a token, say): the fields must be the registered ones.
+    const given = checker.getTypeAtLocation(args);
+    const validated = given.getProperty("isConvexValidator") ? given.getProperty("type") : undefined;
+    const fields = validated ? checker.getTypeOfSymbolAtLocation(validated, args) : given;
+    const names = (type: ts.Type | undefined) => (type?.getProperties() ?? []).map((field) => field.name).sort().join();
+    if (names(fields) !== names(registration.argsType)) return { ...registration, unreadable: "registers other args than its definition gives" };
+  }
+  return { ...registration, args };
+}
+
+/** A call that registers a function, by its type: Convex's registered alias, or the same shape under another name. */
+function registeredCall(checker: ts.TypeChecker, call: ts.CallExpression): { call: ts.CallExpression; registration: Registration } | undefined {
+  const type = checker.getTypeAtLocation(call);
+  const alias = type.aliasSymbol;
+  const match = alias && /^Registered(Query|Mutation|Action)$/.exec(alias.name);
+  const [, argsType, returns] = type.aliasTypeArguments ?? [];
+  if (match && argsType && returns && alias!.declarations?.some((declaration) => /\/node_modules\/convex\//.test(declaration.getSourceFile().fileName))) {
+    return { call, registration: { kind: match[1]!.toLowerCase() as Registration["kind"], argsType, returns } };
+  }
+  // `type M = RegisteredMutation<…>` renames the alias: the shape still says it registers, but no longer what.
+  if (!type.getProperty("isConvexFunction")) return undefined;
+  const kind = (["query", "mutation", "action"] as const).find((kind) => type.getProperty(`is${kind[0]!.toUpperCase()}${kind.slice(1)}`));
+  return kind && { call, registration: { kind, argsType: type, returns: type, unreadable: "registers through a type that hides Convex's args and return" } };
 }
 
 /**
@@ -512,9 +545,12 @@ function registrationOf(checker: ts.TypeChecker, statement: ts.Statement): Regis
  * marks it with a check flag the public API doesn't type.
  */
 function isReadonly(property: ts.Symbol): boolean {
-  const checkFlags = (ts as unknown as { getCheckFlags(symbol: ts.Symbol): number }).getCheckFlags(property);
-  const readonlyFlag = (ts as unknown as { CheckFlags: { Readonly: number } }).CheckFlags.Readonly;
-  return (checkFlags & readonlyFlag) !== 0 || (property.declarations ?? []).some((declaration) => (ts.getCombinedModifierFlags(declaration) & ts.ModifierFlags.Readonly) !== 0);
+  const internal = ts as unknown as { getCheckFlags(symbol: ts.Symbol): number; CheckFlags: { Readonly: number; Mapped: number } };
+  const checkFlags = internal.getCheckFlags(property);
+  if (checkFlags & internal.CheckFlags.Readonly) return true;
+  // A mapped property (`-readonly [K in keyof T]`) sets its own modifiers; its declaration is the source's.
+  if (checkFlags & internal.CheckFlags.Mapped) return false;
+  return (property.declarations ?? []).some((declaration) => (ts.getCombinedModifierFlags(declaration) & ts.ModifierFlags.Readonly) !== 0);
 }
 
 /** Convex's query, mutation or action context, however a module names it. */
