@@ -75,7 +75,7 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/analytics/projections.test.ts | S14 | | |
 | convex/analytics/questFinished.test.ts | S14 | | |
 | convex/analytics/skillTreeAndBook.test.ts | S14 | | |
-| convex/analytics/sweep.test.ts | S14 | | |
+| convex/analytics/sweep.test.ts | S14 | service/src/analytics/sweep.test.ts | |
 | convex/analytics/unlocks.test.ts | S14 | | |
 | convex/bus/replay.test.ts | S1 | | |
 | convex/bus/seams.guard.test.ts | S1 | | |

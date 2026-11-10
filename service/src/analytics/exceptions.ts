@@ -21,7 +21,8 @@ const unexpectedError = "unexpected error";
 const wordsWithheld = "message withheld: it may quote kudos text";
 const typeName = /^[A-Za-z_$][\w$]*$/;
 const stackFrame = /^\s*at (?:(.+?) \()?(.+?):(\d+):\d+\)?$/;
-const uncaughtError = /^Uncaught ([A-Za-z_$][\w$]*): (.*)$/;
+// A failed job's error: today's `Uncaught <type>: <message>`, or the service worker's `<type>: <message>`.
+const uncaughtError = /^(?:Uncaught )?([A-Za-z_$][\w$]*): (.*)$/;
 
 export function exceptionOf(error: unknown): Exception {
   const type = typeOf(error);
