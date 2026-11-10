@@ -140,7 +140,7 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/quests/sides.test.ts | S7 | | |
 | convex/slack/achievementsFlag.test.ts | S6 | | |
 | convex/slack/albumGate.test.ts | S9 | | |
-| convex/slack/appHome.test.ts | S17 | | |
+| convex/slack/appHome.test.ts | S17 | service/src/slack/appHome.test.ts | S3 S4 S5 S6 S7 S8 S9 S10 S11 S12 S13 S14 S15 S16 |
 | convex/slack/backfill.test.ts | S4 | | |
 | convex/slack/book.test.ts | S6 | | |
 | convex/slack/cardDrawing.test.ts | S10 | | |
@@ -169,14 +169,14 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/slack/failedDirectoryCheck.test.ts | S3 | | |
 | convex/slack/firstHugReply.test.ts | S13 | service/src/slack/firstHugReply.test.ts | S3 S4 S5 S6 S7 S8 S9 S11 S14 |
 | convex/slack/firstThanksTopUp.test.ts | S6 | | |
-| convex/slack/frontDoor.test.ts | S17 | | |
+| convex/slack/frontDoor.test.ts | S17 | service/src/slack/appHomeFrontDoor.test.ts | S3 S4 S5 S6 S7 S8 S9 S10 S11 S12 S13 S14 S15 S16 |
 | convex/slack/gainsLine.test.ts | S5 | | |
 | convex/slack/gateHint.test.ts | S5 | | |
 | convex/slack/groupsBoard.test.ts | S11 | | |
 | convex/slack/groupsFlag.test.ts | S11 | | |
 | convex/slack/hoggieAvatarGate.test.ts | S10 | | |
 | convex/slack/hoggiesHome.test.ts | S10 | | |
-| convex/slack/homeTabBar.test.ts | S17 | | |
+| convex/slack/homeTabBar.test.ts | S17 | service/src/slack/homeTabBar.test.ts | S3 S4 S5 S6 S7 S8 S9 S10 S11 S12 S13 S14 |
 | convex/slack/hugFacts.test.ts | S13 | service/src/slack/hugFacts.test.ts | S3 S4 S5 S6 S7 S8 S9 S11 S14 |
 | convex/slack/hugRewards.test.ts | S13 | service/src/slack/hugRewards.test.ts | S3 S4 S5 S6 S7 S8 S9 S11 S14 |
 | convex/slack/hugs.test.ts | S13 | service/src/slack/hugs.test.ts | S3 S4 S5 S6 S7 S8 S9 S10 S11 S14 |
@@ -262,7 +262,7 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/website/hoggieForge.test.ts | S16 | | |
 | convex/website/hosting.test.ts | S15 | service/src/website/hosting.test.ts | |
 | convex/website/inventory.test.ts | S16 | | |
-| convex/website/lastVisit.test.ts | S17 | | |
+| convex/website/lastVisit.test.ts | S17 | service/src/website/lastVisit.test.ts | S4 S5 S6 S7 S8 S9 S10 S11 S12 S13 S14 S16 |
 | convex/website/leaderboard.test.ts | S16 | | |
 | convex/website/leaderboardHugs.test.ts | S16 | | |
 | convex/website/levelUp.test.ts | S17 | service/src/website/levelUp.test.ts | S6 S9 S10 S16 |
@@ -286,7 +286,7 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/website/spotlight.test.ts | S16 | | |
 | convex/website/thoughtfulBoards.test.ts | S16 | | |
 | convex/website/weeklyPost.test.ts | S17 | service/src/website/weeklyPost.test.ts | S4 S5 S6 S7 S8 S9 S10 S11 S12 S13 S14 S15 S16 S17 |
-| convex/website/xpMoment.test.ts | S17 | | |
+| convex/website/xpMoment.test.ts | S17 | service/src/website/xpMoment.test.ts | S4 S5 S6 S7 S8 S9 S10 S11 S12 S13 S14 S16 |
 | convex/welcome/welcome.test.ts | S5 | | |
 | convex/workspace/workspaceSettings.test.ts | S3 | service/src/workspace/workspaceSettings.test.ts | S4 S17 |
 | e2e/edgeSignIn.test.ts | S20 | | |
