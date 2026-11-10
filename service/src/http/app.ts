@@ -44,7 +44,7 @@ export interface AppOptions {
 
 const slackPaths = /^\/slack(\/|$)/;
 const loadPaths = /^\/admin\/load(\/|$)/;
-const identifiedPaths = /^\/api\/(query|mutation)\//;
+const identifiedPaths = /^\/api\/(query\/|mutation\/|entry$)/;
 const edgeIdentityHeaders = /^x[-_]auth[-_]request[-_]/i;
 
 export function createApp({ commit, readiness, off, log, clock, testSecret, worker, timeBudgetMs = 25_000, load, slack, routes = [], website }: AppOptions): Hono {
@@ -78,7 +78,7 @@ export function createApp({ commit, readiness, off, log, clock, testSecret, work
     });
   });
 
-  // The edge names the signed-in person in its x-auth-request-* headers. Only the website API's reads and commands
+  // The edge names the signed-in person in its x-auth-request-* headers. Only the website API's reads, commands and entry
   // read them, so every other path loses them, and a name spelled with underscores, which a proxy may take for the
   // same header, reaches no path at all.
   app.use(async (c, next) => {
