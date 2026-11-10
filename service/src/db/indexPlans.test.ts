@@ -23,14 +23,23 @@ beforeEach(async () => {
   await database.pool.query(`analyze "analyticsIds"`);
 });
 
-/** The plan of each statement `paginate` sends for a first page and the page after it. */
+/** The plan of the read `paginate` sends for a first page and the page after it. */
 async function plans(query: PagedQuery): Promise<string[]> {
+  const first = await planOf(query, null);
+  const later = await planOf(query, first.page.continueCursor);
+  return [first.plan, later.plan];
+}
+
+/** One page, and the plan of the read of the table it sent for that page. */
+async function planOf(query: PagedQuery, cursor: string | null) {
   const sent: Array<{ text: string; params: unknown[] }> = [];
   const db = drizzle({ client: database.pool, logger: { logQuery: (text, params) => sent.push({ text, params }) } });
-  const first = await paginate(db, query, { cursor: null, numItems: 100 });
-  await paginate(db, query, { cursor: first.continueCursor, numItems: 100 });
-  expect(sent).toHaveLength(2);
-  return Promise.all(sent.map(async ({ text, params }) => (await database.pool.query(`explain ${text}`, params)).rows.map((row) => row["QUERY PLAN"] as string).join("\n")));
+  const page = await paginate(db, query, { cursor, numItems: 100 });
+  const reads = sent.filter(({ text }) => /^select .* from "analyticsIds"/s.test(text));
+  expect(reads, "the page reads the table").not.toEqual([]);
+  const { text, params } = reads.at(-1)!;
+  const plan = (await database.pool.query(`explain ${text}`, params)).rows.map((row) => row["QUERY PLAN"] as string).join("\n");
+  return { page, plan };
 }
 
 test.each([
