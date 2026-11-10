@@ -1,6 +1,5 @@
-// 13.3's own steps that reach no other stack today: an emoji_changed event the front door can't place, the daily
-// cron's sync, and a sync that can't learn whose token it holds. Everything after the sync learns its workspace writes
-// through S3's custom emoji directory; those ported tests wait beside this file (customEmoji.test.ts).
+// 13.3's own steps beyond today's tests: an emoji_changed event the front door can't place, the daily cron's sync, and a
+// sync that can't learn whose token it holds. Today's sync tests are ported beside this file (customEmoji.test.ts).
 import { describe, expect, test } from "vitest";
 import { toDocument } from "../db/documents.ts";
 import { jobs } from "../db/schema/service.ts";

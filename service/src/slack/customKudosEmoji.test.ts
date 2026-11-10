@@ -1,4 +1,4 @@
-// Today's convex/slack/customKudosEmoji.test.ts. Each walk starts with the custom emoji sync, which writes through S3's
+// Today's convex/slack/customKudosEmoji.test.ts. Each walk starts with the custom emoji sync into the workspace's
 // directory, then opens the App Home, picks, buys and gives kudos, so every test waits on the stacks those reach.
 import { describe, expect } from "vitest";
 import type { TestBackend } from "../../testing/backend.ts";

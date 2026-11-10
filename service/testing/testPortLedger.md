@@ -156,7 +156,7 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/slack/crateStore.test.ts | S7 | | |
 | convex/slack/crateStoreGate.test.ts | S7 | | |
 | convex/slack/crestsGate.test.ts | S10 | | |
-| convex/slack/customEmoji.test.ts | S13 | service/src/slack/customEmoji.test.ts | S3 |
+| convex/slack/customEmoji.test.ts | S13 | service/src/slack/customEmoji.test.ts | |
 | convex/slack/customKudosEmoji.test.ts | S13 | service/src/slack/customKudosEmoji.test.ts | S3 S4 S5 S6 S7 S8 S9 S10 S11 S14 S17 |
 | convex/slack/customKudosEmojiGate.test.ts | S13 | service/src/slack/customKudosEmojiGate.test.ts | S3 S4 S5 S6 S7 S8 S9 S10 S11 S14 S17 |
 | convex/slack/deepLinks.test.ts | S5 | | |

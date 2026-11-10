@@ -1,12 +1,10 @@
-// Today's convex/slack/customEmoji.test.ts. Every listing writes through S3's custom emoji directory (the listing's
-// start, each write, forgetting the unlisted, and the refresh claim an emoji_changed event takes), so each test waits on
-// S3. The listing's own steps that reach no other stack are proven in customEmojiSync.test.ts.
-import { afterEach, beforeEach, describe, expect, vi, type MockInstance } from "vitest";
+// Today's convex/slack/customEmoji.test.ts: the custom emoji sync through Slack's listing into the workspace's custom
+// emoji directory (workspace/customEmoji.ts), and the emoji_changed events that ask for it through the front door.
+import { afterEach, beforeEach, describe, expect, test, vi, type MockInstance } from "vitest";
 import type { TestBackend } from "../../testing/backend.ts";
 import { rateLimitedFor, slackError } from "../../testing/fakeSlack.ts";
 import { emojiChangedEvent, type EmojiChange } from "../../testing/slackMessages.ts";
-import { waitsOn } from "../../testing/waiting.ts";
-import { customEmojiImageOf } from "../workspace/customEmoji.ts";
+import { customEmojiImageOf, customEmojiListedIn, customEmojiScopeMissingIn, forgetUnlistedCustomEmoji, originalCustomEmojiStartingWith } from "../workspace/customEmoji.ts";
 import { syncCustomEmoji } from "./customEmoji.ts";
 import { moveTo, sentTo, settle, useHugsBackend } from "./hugsTesting.ts";
 
@@ -28,7 +26,7 @@ afterEach(() => {
 });
 
 describe("the custom emoji sync keeps the workspace's custom emoji in the directory", () => {
-  waitsOn(["S3"], "it keeps each custom emoji's image, and an alias with its original's image", async () => {
+  test("it keeps each custom emoji's image, and an alias with its original's image", async () => {
     const t = backend();
     t.slack.withCustomEmoji("partyparrot", parrotGif).withCustomEmoji("parrot", "alias:partyparrot").withCustomEmoji("taco", tacoPng);
 
@@ -37,7 +35,7 @@ describe("the custom emoji sync keeps the workspace's custom emoji in the direct
     expect(await imagesOf(t, "partyparrot", "parrot", "taco", "tada")).toEqual({ partyparrot: parrotGif, parrot: parrotGif, taco: tacoPng, tada: undefined });
   });
 
-  waitsOn(["S3"], "an alias of an alias gets the original's image, and aliases that only name each other get none", async () => {
+  test("an alias of an alias gets the original's image, and aliases that only name each other get none", async () => {
     const t = backend();
     t.slack
       .withCustomEmoji("partyparrot", parrotGif)
@@ -51,7 +49,7 @@ describe("the custom emoji sync keeps the workspace's custom emoji in the direct
     expect(await imagesOf(t, "birb", "ping", "pong")).toEqual({ birb: parrotGif, ping: undefined, pong: undefined });
   });
 
-  waitsOn(["S3"], "it keeps only https images: an http image, a data image, an alias of a standard emoji and an alias of an unknown one get none", async () => {
+  test("it keeps only https images: an http image, a data image, an alias of a standard emoji and an alias of an unknown one get none", async () => {
     const t = backend();
     t.slack
       .withCustomEmoji("plain", "http://emoji.slack-edge.com/T1/plain/1.png")
@@ -65,7 +63,7 @@ describe("the custom emoji sync keeps the workspace's custom emoji in the direct
     expect(await imagesOf(t, "plain", "inline", "thumbs", "dangling", "insecure")).toEqual({ plain: undefined, inline: undefined, thumbs: undefined, dangling: undefined, insecure: undefined });
   });
 
-  waitsOn(["S3"], "running it again follows Slack: a changed image, a removed emoji and a new one", async () => {
+  test("running it again follows Slack: a changed image, a removed emoji and a new one", async () => {
     const t = backend();
     t.slack.withCustomEmoji("partyparrot", parrotGif).withCustomEmoji("parrot", "alias:partyparrot").withCustomEmoji("blob", "https://emoji.slack-edge.com/T1/blob/1.png");
     await sync(t);
@@ -76,7 +74,7 @@ describe("the custom emoji sync keeps the workspace's custom emoji in the direct
     expect(await imagesOf(t, "partyparrot", "parrot", "blob", "taco")).toEqual({ partyparrot: fasterParrotGif, parrot: fasterParrotGif, blob: undefined, taco: tacoPng });
   });
 
-  waitsOn(["S3"], "it keeps a whole list longer than one write takes, and forgets all of it once Slack lists none", async () => {
+  test("it keeps a whole list longer than one write takes, and forgets all of it once Slack lists none", async () => {
     const t = backend();
     const names = Array.from({ length: 1_200 }, (_, index) => `emoji_${index}`);
     const acrossBothWrites = names.filter((_, index) => index % 50 === 0 || index === 999 || index === 1_199);
@@ -91,7 +89,7 @@ describe("the custom emoji sync keeps the workspace's custom emoji in the direct
     expect(await imagesOf(t, ...acrossBothWrites)).toEqual(Object.fromEntries(acrossBothWrites.map((name) => [name, undefined])));
   });
 
-  waitsOn(["S3"], "an app without the emoji:read scope keeps none, fails nothing and logs nothing", async () => {
+  test("an app without the emoji:read scope keeps none, fails nothing and logs nothing", async () => {
     const t = backend();
     t.slack.withCustomEmoji("partyparrot", parrotGif).answering("emoji.list", slackError("missing_scope"));
 
@@ -102,7 +100,7 @@ describe("the custom emoji sync keeps the workspace's custom emoji in the direct
     expect(failuresLogged(t)).toEqual([]);
   });
 
-  waitsOn(["S3"], "an app that lost the emoji:read scope forgets the custom emoji an earlier listing kept", async () => {
+  test("an app that lost the emoji:read scope forgets the custom emoji an earlier listing kept", async () => {
     const t = backend();
     t.slack.withCustomEmoji("partyparrot", parrotGif);
     await sync(t);
@@ -116,7 +114,7 @@ describe("the custom emoji sync keeps the workspace's custom emoji in the direct
     expect(failuresLogged(t, loggedBefore)).toEqual([]);
   });
 
-  waitsOn(["S3"], "a rate-limited listing asks again after the Retry-After Slack gave", async () => {
+  test("a rate-limited listing asks again after the Retry-After Slack gave", async () => {
     const t = backend();
     t.slack.withCustomEmoji("partyparrot", parrotGif).answering("emoji.list", rateLimitedFor(30));
 
@@ -128,7 +126,7 @@ describe("the custom emoji sync keeps the workspace's custom emoji in the direct
     expect(await imagesOf(t, "partyparrot")).toEqual({ partyparrot: parrotGif });
   });
 
-  waitsOn(["S3"], "a listing Slack answered earlier changes nothing a listing asked for later already wrote", async () => {
+  test("a listing Slack answered earlier changes nothing a listing asked for later already wrote", async () => {
     const t = backend();
     t.slack.withCustomEmoji("partyparrot", parrotGif);
     const earlier = answeredNowReturnedLater();
@@ -147,8 +145,99 @@ describe("the custom emoji sync keeps the workspace's custom emoji in the direct
   });
 });
 
+describe("the directory's reads of what the sync kept", () => {
+  // Today their callers are workspace/slackEmoji.ts and store/customKudosEmoji.ts, both still stubs in the service, so
+  // the reads are proven here on what a sync keeps.
+  test("the picker's search finds each original once by the start of any of its names, sorted, up to the limit", async () => {
+    const t = backend();
+    t.slack
+      .withCustomEmoji("partyparrot", parrotGif)
+      .withCustomEmoji("parrot", "alias:partyparrot")
+      .withCustomEmoji("parrotwave", fasterParrotGif)
+      .withCustomEmoji("pizza", tacoPng)
+      .withCustomEmoji("taco", tacoPng)
+      .withCustomEmoji("partyblob", "alias:partyparrot")
+      .withCustomEmoji("partytime", "https://emoji.slack-edge.com/T1/partytime/1.png");
+    await sync(t);
+
+    const found = (typed: string, limit: number) => t.query((ctx) => originalCustomEmojiStartingWith(ctx, "T1", typed, limit));
+
+    expect(await found("par", 5)).toEqual([
+      { name: "parrotwave", image: fasterParrotGif },
+      { name: "partyparrot", image: parrotGif },
+      { name: "partytime", image: "https://emoji.slack-edge.com/T1/partytime/1.png" },
+    ]);
+    expect(await found("p", 2)).toEqual([
+      { name: "parrotwave", image: fasterParrotGif },
+      { name: "partyparrot", image: parrotGif },
+    ]);
+    // An alias and its original both match, so the search reads past them to fill the limit.
+    expect(await found("party", 2)).toEqual([
+      { name: "partyparrot", image: parrotGif },
+      { name: "partytime", image: "https://emoji.slack-edge.com/T1/partytime/1.png" },
+    ]);
+    expect(await found("x", 5)).toEqual([]);
+  });
+
+  test("the listed emoji come by name, at most as many as asked for", async () => {
+    const t = backend();
+    t.slack.withCustomEmoji("taco", tacoPng).withCustomEmoji("partyparrot", parrotGif).withCustomEmoji("parrot", "alias:partyparrot");
+    await sync(t);
+
+    expect(await t.query((ctx) => customEmojiListedIn(ctx, "T1", 2))).toEqual([
+      { name: "parrot", image: parrotGif },
+      { name: "partyparrot", image: parrotGif },
+    ]);
+  });
+
+  test("a listing without the emoji:read scope is remembered until a listing with it", async () => {
+    const t = backend();
+    const scopeMissing = () => t.query((ctx) => customEmojiScopeMissingIn(ctx, "T1"));
+    expect(await scopeMissing()).toBe(false);
+
+    t.slack.answering("emoji.list", slackError("missing_scope"));
+    await sync(t);
+    expect(await scopeMissing()).toBe(true);
+
+    t.slack.withCustomEmoji("taco", tacoPng);
+    await sync(t);
+    expect(await scopeMissing()).toBe(false);
+  });
+});
+
+describe("forgetting the emoji a listing didn't keep", () => {
+  // S18's data move restarts a pending forgetUnlistedCustomEmoji from its row, so a second run of one listing's forgetting
+  // must change nothing, and a run for any listing but the one that wrote last must forget nothing.
+  test("run twice for one listing forgets each unlisted emoji once and keeps the rest", async () => {
+    const t = backend();
+    t.slack.withCustomEmoji("partyparrot", parrotGif).withCustomEmoji("taco", tacoPng);
+    await sync(t);
+    t.slack.withoutCustomEmoji("taco");
+    await sync(t);
+    const written = await listingWrittenLast(t);
+
+    await forgetting(t, written);
+    await forgetting(t, written);
+
+    expect(await imagesOf(t, "partyparrot", "taco")).toEqual({ partyparrot: parrotGif, taco: undefined });
+    expect((await t.seed.all("customEmoji")).map(({ name }) => name)).toEqual(["partyparrot"]);
+  });
+
+  test("run for a listing other than the one that wrote last forgets nothing", async () => {
+    const t = backend();
+    t.slack.withCustomEmoji("partyparrot", parrotGif).withCustomEmoji("taco", tacoPng);
+    await sync(t);
+    const written = await listingWrittenLast(t);
+
+    await forgetting(t, written + 1);
+    await forgetting(t, written - 1);
+
+    expect(await imagesOf(t, "partyparrot", "taco")).toEqual({ partyparrot: parrotGif, taco: tacoPng });
+  });
+});
+
 describe("emoji_changed brings the custom emoji up to date", () => {
-  waitsOn(["S3"], "an added, renamed or removed custom emoji follows Slack once its change arrives", async () => {
+  test("an added, renamed or removed custom emoji follows Slack once its change arrives", async () => {
     const t = backend();
     t.slack.withCustomEmoji("partyparrot", parrotGif);
     await sync(t);
@@ -169,7 +258,7 @@ describe("emoji_changed brings the custom emoji up to date", () => {
     expect(await imagesOf(t, "taco")).toEqual({ taco: undefined });
   });
 
-  waitsOn(["S3"], "a burst of changes, and a change Slack delivers again, list the emoji once", async () => {
+  test("a burst of changes, and a change Slack delivers again, list the emoji once", async () => {
     const t = backend();
     for (const name of ["one", "two", "three", "four", "five"]) {
       t.slack.withCustomEmoji(name, `https://emoji.slack-edge.com/T1/${name}/1.png`);
@@ -182,7 +271,7 @@ describe("emoji_changed brings the custom emoji up to date", () => {
     expect(await imagesOf(t, "one", "five")).toEqual({ one: "https://emoji.slack-edge.com/T1/one/1.png", five: "https://emoji.slack-edge.com/T1/five/1.png" });
   });
 
-  waitsOn(["S3"], "a change after a refresh that failed lists the emoji again once that refresh was due", async () => {
+  test("a change after a refresh that failed lists the emoji again once that refresh was due", async () => {
     const t = backend();
     t.slack.withCustomEmoji("partyparrot", parrotGif).answering("auth.test", slackError("internal_error"));
     await emojiChanged(t, { subtype: "add", name: "partyparrot", value: parrotGif });
@@ -196,7 +285,7 @@ describe("emoji_changed brings the custom emoji up to date", () => {
     expect(await imagesOf(t, "partyparrot", "taco")).toEqual({ partyparrot: parrotGif, taco: tacoPng });
   });
 
-  waitsOn(["S3"], "a change that arrives while a listing is under way lists the emoji again", async () => {
+  test("a change that arrives while a listing is under way lists the emoji again", async () => {
     const t = backend();
     t.slack.withCustomEmoji("partyparrot", parrotGif);
     const underWay = answeredNowReturnedLater();
@@ -233,6 +322,18 @@ function syncing(t: TestBackend) {
 async function sync(t: TestBackend) {
   await syncing(t);
   await settle(t);
+}
+
+/** The number of the listing that wrote last in the one workspace. */
+async function listingWrittenLast(t: TestBackend) {
+  const [listings] = (await t.seed.all("customEmojiListings")) as Array<{ written?: number }>;
+  if (listings?.written === undefined) throw new Error("no listing has written yet");
+  return listings.written;
+}
+
+/** One run of the job that forgets what `listing` didn't keep, as a restart after the data move runs it. */
+function forgetting(t: TestBackend, listing: number) {
+  return t.run((ctx) => forgetUnlistedCustomEmoji(ctx, { workspace: "T1", listing }));
 }
 
 function emojiChanged(t: TestBackend, change: EmojiChange, options: { eventId?: string } = {}) {

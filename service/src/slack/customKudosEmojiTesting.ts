@@ -13,7 +13,7 @@ import { customEmojiPickerAction } from "./customEmojiPicker.ts";
 import { failureOf, sentTo } from "./hugsTesting.ts";
 
 /**
- * The stacks a custom kudos emoji's walk reaches: S3's custom emoji directory and members, S4's kudos messages and
+ * The stacks a custom kudos emoji's walk reaches: S3's members, S4's kudos messages and
  * clicks, S17's App Home and S5's lines in it, S6's XP and the coins unlock, S7's store, wallet and the picker's search,
  * and the subscribers of `kudosGiven` whose bodies S5, S6, S7, S8, S9, S10, S11 and S14 port.
  */
