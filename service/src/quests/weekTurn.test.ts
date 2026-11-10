@@ -2,28 +2,27 @@
 // one's week of quests once their week turns where they live; a kudos then moves the week's quests and finishes a slot
 // once; under two-quests each side gets a quest of its own; a teammate leaving rechecks Thank someone new for every
 // member still on it. The worker runs the quests registration's jobs as the service does, beside two recording
-// subscribers for questsDrawn and questFinished. The draws read stacks still stubbed on main (S4's awards reads, S5's
-// republish, S13's hugsLeftOf, welcome's isWelcomed, S6's xp-levels decision): this file stands each in over the rows it
-// seeds, as today's code reads them; republish does nothing here, and weekTurnHome.test.ts proves the home refresh.
-import { and, asc, eq, gt, lte, type SQL } from "drizzle-orm";
+// subscribers for questsDrawn and questFinished, over S4's awards reads and S13's hugs as main has them. The draws read
+// bodies still stubbed on main (welcome's isWelcomed, S6's xp-levels decision, S5's republish): this file stands the
+// first two in over the rows it seeds, as today's code reads them; republish does nothing here, and
+// weekTurnHome.test.ts proves the home refresh.
+import { asc, eq } from "drizzle-orm";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { z } from "zod";
 import { memberDecision } from "../analytics/flags.ts";
 import type { KudosGivenEvent, MemberLeftEvent } from "../bus/events.ts";
 import { createClock } from "../clock.ts";
 import { toDocument } from "../db/documents.ts";
-import { indexOrder, type IndexOrder } from "../db/indexOrder.ts";
-import { awards, hugs, jobs, members, questFinishes, questStarts, welcomes, type Doc } from "../db/schema/index.ts";
+import { indexOrder } from "../db/indexOrder.ts";
+import { jobs, members, questFinishes, questStarts, welcomes } from "../db/schema/index.ts";
 import { unique } from "../db/unique.ts";
-import type { AwardId, AwardWithId } from "../engine/awards.ts";
-import type { MessageRef } from "../engine/messageEvent.ts";
+import type { AwardId } from "../engine/awards.ts";
 import { mutationJob } from "../jobs/define.ts";
 import { createWorker } from "../jobs/worker.ts";
 import type { Log } from "../log.ts";
 import { createOperations, type QueryContext } from "../operations.ts";
 import { xpLevels } from "../progression/xpLevels.ts";
 import { createRegistry } from "../registration.ts";
-import { hugBudgetOf } from "../workspace/settings.ts";
 import type { MemberId } from "../workspace/directory.ts";
 import { useTestDatabase } from "../../testing/database.ts";
 import { definitionsStored, offForEveryone, onForEveryone, postHogDeciding } from "../../testing/flags.ts";
@@ -35,64 +34,6 @@ import { registration } from "./registration.ts";
 import { advanceSide, awaitsASideDraw, kudosQuestFinishedBy, sideGoalOf, sideQuestOfTheWeek } from "./sides.ts";
 import { advanceWeeklyQuests, drawNewWeek, drawNewWeekJob, mondayQuestsMovedSince, weeklyGoalOf, weeklyQuestsOf } from "./weekly.ts";
 
-type Award = Doc<"awards">;
-
-const byGiverRecipient = indexOrder(awards, ["giver", "recipient"]);
-const byGiverAt = indexOrder(awards, ["giver", "at"]);
-const byMessage = indexOrder(awards, ["workspace", "conversation", "message"]);
-
-async function awardRows(ctx: QueryContext, where: SQL | undefined, order: IndexOrder, limit?: number): Promise<Award[]> {
-  const query = ctx.tx.select().from(awards).where(where).orderBy(...order.orderBy());
-  const rows = limit === undefined ? await query : await query.limit(limit);
-  return rows.map((row) => toDocument<Award>(awards, row));
-}
-
-// S4's awards reads, answered from the seeded awards as today's convex/engine/awards.ts answers them.
-vi.mock("../engine/awards.ts", async (original) => ({
-  ...(await original<object>()),
-  // Everyone the giver thanked at or before `atOrBefore` (by_giver_recipient), at -Infinity, then the latest of their
-  // awards after `since` (by_giver_at).
-  lastThankedSince: async (ctx: QueryContext, giver: MemberId, since: number, atOrBefore: number): Promise<Map<MemberId, number>> => {
-    const lastThanked = new Map<MemberId, number>();
-    for (const { recipient, at } of await awardRows(ctx, eq(awards.giver, giver), byGiverRecipient)) if (at <= atOrBefore && !lastThanked.has(recipient)) lastThanked.set(recipient, -Infinity);
-    for (const { recipient, at } of await awardRows(ctx, and(eq(awards.giver, giver), gt(awards.at, since), lte(awards.at, atOrBefore)), byGiverAt)) {
-      if (at > lastThanked.get(recipient)!) lastThanked.set(recipient, at);
-    }
-    return lastThanked;
-  },
-  // For each award, when its giver last thanked its recipient in an award recorded before it, or null.
-  lastThankedBefore: async (ctx: QueryContext, given: AwardWithId[]): Promise<Map<AwardId, number | null>> => {
-    const lastThanked = new Map<AwardId, number | null>();
-    for (const { award, giver, recipient } of given) {
-      const toRecipient = await awardRows(ctx, and(eq(awards.giver, giver), eq(awards.recipient, recipient)), byGiverRecipient);
-      const current = toRecipient.find(({ _id }) => _id === award);
-      if (current === undefined) continue;
-      const earlier = toRecipient.filter(({ _creationTime }) => _creationTime < current._creationTime);
-      lastThanked.set(award, earlier.length === 0 ? null : Math.max(...earlier.map(({ at }) => at)));
-    }
-    return lastThanked;
-  },
-  // When the message's first award was recorded (by_message, first), or null.
-  firstDecidedOf: async (ctx: QueryContext, { workspace, conversation, message }: MessageRef): Promise<number | null> =>
-    (await awardRows(ctx, and(eq(awards.workspace, workspace), eq(awards.conversation, conversation), eq(awards.message, message)), byMessage, 1))[0]?._creationTime ?? null,
-  // Whether any award from the giver to the recipient (by_giver_recipient) was given at or before the instant.
-  thankedAtOrBefore: async (ctx: QueryContext, giver: MemberId, recipient: MemberId, atOrBefore: number): Promise<boolean> =>
-    (await awardRows(ctx, and(eq(awards.giver, giver), eq(awards.recipient, recipient)), byGiverRecipient)).some(({ at }) => at <= atOrBefore),
-}));
-// S13's hugsLeftOf: the workspace's hug budget less the giver's hugs that day (by_giver_day, at most the budget).
-vi.mock("../hugs/hugs.ts", async (original) => ({
-  ...(await original<object>()),
-  hugsLeftOf: async (ctx: QueryContext, giver: MemberId, workspace: string, day: string): Promise<number> => {
-    const budget = await hugBudgetOf(ctx, workspace);
-    const given = await ctx.tx
-      .select({ _id: hugs._id })
-      .from(hugs)
-      .where(and(eq(hugs.giver, giver), eq(hugs.day, day)))
-      .orderBy(...indexOrder(hugs, ["giver", "day"]).orderBy())
-      .limit(budget);
-    return budget - given.length;
-  },
-}));
 // Welcome's isWelcomed: whether the member has a welcome (by_member, unique).
 vi.mock("../welcome/welcome.ts", async (original) => ({
   ...(await original<object>()),

@@ -1,18 +1,16 @@
 // A new week of quests reaches the member: the hourly sweep draws it and their App Home shows it. The test runs every
-// module as it is, with Slack and PostHog faked at their boundaries, except the reads of stacks still stubbed on main
-// that the draw passes through (S4's lastThankedSince, S13's hugsLeftOf, welcome's isWelcomed, S6's xp-levels
-// decision): those stand in over the seeded rows as today's code reads them, as in weekTurn.test.ts. The home is S5's
+// module as it is, with Slack and PostHog faked at their boundaries, except the two reads still stubbed on main that the
+// draw passes through (welcome's isWelcomed, S6's xp-levels decision): those stand in over the seeded rows as today's
+// code reads them, as in weekTurn.test.ts. The home is S5's
 // republish, so the test waits on S5 and checks that it ends there: once the draw is made, it refreshes the home.
-import { and, eq, gt, lte } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { memberDecision } from "../analytics/flags.ts";
-import { toDocument } from "../db/documents.ts";
 import { indexOrder } from "../db/indexOrder.ts";
-import { awards, hugs, welcomes, type Doc } from "../db/schema/index.ts";
+import { welcomes } from "../db/schema/index.ts";
 import { unique } from "../db/unique.ts";
 import type { QueryContext } from "../operations.ts";
 import { xpLevels } from "../progression/xpLevels.ts";
-import { hugBudgetOf } from "../workspace/settings.ts";
 import type { MemberId } from "../workspace/directory.ts";
 import { flagsKey, postHogHost, projectToken } from "../../testing/fakePostHog.ts";
 import { definitionsStored, onForEveryone } from "../../testing/flags.ts";
@@ -20,30 +18,6 @@ import { useTestBackend } from "../../testing/backend.ts";
 import { stillWaiting } from "../../testing/waiting.ts";
 import { onboardingSteps } from "./onboarding.ts";
 
-// S4's lastThankedSince: everyone the giver thanked at or before `atOrBefore` (by_giver_recipient), at -Infinity, then
-// the latest of their awards after `since` (by_giver_at).
-vi.mock("../engine/awards.ts", async (original) => ({
-  ...(await original<object>()),
-  lastThankedSince: async (ctx: QueryContext, giver: MemberId, since: number, atOrBefore: number): Promise<Map<MemberId, number>> => {
-    const read = async (where: ReturnType<typeof and>, fields: ["giver", "recipient"] | ["giver", "at"]) =>
-      (await ctx.tx.select().from(awards).where(where).orderBy(...indexOrder(awards, fields).orderBy())).map((row) => toDocument<Doc<"awards">>(awards, row));
-    const lastThanked = new Map<MemberId, number>();
-    for (const { recipient, at } of await read(eq(awards.giver, giver), ["giver", "recipient"])) if (at <= atOrBefore && !lastThanked.has(recipient)) lastThanked.set(recipient, -Infinity);
-    for (const { recipient, at } of await read(and(eq(awards.giver, giver), gt(awards.at, since), lte(awards.at, atOrBefore)), ["giver", "at"])) {
-      if (at > lastThanked.get(recipient)!) lastThanked.set(recipient, at);
-    }
-    return lastThanked;
-  },
-}));
-// S13's hugsLeftOf: the workspace's hug budget less the giver's hugs that day (by_giver_day, at most the budget).
-vi.mock("../hugs/hugs.ts", async (original) => ({
-  ...(await original<object>()),
-  hugsLeftOf: async (ctx: QueryContext, giver: MemberId, workspace: string, day: string): Promise<number> => {
-    const budget = await hugBudgetOf(ctx, workspace);
-    const given = await ctx.tx.select({ _id: hugs._id }).from(hugs).where(and(eq(hugs.giver, giver), eq(hugs.day, day))).orderBy(...indexOrder(hugs, ["giver", "day"]).orderBy()).limit(budget);
-    return budget - given.length;
-  },
-}));
 // Welcome's isWelcomed: whether the member has a welcome (by_member, unique).
 vi.mock("../welcome/welcome.ts", async (original) => ({
   ...(await original<object>()),
