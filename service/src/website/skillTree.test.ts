@@ -1,12 +1,13 @@
 // The skill tree read: locked, ready, or the tree progression's perks give, with the HUD's skill points beside it.
 // Today's convex/website/skillTree.test.ts, on the service's test backend: each read runs getSkillTree, and the HUD's
 // points getMyProfile, for a `me` made from the seeded directory row, as S15's member check answers it. The reads whose
-// subject is the member check itself (closed, signed out, not a member, an argument naming another member) go through
-// S15's route transport in S17's route pull request.
+// subject is the member check itself (closed, signed out, not a member, an argument naming another member) call
+// getSkillTree by its route name through the whole app, signed in through SSO or not at all, so the app's own identity
+// mapping and member check (S15) answer them.
 import { afterEach, beforeEach, describe, expect, vi } from "vitest";
 import { useTestBackend, type TestBackend } from "../../testing/backend.ts";
 import { flagsKey, postHogHost, projectToken } from "../../testing/fakePostHog.ts";
-import { definitionsStored, onForEveryone } from "../../testing/flags.ts";
+import { definitionsStored, offForEveryone, onForEveryone } from "../../testing/flags.ts";
 import { signingSecret } from "../../testing/signedSlack.ts";
 import { waitsOn, type Stack } from "../../testing/waiting.ts";
 import { earnLevelUpHoggies } from "../album/levelUpHoggies.ts";
@@ -23,6 +24,7 @@ import { unlocksLiveIn } from "../unlocks/launch.ts";
 import { makeReady, openUnlock } from "../unlocks/unlocks.ts";
 import type { MemberId } from "../workspace/directory.ts";
 import type { VerifiedMember } from "./memberQuery.ts";
+import { argumentsRefused, signedInThroughSso, websiteAs } from "./routesTesting.ts";
 import { getMyProfile, type MemberProfile } from "./profile.ts";
 import { getSkillTree, type MySkillTree } from "./skillTree.ts";
 
@@ -40,6 +42,8 @@ const treeStacks: [Stack, ...Stack[]] = ["S6", "S7", "S10", "S16"];
 // unlocks (S6), the wallet (S7), the album flag (S9), the avatar (S10), groups (S11), the member check's clock (S15) and
 // the unlock path (S16).
 const withTheHud: [Stack, ...Stack[]] = ["S4", "S5", "S6", "S7", "S9", "S10", "S11", "S15", "S16"];
+// The read through the whole app, past S15's identity mapping and member check, with the Skill tree open (S6, S7, S10, S16).
+const skillTreeStacks: [Stack, ...Stack[]] = ["S6", "S7", "S10", "S15", "S16"];
 
 const spark = { perk: "spark", name: "Spark", copy: "+5 XP the first time each day you give a kudos.", cost: { skillPoints: 1, coins: 0 }, requires: null, upgrades: null } as const;
 const rhythm = { perk: "rhythm", name: "Rhythm", copy: "+2 XP for each kudos you give, once per person a day.", cost: { skillPoints: 1, coins: 0 }, requires: null, upgrades: null } as const;
@@ -99,6 +103,11 @@ async function signedInMember(): Promise<{ member: MemberId; me: VerifiedMember 
   const member = (await t.seed.insert("members", { workspace: "T1", user: juno.user, kind: "member", asOf: 0 })) as MemberId;
   await t.run((ctx) => analyticsIdOf(ctx, member));
   return { member, me: { member, workspace: "T1", user: juno.user, name: juno.name } };
+}
+
+/** Today's `aSession`: the person signs in, through SSO here, and the website's requests come as them. */
+function aSession(person: { user: string }) {
+  return signedInThroughSso(t, person);
 }
 
 async function withXp(member: MemberId, xp: number) {
@@ -255,6 +264,43 @@ describe("the website shows only shipped features", () => {
     expect(await skillTreeOf(me)).toEqual({ kind: "not-found" });
     expect(await skillPointsIn(me)).toBeNull();
     expect(await t.seed.all("unlockLaunches")).toEqual([]);
+  });
+});
+
+describe("website reads pass one guard", () => {
+  waitsOn(skillTreeStacks, "getSkillTree reads closed while the website flag is off, even with the Skill tree open", async () => {
+    await treeShipped();
+    const { member } = await signedInMember();
+    await treeOpenFor(member, levelSix);
+    const asSignedIn = await aSession(juno);
+    // Today's switchWebsite(t, postHog, false, ...treeFlags): the website off, the tree's flags on.
+    await definitionsStored(t.operations, offForEveryone("website"), ...treeFlags.map(onForEveryone));
+    await t.run((ctx) => workspaceKeyOf(ctx, "T1"));
+
+    expect(await asSignedIn.read("website.skillTree.getSkillTree", {})).toEqual({ kind: "closed" });
+  });
+
+  waitsOn(["S6", "S15"], "getSkillTree reads signed out without a session", async () => {
+    await treeShipped();
+
+    expect(await websiteAs(t, null).read("website.skillTree.getSkillTree", {})).toEqual({ kind: "signed-out" });
+  });
+
+  waitsOn(["S6", "S15"], "getSkillTree reads not-a-member for a former member with a live session", async () => {
+    await treeShipped();
+    await t.seed.insert("members", { workspace: "T1", user: juno.user, kind: "not-a-member", asOf: 0 });
+    const asSignedIn = await aSession(juno);
+
+    expect(await asSignedIn.read("website.skillTree.getSkillTree", {})).toEqual({ kind: "not-a-member" });
+  });
+
+  waitsOn(["S6"], "an argument that names another member is rejected by the validator", async () => {
+    await treeShipped();
+    await signedInMember();
+    const asSignedIn = await aSession(juno);
+    const withAnotherMember = { user: "U_ROWAN" };
+
+    await expect(asSignedIn.read("website.skillTree.getSkillTree", withAnotherMember)).rejects.toThrow(argumentsRefused);
   });
 });
 

@@ -2,7 +2,8 @@
 // service's test backend. Reads run `getSettings` and switches settingsCommands.ts's `setPublicCelebrations` and
 // `setMessageSetting` for a `me` made from the directory row Slack's team_join filled and a `person` the directory
 // answers, as S15's member check answers them. The switch whose subject is the route's arguments (a call naming a member)
-// goes through S15's route transport in S17's route pull request.
+// is called by its route name through the whole app, signed in through SSO, where the transport refuses it before anyone
+// is looked up.
 import { asc, getTableColumns, getTableName, is } from "drizzle-orm";
 import { PgTable } from "drizzle-orm/pg-core";
 import { afterEach, beforeEach, describe, expect, vi } from "vitest";
@@ -27,6 +28,7 @@ import type { ClickKind, EventKind } from "../slack/frontDoor.ts";
 import { receiveMemberChanged } from "../slack/receipts.ts";
 import { lookup, type MemberId } from "../workspace/directory.ts";
 import type { VerifiedMember } from "./memberQuery.ts";
+import { argumentsRefused, signedInThroughSso } from "./routesTesting.ts";
 import { getSettings } from "./settings.ts";
 import { setMessageSetting, setPublicCelebrations } from "./settingsCommands.ts";
 
@@ -40,7 +42,7 @@ const everyFlag = ["workspace-settings", "celebrations-switch", "message-setting
 // celebration (S4, S5, S6).
 const aWorkspaceRead: [Stack, ...Stack[]] = ["S3", "S4", "S5", "S6", "S11", "S12", "S15", "S16"];
 // And besides: the admin's App Home and its click (S4, S5, S17).
-const aWorkspaceInAppHome: [Stack, ...Stack[]] = ["S3", "S4", "S5", "S6", "S11", "S12", "S15", "S16", "S17"];
+const aWorkspaceInAppHome: [Stack, ...Stack[]] = ["S3", "S4", "S5", "S6", "S11", "S12", "S15", "S16"];
 
 type Row = Record<string, unknown>;
 
@@ -140,6 +142,15 @@ describe("only the maintainer switches public celebrations from Settings, and on
     expect(await owner.switchPublicCelebrations(false)).toEqual({ kind: "refused" });
     expect(await storedSwitches()).toEqual([]);
   }, 60_000);
+
+  waitsOn(["S3"], "WS61: on is setPublicCelebrations's only argument, so no call names a member", async () => {
+    const owner = await aWorkspace();
+    const asSignedIn = await aSession({ user: maintainer });
+    const before = await everyTable();
+
+    await expect(asSignedIn.command("website.commands.setPublicCelebrations", { on: false, member: owner.member })).rejects.toThrow(argumentsRefused);
+    expect(await everyTable()).toEqual(before);
+  }, 60_000);
 });
 
 describe("a website command never launches unlocks", () => {
@@ -186,6 +197,11 @@ async function aWorkspace({ flags = everyFlag }: Setup = {}) {
 }
 
 type Messages = Array<{ kind: string; place: string }>;
+
+/** Today's `aSignedInSession` for the session alone: the person signs in, through SSO here, and the website's requests come as them. */
+function aSession(person: { user: string }) {
+  return signedInThroughSso(t, person, allowedWorkspace);
+}
 
 /** Today's `aSignedInSession` for a person the directory knows: their users row and analytics ID, and what they do. */
 async function signedIn(user: string) {

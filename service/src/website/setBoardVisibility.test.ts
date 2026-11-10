@@ -1,12 +1,13 @@
 // The board visibility switch on the website: today's convex/website/setBoardVisibility.test.ts, on the service's test
 // backend. Each switch runs settingsCommands.ts's `setBoardVisibility` for a `me` made from the seeded directory row and
 // a `person` the directory answers, as S15's member check answers them. The switches whose subject is the member check
-// or the route's arguments (closed, signed out, not a member, a call naming a member) go through S15's route transport in
-// S17's route pull request. Today's mocked `publish` is the events committed operations published, and today's scheduled
+// or the route's arguments (closed, signed out, not a member, a call naming a member) call setBoardVisibility by its
+// route name through the whole app, signed in through SSO or not at all, so the app's own identity mapping and member
+// check (S15) answer them. Today's mocked `publish` is the events committed operations published, and today's scheduled
 // functions are the jobs table's rows.
 import { asc, eq, getTableColumns, getTableName, is, sql } from "drizzle-orm";
 import { PgTable } from "drizzle-orm/pg-core";
-import { afterEach, beforeEach, describe, expect, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { useTestBackend, type TestBackend } from "../../testing/backend.ts";
 import { flagsKey, postHogHost, projectToken } from "../../testing/fakePostHog.ts";
 import { definitionsStored, offForEveryone, onForEveryone } from "../../testing/flags.ts";
@@ -25,12 +26,14 @@ import * as serviceTables from "../db/schema/service.ts";
 import { jobs } from "../db/schema/service.ts";
 import type { HomeMember } from "../feedback/homes.ts";
 import { isOnTheBoards } from "../leaderboard/visibility.ts";
+import { memberChanged } from "../slack/hugsTesting.ts";
 import { receiveHomeClick } from "../slack/receipts.ts";
 import type { Feature } from "../unlocks/feature.ts";
 import { unlocksLiveIn } from "../unlocks/launch.ts";
 import { makeReady, openUnlock } from "../unlocks/unlocks.ts";
 import { lookup, type MemberId } from "../workspace/directory.ts";
 import type { VerifiedMember } from "./memberQuery.ts";
+import { argumentsRefused, signedInThroughSso, websiteAs } from "./routesTesting.ts";
 import { setBoardVisibility as setBoardVisibilityCommand } from "./settingsCommands.ts";
 
 const allowedWorkspace = "T1";
@@ -40,9 +43,11 @@ const unlocksFlags = ["everyone-board", "xp-levels", "unlocks"];
 
 // What the switch reaches: the unlock path and the board's state (S16), the launch guard (S15), the command runner (S4),
 // the boards (S11), unlocks (S6) and App Home's republish (S5, S17).
-const theSwitch: [Stack, ...Stack[]] = ["S4", "S5", "S6", "S11", "S15", "S16", "S17"];
+const theSwitch: [Stack, ...Stack[]] = ["S4", "S5", "S6", "S11", "S15", "S16"];
 // An open board on the unlock path: unlocks shipped and a level reached (S6) with its level-up hoggies (S10), then the switch.
-const onTheUnlockPath: [Stack, ...Stack[]] = ["S4", "S5", "S6", "S10", "S11", "S15", "S16", "S17"];
+const onTheUnlockPath: [Stack, ...Stack[]] = ["S4", "S5", "S6", "S10", "S11", "S15", "S16"];
+// The member check through the whole app: S15's identity mapping and member check.
+const memberCheck: [Stack, ...Stack[]] = ["S15"];
 
 type Row = Record<string, unknown>;
 
@@ -78,6 +83,11 @@ async function signedIn() {
   await t.run((ctx) => analyticsIdOf(ctx, member));
   const me: VerifiedMember = { member, workspace: allowedWorkspace, user: juno.user, name: juno.name };
   return { member, me };
+}
+
+/** Today's `aSignedInSession` for the session alone: the person signs in, through SSO here, and the website's requests come as them. */
+function aSession(person: { user: string }) {
+  return signedInThroughSso(t, person, allowedWorkspace);
 }
 
 async function aBoardWithoutUnlocks() {
@@ -178,6 +188,47 @@ function visibilityChangesRecorded() {
 function onTheBoards(member: MemberId) {
   return t.query((ctx) => isOnTheBoards(ctx, member));
 }
+
+describe("website commands pass one guard", () => {
+  describe("WS61: a denial answers as a read does and writes nothing at all", () => {
+    test("with the website flag off, the switch answers closed", async () => {
+      await aBoardWithoutUnlocks();
+      const asSignedIn = await aSession(juno);
+      await switchWebsite(false, "everyone-board");
+      const before = await everythingWritten();
+
+      expect(await asSignedIn.command("website.commands.setBoardVisibility", { visible: false })).toEqual({ kind: "closed" });
+      expect(await everythingWritten()).toEqual(before);
+    });
+
+    test("without a session, the switch answers signed-out", async () => {
+      await aBoardWithoutUnlocks();
+      const before = await everythingWritten();
+
+      expect(await websiteAs(t, null).command("website.commands.setBoardVisibility", { visible: false })).toEqual({ kind: "signed-out" });
+      expect(await everythingWritten()).toEqual(before);
+    });
+
+    waitsOn(["S3", ...memberCheck], "a member who left the workspace answers not-a-member", async () => {
+      await aBoardWithoutUnlocks();
+      const asSignedIn = await aSession(juno);
+      await memberChanged(t, "user_change", { id: juno.user, team_id: allowedWorkspace, deleted: true });
+      const before = await everythingWritten();
+
+      expect(await asSignedIn.command("website.commands.setBoardVisibility", { visible: false })).toEqual({ kind: "not-a-member" });
+      expect(await everythingWritten()).toEqual(before);
+    });
+  });
+
+  test("WS61: the setting is the only argument, so no call names a member", async () => {
+    const { member } = await aBoardWithoutUnlocks();
+    const asSignedIn = await aSession(juno);
+    const before = await everythingWritten();
+
+    await expect(asSignedIn.command("website.commands.setBoardVisibility", { visible: false, member })).rejects.toThrow(argumentsRefused);
+    expect(await everythingWritten()).toEqual(before);
+  });
+});
 
 describe("a website command never launches unlocks", () => {
   waitsOn(theSwitch, "WS321 WS335 P77: with the boards, xp-levels and unlocks on and no unlocks launch, the switch answers refused and launches nothing", async () => {

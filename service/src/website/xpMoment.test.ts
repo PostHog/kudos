@@ -5,13 +5,14 @@
 // ends at a stand-in for its stub. The kudos, hugs and deletions go through the front door, guarded until the stacks that
 // handle them register. Today's tests held a job back by cancelling its scheduled functions and ran it later; here the
 // backend's registry holds that job's runs back while a kudos settles, and the test runs them later. The guard tests
-// whose subject is the member check (closed, signed out, an argument naming a member) go through S15's route transport
-// in S17's route pull request.
+// whose subject is the member check (closed, signed out, an argument naming a member) call the moment's read and command
+// by their route names through the whole app, signed in through SSO or not at all, so the app's own identity mapping and
+// member check (S15) answer them.
 import { asc, desc, eq, getTableName } from "drizzle-orm";
-import { afterEach, beforeEach, describe, expect, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { useTestBackend, type TestBackend } from "../../testing/backend.ts";
 import { flagsKey, postHogHost, projectToken } from "../../testing/fakePostHog.ts";
-import { definitionsStored, onForEveryone } from "../../testing/flags.ts";
+import { definitionsStored, offForEveryone, onForEveryone } from "../../testing/flags.ts";
 import { signingSecret } from "../../testing/signedSlack.ts";
 import { emoji, mention, messageDeletedEvent, messageEvent, reactionEvent, section, text } from "../../testing/slackMessages.ts";
 import { waitsOn, type Stack } from "../../testing/waiting.ts";
@@ -37,7 +38,7 @@ import { lookup, type MemberId } from "../workspace/directory.ts";
 import { getAlbum, type AlbumAnswer, type AlbumRead, type TurnAnswer } from "./album.ts";
 import { arrive as arriveAt, moveLastVisitTo, type ArrivalAnswer } from "./lastVisit.ts";
 import type { VerifiedMember } from "./memberQuery.ts";
-import { commandByRoute } from "./routesTesting.ts";
+import { argumentsRefused, commandByRoute, signedInThroughSso, websiteAs } from "./routesTesting.ts";
 import { endXpMoment, getXpMoment, type XpMoment, type XpMomentAnswer, type XpMomentEndReply } from "./xpMoment.ts";
 
 const tuesday = new Date("2026-10-13T10:00:00Z");
@@ -492,6 +493,36 @@ describe("LP22 LP26: an item the member turned is never New at a later visit", (
   }, 60_000);
 });
 
+describe("website reads pass one guard", () => {
+  test("WS61: getXpMoment answers closed with the website off, and signed-out without a session", async () => {
+    const asAlice = await aSession(alice);
+    expect(await websiteAs(t, null).read("website.xpMoment.getXpMoment", {})).toEqual({ kind: "signed-out" });
+    await websiteOff(...everyFlagOfTheMoment);
+    expect(await asAlice.read("website.xpMoment.getXpMoment", {})).toEqual({ kind: "closed" });
+  }, 60_000);
+});
+
+describe("website commands pass one guard", () => {
+  test("WS61: ending answers closed with the website off and signed-out without a session, writing nothing at all", async () => {
+    const asAlice = await aSession(alice);
+    const ending = { from: 1, until: 2, skipped: false };
+    const before = await everythingWritten();
+
+    expect(await websiteAs(t, null).command("website.xpMoment.endXpMoment", ending)).toEqual({ kind: "signed-out" });
+    await websiteOff(...everyFlagOfTheMoment);
+    const closed = await everythingWritten();
+    expect(await asAlice.command("website.xpMoment.endXpMoment", ending)).toEqual({ kind: "closed" });
+    expect(await everythingWritten()).toEqual(closed);
+    expect(closed.tables.lastVisits).toEqual(before.tables.lastVisits);
+  }, 60_000);
+
+  test("WS61: the moment's instants are the only arguments, so no call names a member", async () => {
+    const asAlice = await aSession(alice);
+
+    await expect(asAlice.command("website.xpMoment.endXpMoment", { from: 1, until: 2, skipped: false, member: "someone" })).rejects.toThrow(argumentsRefused);
+  }, 60_000);
+});
+
 describe("LP72: the XP moment carries the first-thanks top-up", () => {
   waitsOn(momentAndGiving, "a returning member's first kudos shows in its excerpt with the top-up's XP, and the climb starts from before that kudos and crosses level 2", async () => {
     await switchWebsite(...everyFlagOfTheMoment, "onboarding");
@@ -942,6 +973,17 @@ function turnItem(ctx: MutationContext, me: VerifiedMember, _person: HomeMember,
 async function switchWebsite(...flags: string[]) {
   await definitionsStored(t.operations, onForEveryone("website"), ...flags.map(onForEveryone));
   await t.run((ctx) => workspaceKeyOf(ctx, "T1"));
+}
+
+// Today's `switchWebsite(t, postHog, false, ...flags)`: the website off, these flags on, and the workspace's key made.
+async function websiteOff(...flags: string[]) {
+  await definitionsStored(t.operations, offForEveryone("website"), ...flags.map(onForEveryone));
+  await t.run((ctx) => workspaceKeyOf(ctx, "T1"));
+}
+
+/** Today's `aSignedInSession`: the person signs in, through SSO here, and the website's requests come as them. */
+function aSession(someone: Person) {
+  return signedInThroughSso(t, someone);
 }
 
 function person(first: string, last: string): Person {

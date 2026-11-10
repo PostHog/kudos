@@ -3,14 +3,14 @@
 // command, run with the person the directory knows in the same mutation; getAlbum is S16's handler and runs as itself;
 // turnItem is S16's command, which has no route yet, so a turn ends at a stand-in for its stub. The directory rows are
 // the ones each `team_join` wrote; the company profiles come from the sync as today. The guard tests whose subject is
-// the member check (closed, signed out, not a member, an argument naming a member) go through S15's route transport in
-// S17's route pull request.
+// the member check (closed, signed out, not a member, an argument naming a member) call arrive by its route name through
+// the whole app, signed in through SSO or not at all, so the app's own identity mapping and member check (S15) answer.
 import { asc, desc, eq, getTableName } from "drizzle-orm";
-import { afterEach, beforeEach, describe, expect, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { useTestBackend, type TestBackend } from "../../testing/backend.ts";
 import { flagsKey, postHogHost, projectToken, routedFetch } from "../../testing/fakePostHog.ts";
 import { FakePostHogCom, type TeamPage } from "../../testing/fakePostHogCom.ts";
-import { definitionsStored, onForEveryone } from "../../testing/flags.ts";
+import { definitionsStored, offForEveryone, onForEveryone } from "../../testing/flags.ts";
 import { signingSecret } from "../../testing/signedSlack.ts";
 import { emoji, mention, messageEvent, section, text } from "../../testing/slackMessages.ts";
 import { waitsOn, type Stack } from "../../testing/waiting.ts";
@@ -25,11 +25,12 @@ import { dataModelTables } from "../load/loader.ts";
 import { notPorted } from "../notPorted.ts";
 import type { MutationContext, QueryContext } from "../operations.ts";
 import { serviceRegistry } from "../registry.ts";
+import { memberChanged } from "../slack/hugsTesting.ts";
 import { lookup, type MemberId } from "../workspace/directory.ts";
 import { getAlbum, type AlbumAnswer, type AlbumRead, type TurnAnswer } from "./album.ts";
 import { arrive as arriveAt, lastVisitOf, moveLastVisitTo, type ArrivalAnswer } from "./lastVisit.ts";
 import type { VerifiedMember } from "./memberQuery.ts";
-import { commandByRoute } from "./routesTesting.ts";
+import { argumentsRefused, commandByRoute, signedInThroughSso, websiteAs } from "./routesTesting.ts";
 
 const tuesday = new Date("2026-10-13T10:00:00Z");
 const minuteMs = 60_000;
@@ -174,6 +175,38 @@ describe("LP22: getAlbum answers when each sticker was put in", () => {
   }, 60_000);
 });
 
+describe("website commands pass one guard", () => {
+  test("WS61: with the website flag off, arriving answers closed and writes nothing at all", async () => {
+    const asAlice = await aSession(alice);
+    await websiteOff(...itemsOn);
+    const before = await everythingWritten();
+
+    expect(await asAlice.command("website.lastVisit.arrive", { from: null })).toEqual({ kind: "closed" });
+    expect(await everythingWritten()).toEqual(before);
+  }, 60_000);
+
+  waitsOn(["S3", "S15"], "WS61: without a session arriving answers signed-out, and for a member who left not-a-member, writing nothing at all", async () => {
+    const asAlice = await aSession(alice);
+    const before = await everythingWritten();
+
+    expect(await websiteAs(t, null).command("website.lastVisit.arrive", { from: null })).toEqual({ kind: "signed-out" });
+    expect(await everythingWritten()).toEqual(before);
+    await memberChanged(t, "user_change", { id: alice.user, team_id: "T1", deleted: true });
+    await t.settle();
+    const left = await everythingWritten();
+    expect(await asAlice.command("website.lastVisit.arrive", { from: null })).toEqual({ kind: "not-a-member" });
+    expect(await everythingWritten()).toEqual(left);
+  }, 60_000);
+
+  test("WS61: the last visit the tab read is the only argument, so no call names a member", async () => {
+    const asAlice = await aSession(alice);
+    const before = await everythingWritten();
+
+    await expect(asAlice.command("website.lastVisit.arrive", { from: null, member: await memberOf(alice) })).rejects.toThrow(argumentsRefused);
+    expect(await everythingWritten()).toEqual(before);
+  }, 60_000);
+});
+
 // S16's turn command, by its route name: it ends in `notPorted` until S16 registers `website.album.turnItem`.
 function turnItem(ctx: MutationContext, me: VerifiedMember, _person: HomeMember, args: { item: string }) {
   return commandByRoute<TurnAnswer>("website.album.turnItem", ctx, me, args);
@@ -260,6 +293,17 @@ async function lastVisitOfPerson(ctx: QueryContext, someone: Person) {
 
 // A reader signed in as today's `aSignedInSession` left them: the analytics ID the flags decide them by, and the member
 // check's answer. Each command reads the person the directory knows in its own mutation, as the route does.
+/** Today's `aSignedInSession`: the person signs in, through SSO here, and the website's requests come as them. */
+function aSession(someone: Person) {
+  return signedInThroughSso(t, someone);
+}
+
+// Today's `switchWebsite(t, postHog, false, ...flags)`: the website off, these flags on, and the workspace's key made.
+async function websiteOff(...flags: string[]) {
+  await definitionsStored(t.operations, offForEveryone("website"), ...flags.map(onForEveryone));
+  await t.run((ctx) => workspaceKeyOf(ctx, "T1"));
+}
+
 async function signedIn(someone: Person): Promise<VerifiedMember> {
   const member = await memberOf(someone);
   await t.run((ctx) => analyticsIdOf(ctx, member));

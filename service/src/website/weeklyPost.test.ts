@@ -4,15 +4,16 @@
 // answers it, and the commands with the person the directory knows, read in the same mutation. The directory rows are
 // the ones each `team_join` wrote; the user groups come from the sync as today. A session's length is the member
 // check's, so a reader signed in for a week is the same `me`. The guard tests whose subject is the member check (closed,
-// signed out, not a member, an argument naming a member or workspace) go through S15's route transport in S17's route
-// pull request.
+// signed out, not a member, an argument naming a member or workspace) call the commands by their route names through
+// the whole app, signed in through SSO or not at all, so the app's own identity mapping and member check (S15) answer
+// them.
 import { asc, eq } from "drizzle-orm";
 import { getTableName } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, vi } from "vitest";
 import { useTestBackend, type TestBackend } from "../../testing/backend.ts";
 import { flagsKey, postHogHost, projectToken, routedFetch } from "../../testing/fakePostHog.ts";
 import { httpStatus, slackError, type SlackArgs } from "../../testing/fakeSlack.ts";
-import { definitionsStored, onForEveryone } from "../../testing/flags.ts";
+import { definitionsStored, offForEveryone, onForEveryone } from "../../testing/flags.ts";
 import { signingSecret } from "../../testing/signedSlack.ts";
 import { appHomeOpened, emoji, mention, messageEvent, section } from "../../testing/slackMessages.ts";
 import { waitsOn, type Stack } from "../../testing/waiting.ts";
@@ -26,10 +27,12 @@ import { notPorted } from "../notPorted.ts";
 import type { MutationContext } from "../operations.ts";
 import { serviceRegistry } from "../registry.ts";
 import type { ClickKind, EventKind } from "../slack/frontDoor.ts";
+import { memberChanged } from "../slack/hugsTesting.ts";
 import { checkPickedChannel } from "../slack/mondayPost.ts";
 import { syncUserGroups } from "../slack/userGroups.ts";
 import { lookup, type MemberId } from "../workspace/directory.ts";
 import type { VerifiedMember } from "./memberQuery.ts";
+import { argumentsRefused, signedInThroughSso, websiteAs } from "./routesTesting.ts";
 import { getSettings } from "./settings.ts";
 import { pickWeeklyPostChannel, setWeeklyPost } from "./settingsCommands.ts";
 
@@ -56,7 +59,7 @@ const commanding: Stack[] = ["S4", "S5", "S6", "S11", "S15"];
 //   board and givers (S11), the album's Slack switch and the delivery (S5);
 const posting: Stack[] = ["S4", "S5", "S6", "S7", "S8", "S9", "S10", "S11", "S12", "S13", "S14"];
 // - an admin's App Home and its Admin tab (S5's homes, S17's App Home).
-const homing: Stack[] = ["S5", "S17"];
+const homing: Stack[] = ["S5"];
 
 function stacks(...steps: Stack[][]): [Stack, ...Stack[]] {
   const all = [...new Set(steps.flat())].sort((a, b) => Number(a.slice(1)) - Number(b.slice(1)));
@@ -546,6 +549,70 @@ describe("only the maintainer picks the weekly post's channel, and only while we
   }, 60_000);
 });
 
+// The guard through the whole app: S15's identity mapping and member check, with a workspace whose groups synced (S11);
+// a member who left is Slack's directory event through the front door (S3).
+const weeklyPostGuardStacks: [Stack, ...Stack[]] = ["S3", "S4", "S5", "S6", "S11", "S15"];
+
+describe("website commands pass one guard", () => {
+  waitsOn(weeklyPostGuardStacks, "WS61: with the website flag off setWeeklyPost answers closed, without a session signed-out, and for a member who left not-a-member, writing nothing at all", async () => {
+    const owner = await aWorkspaceWithGroups();
+    const asMaintainer = await aSession({ user: maintainer });
+    const signedOut = websiteAs(t, null);
+    await websiteOff(...everyFlag);
+    const closed = await everyTable();
+    expect(await asMaintainer.command("website.commands.setWeeklyPost", { on: true })).toEqual({ kind: "closed" });
+    expect(await everyTable()).toEqual(closed);
+    await switchWebsite(...everyFlag);
+    const open = await everyTable();
+    expect(await signedOut.command("website.commands.setWeeklyPost", { on: true })).toEqual({ kind: "signed-out" });
+    expect(await everyTable()).toEqual(open);
+    await memberChanged(t, "user_change", { id: maintainer, team_id: "T1", deleted: true });
+    await settleUpTo(t.clock.now() + minuteMs);
+    const left = await everyTable();
+    expect(await asMaintainer.command("website.commands.setWeeklyPost", { on: true })).toEqual({ kind: "not-a-member" });
+    expect(await everyTable()).toEqual(left);
+    void owner;
+  }, 60_000);
+
+  waitsOn(weeklyPostGuardStacks, "WS61: with the website flag off pickWeeklyPostChannel answers closed, without a session signed-out, and for a member who left not-a-member, writing nothing at all", async () => {
+    await aWorkspaceWithGroups({ flags: withPicker });
+    const asMaintainer = await aSession({ user: maintainer });
+    const signedOut = websiteAs(t, null);
+    await websiteOff(...withPicker);
+    const closed = await everyTable();
+    expect(await asMaintainer.command("website.commands.pickWeeklyPostChannel", { link: pickedLink })).toEqual({ kind: "closed" });
+    expect(await everyTable()).toEqual(closed);
+    await switchWebsite(...withPicker);
+    const open = await everyTable();
+    expect(await signedOut.command("website.commands.pickWeeklyPostChannel", { link: pickedLink })).toEqual({ kind: "signed-out" });
+    expect(await everyTable()).toEqual(open);
+    await memberChanged(t, "user_change", { id: maintainer, team_id: "T1", deleted: true });
+    await settleUpTo(t.clock.now() + minuteMs);
+    const left = await everyTable();
+    expect(await asMaintainer.command("website.commands.pickWeeklyPostChannel", { link: pickedLink })).toEqual({ kind: "not-a-member" });
+    expect(await everyTable()).toEqual(left);
+  }, 60_000);
+
+  waitsOn(stacks(setUp), "WS61: link is pickWeeklyPostChannel's only argument, so no call names a member or a workspace", async () => {
+    const owner = await aWorkspaceWithGroups({ flags: withPicker });
+    const asMaintainer = await aSession({ user: maintainer });
+    const before = await everyTable();
+
+    await expect(asMaintainer.command("website.commands.pickWeeklyPostChannel", { link: pickedLink, member: owner.member })).rejects.toThrow(argumentsRefused);
+    await expect(asMaintainer.command("website.commands.pickWeeklyPostChannel", { link: pickedLink, workspace: "T2" })).rejects.toThrow(argumentsRefused);
+    expect(await everyTable()).toEqual(before);
+  }, 60_000);
+
+  waitsOn(stacks(setUp), "WS61: on is setWeeklyPost's only argument, so no call names a member", async () => {
+    const owner = await aWorkspaceWithGroups();
+    const asMaintainer = await aSession({ user: maintainer });
+    const before = await everyTable();
+
+    await expect(asMaintainer.command("website.commands.setWeeklyPost", { on: true, member: owner.member })).rejects.toThrow(argumentsRefused);
+    expect(await everyTable()).toEqual(before);
+  }, 60_000);
+});
+
 type Setup = { channel?: string | null; url?: string | null; flags?: string[] };
 
 // Today's `switchWebsite(t, postHog, true, ...flags)`: the website open, these flags on for everyone, and the workspace's key made.
@@ -564,6 +631,17 @@ async function aWorkspaceWithGroups({ channel = announcementChannel, url = "http
   await t.operations.action("slack.userGroups.syncUserGroups", (ctx) => syncUserGroups(ctx, {}));
   await t.settle();
   return signedIn(maintainer);
+}
+
+// Today's `switchWebsite(t, postHog, false, ...flags)`: the website off, these flags on, and the workspace's key made.
+async function websiteOff(...flags: string[]) {
+  await definitionsStored(t.operations, offForEveryone("website"), ...flags.map(onForEveryone));
+  await t.run((ctx) => workspaceKeyOf(ctx, "T1"));
+}
+
+/** Today's `aSignedInSession` for the session alone: the person signs in, through SSO here, and the website's requests come as them. */
+function aSession(person: { user: string }) {
+  return signedInThroughSso(t, person);
 }
 
 function aMember(user: string, profile: { timeZone?: string; admin?: boolean; realName: string }) {

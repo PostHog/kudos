@@ -1,14 +1,14 @@
 // Picking an avatar on the website: today's convex/website/setAvatar.test.ts, on the service's test backend. The pick
 // runs settingsCommands.ts's `setAvatar` for a `me` made from the seeded directory row and a `person` the directory
 // answers, as S15's member check answers them. The picks whose subject is the member check or the route's arguments
-// (closed, signed out, not a member, a call naming a member) go through S15's route transport in S17's route pull
-// request. Today's scheduled functions are the jobs table's rows.
+// (closed, signed out, not a member, a call naming a member) call setAvatar by its route name through the whole app,
+// signed in through SSO or not at all, so the app's own identity mapping and member check (S15) answer them. Today's scheduled functions are the jobs table's rows.
 import { asc, getTableColumns, getTableName, is } from "drizzle-orm";
 import { PgTable } from "drizzle-orm/pg-core";
 import { afterEach, beforeEach, describe, expect, vi } from "vitest";
 import { useTestBackend, type TestBackend } from "../../testing/backend.ts";
 import { flagsKey, postHogHost, projectToken } from "../../testing/fakePostHog.ts";
-import { definitionsStored, onForEveryone } from "../../testing/flags.ts";
+import { definitionsStored, offForEveryone, onForEveryone } from "../../testing/flags.ts";
 import { signingSecret } from "../../testing/signedSlack.ts";
 import { waitsOn, type Stack } from "../../testing/waiting.ts";
 import { achievementsLiveIn } from "../achievements/flag.ts";
@@ -22,11 +22,13 @@ import * as schema from "../db/schema/index.ts";
 import * as loadTables from "../db/schema/load.ts";
 import * as serviceTables from "../db/schema/service.ts";
 import type { HomeMember } from "../feedback/homes.ts";
+import { memberChanged } from "../slack/hugsTesting.ts";
 import type { Feature } from "../unlocks/feature.ts";
 import { unlocksLiveIn } from "../unlocks/launch.ts";
 import { makeReady, openUnlock } from "../unlocks/unlocks.ts";
 import { lookup, type MemberId } from "../workspace/directory.ts";
 import type { VerifiedMember } from "./memberQuery.ts";
+import { argumentsRefused, signedInThroughSso, websiteAs } from "./routesTesting.ts";
 import { setAvatar as setAvatarCommand } from "./settingsCommands.ts";
 
 const allowedWorkspace = "T1";
@@ -36,7 +38,9 @@ const avatarFlags = ["xp-levels", "unlocks", "achievements", "collection", "hogg
 
 // A member holding a hoggie: the unlocks and the Book shipped and opened (S6), a level reached with its level-up hoggies
 // (S10); then the pick: the launch guard (S15), the command runner (S4), the avatar (S10) and App Home's republish (S5, S17).
-const holdingAndPicking: [Stack, ...Stack[]] = ["S4", "S5", "S6", "S10", "S15", "S17"];
+const holdingAndPicking: [Stack, ...Stack[]] = ["S4", "S5", "S6", "S10", "S15"];
+// The member check through the whole app: S15's identity mapping and member check.
+const memberCheck: [Stack, ...Stack[]] = ["S15"];
 
 type Row = Record<string, unknown>;
 
@@ -63,6 +67,11 @@ afterEach(() => void vi.unstubAllEnvs());
 async function flagsOn(...keys: string[]) {
   await definitionsStored(t.operations, onForEveryone("website"), ...keys.map(onForEveryone));
   await t.run((ctx) => workspaceKeyOf(ctx, allowedWorkspace));
+}
+
+/** Today's `aSignedInSession` for the session alone: the person signs in, through SSO here, and the website's requests come as them. */
+function aSession(person: { user: string }) {
+  return signedInThroughSso(t, person, allowedWorkspace);
 }
 
 async function aMemberHoldingRocket() {
@@ -139,6 +148,42 @@ function everythingWritten(): Promise<Record<string, Row[]>> {
     return rows;
   });
 }
+
+describe("website commands pass one guard", () => {
+  waitsOn(["S6", "S10", ...memberCheck], "WS61: with the website flag off, setting an avatar answers closed and writes nothing at all", async () => {
+    await aMemberHoldingRocket();
+    const asSignedIn = await aSession(juno);
+    // Today's switchWebsite(t, postHog, false, ...avatarFlags): the website off, the avatar's flags on.
+    await definitionsStored(t.operations, offForEveryone("website"), ...avatarFlags.map(onForEveryone));
+    await t.run((ctx) => workspaceKeyOf(ctx, allowedWorkspace));
+    const before = await everythingWritten();
+
+    expect(await asSignedIn.command("website.commands.setAvatar", { hoggie: "rocket" })).toEqual({ kind: "closed" });
+    expect(await everythingWritten()).toEqual(before);
+  });
+
+  waitsOn(["S3", "S6", "S10", ...memberCheck], "WS61: without a session it answers signed-out, and for a member who left not-a-member, writing nothing at all", async () => {
+    await aMemberHoldingRocket();
+    const asSignedIn = await aSession(juno);
+    const before = await everythingWritten();
+
+    expect(await websiteAs(t, null).command("website.commands.setAvatar", { hoggie: "rocket" })).toEqual({ kind: "signed-out" });
+    expect(await everythingWritten()).toEqual(before);
+    await memberChanged(t, "user_change", { id: juno.user, team_id: allowedWorkspace, deleted: true });
+    const left = await everythingWritten();
+    expect(await asSignedIn.command("website.commands.setAvatar", { hoggie: "rocket" })).toEqual({ kind: "not-a-member" });
+    expect(await everythingWritten()).toEqual(left);
+  });
+
+  waitsOn(["S6", "S10"], "WS61: the hoggie is the only argument, so no call names a member", async () => {
+    const { member } = await aMemberHoldingRocket();
+    const asSignedIn = await aSession(juno);
+    const before = await everythingWritten();
+
+    await expect(asSignedIn.command("website.commands.setAvatar", { hoggie: "rocket", member })).rejects.toThrow(argumentsRefused);
+    expect(await everythingWritten()).toEqual(before);
+  });
+});
 
 describe("a website command never launches unlocks", () => {
   waitsOn(holdingAndPicking, "WS62 P77: with no unlocks launch recorded, setting an avatar answers refused and launches nothing", async () => {

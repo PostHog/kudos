@@ -1,12 +1,13 @@
 // The settings page and its commands: today's convex/website/settings.test.ts, on the service's test backend. Each read
 // runs `getSettings` and each command its handler of settingsCommands.ts for a `me` made from the seeded directory row
 // and a `person` the directory answers, as S15's member check answers them. The reads and commands whose subject is the
-// member check or the route's arguments (closed, signed out, not a member, a call naming a member) go through S15's route
-// transport in S17's route pull request. Today's mocked `publish` is the events committed operations published, and
-// today's scheduled functions are the jobs table's rows.
+// member check or the route's arguments (closed, signed out, not a member, a call naming a member) are called by their
+// route names through the whole app, signed in through SSO or not at all, so the app's own identity mapping and member
+// check (S15) answer them. Today's mocked `publish` is the events committed operations published, and today's scheduled
+// functions are the jobs table's rows.
 import { asc, eq, getTableColumns, getTableName, is, sql } from "drizzle-orm";
 import { PgTable } from "drizzle-orm/pg-core";
-import { afterEach, beforeEach, describe, expect, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { useTestBackend, type TestBackend } from "../../testing/backend.ts";
 import { flagsKey, postHogHost, projectToken } from "../../testing/fakePostHog.ts";
 import { definitionsStored, offForEveryone, onForEveryone } from "../../testing/flags.ts";
@@ -25,9 +26,11 @@ import { primaryGroupOf } from "../groups/groups.ts";
 import { placeOf } from "../messageSettings/messageSettings.ts";
 import type { MutationContext } from "../operations.ts";
 import { syncUserGroups } from "../slack/userGroups.ts";
+import { memberChanged } from "../slack/hugsTesting.ts";
 import { receiveHomeClick } from "../slack/receipts.ts";
 import { lookup, type MemberId } from "../workspace/directory.ts";
 import type { VerifiedMember } from "./memberQuery.ts";
+import { argumentsRefused, signedInThroughSso, websiteAs } from "./routesTesting.ts";
 import { getMyProfile } from "./profile.ts";
 import { getSettings, type MessageKind, type MessagePlace } from "./settings.ts";
 import { pickPrimaryGroup as pickPrimaryGroupCommand, setBoardVisibility as setBoardVisibilityCommand, setMessageSetting as setMessageSettingCommand } from "./settingsCommands.ts";
@@ -43,11 +46,13 @@ const unlocksFlags = ["everyone-board", "xp-levels", "unlocks"];
 const settingsRead: [Stack, ...Stack[]] = ["S5", "S6", "S11", "S12", "S15", "S16"];
 // What a settings command reaches besides: the command runner (S4), the launch guard (S15), App Home's republish (S5,
 // S17) and the Slack directory's user groups (S3).
-const settingsCommand: [Stack, ...Stack[]] = ["S3", "S4", "S5", "S6", "S11", "S15", "S16", "S17"];
+const settingsCommand: [Stack, ...Stack[]] = ["S3", "S4", "S5", "S6", "S11", "S15", "S16"];
 // Syncing Slack's user groups (S11), then the read or the command.
-const withGroups: [Stack, ...Stack[]] = ["S3", "S4", "S5", "S6", "S11", "S12", "S15", "S16", "S17"];
+const withGroups: [Stack, ...Stack[]] = ["S3", "S4", "S5", "S6", "S11", "S12", "S15", "S16"];
 // getMyProfile reaches homeFacts (S4), progression (S6), the wallet (S7), the album and avatar (S9, S10) and the rest.
 const profileStacks: [Stack, ...Stack[]] = ["S4", "S5", "S6", "S7", "S9", "S10", "S11", "S12", "S15", "S16"];
+// The member check through the whole app: S15's identity mapping and member check.
+const memberCheck: [Stack, ...Stack[]] = ["S15"];
 
 type Row = Record<string, unknown>;
 
@@ -86,6 +91,11 @@ async function signedIn(member: MemberId, { user, name }: { user: string; name: 
   await t.seed.insert("users", { name, chatIdentity: { workspace: allowedWorkspace, user } });
   await t.run((ctx) => analyticsIdOf(ctx, member));
   return { member, workspace: allowedWorkspace, user, name };
+}
+
+/** Today's `aSignedInSession` for the session alone: the person signs in, through SSO here, and the website's requests come as them. */
+function aSession(person: { user: string }) {
+  return signedInThroughSso(t, person, allowedWorkspace);
 }
 
 async function signedInWith(...flags: string[]) {
@@ -167,6 +177,22 @@ async function homeRepublishes() {
   return (await scheduledNamed("slack.appHome.publishHome")).filter((args) => args.user === juno.user);
 }
 
+describe("website reads pass one guard", () => {
+  test("WS11: with the website flag off, the settings read answers closed", async () => {
+    await signedInWith(messageSettings);
+    const asSignedIn = await aSession({ user: "U_OTHER" });
+    await switchWebsite(false, messageSettings);
+
+    expect(await asSignedIn.read("website.settings.getSettings", {})).toEqual({ kind: "closed" });
+  });
+
+  test("WS11: without a session, the settings read answers signed-out", async () => {
+    await signedInWith(messageSettings);
+
+    expect(await websiteAs(t, null).read("website.settings.getSettings", {})).toEqual({ kind: "signed-out" });
+  });
+});
+
 describe("the settings read", () => {
   waitsOn(settingsRead, "with nothing to set, it answers not-found", async () => {
     const { me } = await signedInWith();
@@ -219,6 +245,46 @@ describe("the settings read", () => {
 
     await switchWebsite(true, messageSettings);
     expect(await t.query((ctx) => getMyProfile(ctx, off.me))).toMatchObject({ kind: "member", settings: true });
+  });
+});
+
+describe("website commands pass one guard", () => {
+  test("WS61: with the website flag off, the message setting answers closed and writes nothing", async () => {
+    await signedInWith(messageSettings);
+    const asSignedIn = await aSession(juno);
+    await switchWebsite(false, messageSettings);
+    const before = await everythingWritten();
+
+    expect(await asSignedIn.command("website.commands.setMessageSetting", { kind: "kudos-reply", place: "dm" })).toEqual({ kind: "closed" });
+    expect(await everythingWritten()).toEqual(before);
+  });
+
+  test("WS61: without a session, the message setting and the group pick answer signed-out and write nothing", async () => {
+    await signedInWith(messageSettings, "groups");
+    const before = await everythingWritten();
+    const signedOut = websiteAs(t, null);
+
+    expect(await signedOut.command("website.commands.setMessageSetting", { kind: "kudos-reply", place: "dm" })).toEqual({ kind: "signed-out" });
+    expect(await signedOut.command("website.commands.pickPrimaryGroup", { group: "anything" })).toEqual({ kind: "signed-out" });
+    expect(await everythingWritten()).toEqual(before);
+  });
+
+  waitsOn(["S3", ...memberCheck], "WS61: a member who left the workspace answers not-a-member", async () => {
+    await signedInWith(messageSettings);
+    const asSignedIn = await aSession(juno);
+    await memberChanged(t, "user_change", { id: juno.user, team_id: allowedWorkspace, deleted: true });
+    const before = await everythingWritten();
+
+    expect(await asSignedIn.command("website.commands.setMessageSetting", { kind: "kudos-reply", place: "dm" })).toEqual({ kind: "not-a-member" });
+    expect(await everythingWritten()).toEqual(before);
+  });
+
+  test("WS61: the kind and the place are the only arguments, so no call names a member", async () => {
+    const { member } = await signedInWith(messageSettings);
+    const asSignedIn = await aSession(juno);
+
+    await expect(asSignedIn.command("website.commands.setMessageSetting", { kind: "kudos-reply", place: "dm", member })).rejects.toThrow(argumentsRefused);
+    await expect(asSignedIn.command("website.commands.pickPrimaryGroup", { group: "anything", member })).rejects.toThrow(argumentsRefused);
   });
 });
 
