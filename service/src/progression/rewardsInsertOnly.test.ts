@@ -21,5 +21,7 @@ test("P87: reward records are only ever inserted, never changed or deleted", () 
 
   expect(touchingRewardRecords).toEqual([rewardsModule]);
   expect(rewardsSource).toContain("ctx.tx.insert(rewardRecords)");
-  expect(rewardsSource).not.toMatch(/\.(update|delete)\(/);
+  // Any update or delete, by method, by bracket or by name, and raw SQL, which could change rows behind the builder.
+  expect(rewardsSource).not.toMatch(/\b(update|delete|truncate)\b/i);
+  expect(rewardsSource).not.toMatch(/\bsql\b|\.execute\(/);
 });

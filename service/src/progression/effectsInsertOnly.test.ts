@@ -21,5 +21,7 @@ test("P8: effects records are only ever inserted, never changed or deleted", () 
 
   expect(touchingEffectsRecords).toEqual([effectsModule]);
   expect(effectsSource).toContain("ctx.tx.insert(effectsRecords)");
-  expect(effectsSource).not.toMatch(/\.(update|delete)\(/);
+  // Any update or delete, by method, by bracket or by name, and raw SQL, which could change rows behind the builder.
+  expect(effectsSource).not.toMatch(/\b(update|delete|truncate)\b/i);
+  expect(effectsSource).not.toMatch(/\bsql\b|\.execute\(/);
 });

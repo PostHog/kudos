@@ -5,6 +5,7 @@ import { describe, expect, test } from "vitest";
 import { z } from "zod";
 import { useTestDatabase } from "../../testing/database.ts";
 import { seeder } from "../../testing/seed.ts";
+import type { KudosGivenEvent } from "../bus/events.ts";
 import { subscribersOf, type Subscription } from "../bus/publish.ts";
 import { createClock } from "../clock.ts";
 import type { Id } from "../db/columns.ts";
@@ -17,7 +18,7 @@ import { serviceRegistry } from "../registry.ts";
 import type { MemberId } from "../workspace/directory.ts";
 import { bonusRecordedWith, gateRecordedWith, insertEffects, isRecorded, xpRecordedFor } from "./effects.ts";
 import { xpToReach } from "./levels.ts";
-import { progressionHomeOf, recordReward, spendSkillPoints, standingOf, unrecordedAwardsOf } from "./progression.ts";
+import { progressionHomeOf, recordEffectsArgs, recordReward, spendSkillPoints, standingOf, unrecordedAwardsOf } from "./progression.ts";
 import type { EffectsRecord } from "./progress.ts";
 import { receivingWeekOf, recordReceiving } from "./receiving.ts";
 import { rewardOf, rewardsCausedBy, rewardsKeyedFrom, rewardsPage, type RewardRecord } from "./rewards.ts";
@@ -94,9 +95,11 @@ describe("CR2 CR3: a held reward counts only from its open", () => {
     const alice = await t.member("U_ALICE");
 
     expect(await t.mutation((ctx) => recordReward(ctx, "T1", heldReward(alice)))).toBe("recorded");
+    const [first] = await t.seed.all("rewardRecords");
     expect(await t.mutation((ctx) => recordReward(ctx, "T1", heldReward(alice, { xp: 999 })))).toBe("already recorded");
 
-    expect(await t.seed.all("rewardRecords")).toEqual([expect.objectContaining(heldReward(alice))]);
+    expect(first).toEqual(expect.objectContaining(heldReward(alice)));
+    expect(await t.seed.all("rewardRecords"), "the first record, untouched").toEqual([first]);
     expect(await t.query((ctx) => standingOf(ctx, alice))).toEqual({ xp: 0, level: 1, skillPoints: 0 });
     expect(await t.scheduled()).toEqual([]);
   });
@@ -229,10 +232,29 @@ describe("reading rewards", () => {
   });
 });
 
-test("a kudosGiven the service publishes schedules progression's recordEffects", async () => {
+test("a kudosGiven published with the service's subscribers schedules progression's recordEffects with the event", async () => {
   const t = backend({ subscriptions: [...(serviceRegistry.subscribers.get("kudosGiven") ?? [])] });
+  const [alice, bob] = [await t.member("U_ALICE"), await t.member("U_BOB")];
+  const kudosGiven: KudosGivenEvent = {
+    type: "kudosGiven",
+    workspace: "T1",
+    message: { workspace: "T1", conversation: "C1", message: "1.0" },
+    giver: alice,
+    awards: [{ award: award(1), giver: alice, recipient: bob, kudos: 2 }],
+    via: "message",
+    kudosEmoji: "taco",
+    annotations: {},
+    allowance: { dailyOpening: 5, dailyLeft: 3 },
+    skippedMentions: 0,
+    retry: false,
+    inThread: false,
+    day: "2026-10-13",
+    at,
+  };
 
-  expect(serviceRegistry.jobs.has("progression.progression.recordEffects")).toBe(true);
-  expect((serviceRegistry.subscribers.get("kudosGiven") ?? []).map(({ job }) => job.name)).toContain("progression.progression.recordEffects");
-  expect(await t.published()).toEqual([]);
+  await t.mutation((ctx) => ctx.publish(kudosGiven));
+
+  const scheduled = await t.scheduled("progression.progression.recordEffects");
+  expect(scheduled.map(({ args }) => args)).toEqual([{ event: { ...kudosGiven, fact: expect.any(String) } }]);
+  expect(recordEffectsArgs.safeParse(scheduled[0]!.args).success, "the stored args are the job's own").toBe(true);
 });
