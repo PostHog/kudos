@@ -93,9 +93,10 @@ export function samples(validator: GenericValidator): unknown[] {
       return [[], elements, ...optional];
     }
     case "object": {
-      const fields = Object.entries(node.fields!);
-      const base = Object.fromEntries(fields.map(([key, field]) => [key, samples(required(field))[0]]));
-      const varied = fields.flatMap(([key, field]) => samples(field).map((sample) => withField(base, key, sample)));
+      // Each field's samples once: an optional field's are its required ones and a trailing `undefined`.
+      const fields = Object.entries(node.fields!).map(([key, field]) => [key, samples(field), field.isOptional === "optional"] as const);
+      const base = Object.fromEntries(fields.map(([key, own, isOptional]) => [key, (isOptional ? own.slice(0, -1) : own)[0]]));
+      const varied = fields.flatMap(([key, own]) => own.map((sample) => withField(base, key, sample)));
       return [base, ...varied, ...optional];
     }
     case "record": {
@@ -134,7 +135,7 @@ export function cases(validator: GenericValidator): unknown[] {
     }
     case "record": {
       const value = samples(required(node.value as Node))[0];
-      found.push(...broken(required(node.value as Node)).map((broke) => ({ key: broke })), ...refusedKeys.map((key) => ({ [key]: value })));
+      found.push(...broken(required(node.value as Node)).map((broke) => ({ key: broke })), { key: undefined }, ...refusedKeys.map((key) => ({ [key]: value })));
       break;
     }
     case "union":
@@ -159,5 +160,9 @@ export function disagreements(validator: GenericValidator, schema: SafeParse): s
 
 function show(value: unknown): string {
   if (value === undefined) return "undefined";
-  return JSON.stringify(value, (_, item) => (typeof item === "bigint" ? `${item}n` : typeof item === "number" && !Number.isFinite(item) ? String(item) : item));
+  // A field holding `undefined` is shown, where JSON would drop it.
+  const shown = JSON.stringify(value, (_, item) =>
+    item === undefined ? "\u0001undefined" : typeof item === "bigint" ? `${item}n` : typeof item === "number" && !Number.isFinite(item) ? String(item) : item,
+  );
+  return shown.replaceAll('"\\u0001undefined"', "undefined");
 }

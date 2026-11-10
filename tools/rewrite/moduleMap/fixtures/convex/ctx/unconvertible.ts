@@ -17,3 +17,4 @@ export const throughParameter = <T extends typeof anything>(validator: T) => val
 export const throughUnion = <T extends typeof anything>(validator: T | typeof anything) => validator.isOptional;
 export const throughIntersection = <T extends typeof anything & { tag: string }>(validator: T) => validator.isOptional;
 export const maybeValidator = (validator?: typeof anything) => validator?.isOptional;
+export const optionalFields = v.optional(v.object({ a: v.string() })).fields;

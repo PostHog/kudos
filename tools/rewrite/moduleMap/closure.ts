@@ -2,13 +2,11 @@
 // resolves inside the batch, to a module an earlier batch or the foundation already put in the service, to a Node
 // built-in, or to what a package the service lists exports. Anything else is refused, so every head on main keeps
 // building.
-import { builtinModules } from "node:module";
+import { isBuiltin } from "node:module";
 import { dirname, join, normalize } from "node:path";
 import ts from "typescript5";
 import { convexPackage } from "./copy.ts";
 import { parse } from "./imports.ts";
-
-const builtins = new Set(builtinModules);
 
 /** The packages the service lists, and whether a specifier resolves among them as the service's Node would. */
 export interface Packages {
@@ -23,7 +21,8 @@ export function servicePackages(repo: string): Packages {
   const config = ts.readConfigFile(join(repo, "service/tsconfig.json"), ts.sys.readFile).config;
   const { options } = ts.parseJsonConfigFileContent(config, ts.sys, join(repo, "service"));
   const from = join(repo, "service/src/module.ts");
-  return { listed, resolves: (specifier) => ts.resolveModuleName(specifier, from, options, ts.sys).resolvedModule !== undefined };
+  // Resolved as an ES module imports it, under the `import` condition: the service's modules are ES modules.
+  return { listed, resolves: (specifier) => ts.resolveModuleName(specifier, from, options, ts.sys, undefined, undefined, ts.ModuleKind.ESNext).resolvedModule !== undefined };
 }
 
 /** What a batch's imports leave unresolved, one line per import; empty for a closed batch. */
@@ -50,7 +49,7 @@ function unresolved(path: string, specifier: string, found: (path: string) => bo
     return found(target) ? undefined : "no module in the batch, an earlier batch or the foundation";
   }
   if (convexPackage.test(specifier)) return "a Convex package";
-  if (specifier.startsWith("node:") ? builtins.has(specifier.slice(5)) : builtins.has(specifier)) return undefined;
+  if (isBuiltin(specifier)) return undefined;
   const name = specifier.startsWith("@") ? specifier.split("/").slice(0, 2).join("/") : specifier.split("/")[0]!;
   if (!packages.listed.has(name)) return "a package the service doesn't list";
   return packages.resolves(specifier) ? undefined : `nothing ${name} exports`;
