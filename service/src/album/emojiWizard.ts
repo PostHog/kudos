@@ -1,9 +1,9 @@
 // The module map's skeleton of convex/album/emojiWizard.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
 // notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
-import { type MemberId } from "../workspace/directory.ts";
-import { type SlackEmojiReach } from "../workspace/slackEmoji.ts";
-import { type EarnedEmojiKind } from "./earnedEmojis.ts";
-import { type EarnedEmojiId } from "./emojiNames.ts";
+import type { MemberId } from "../workspace/directory.ts";
+import type { SlackEmojiReach } from "../workspace/slackEmoji.ts";
+import type { EarnedEmojiKind } from "./earnedEmojis.ts";
+import type { EarnedEmojiId } from "./emojiNames.ts";
 import type { EmojiMapper } from "./records.ts";
 import type { MutationContext, QueryContext } from "../operations.ts";
 import { notPorted } from "../notPorted.ts";

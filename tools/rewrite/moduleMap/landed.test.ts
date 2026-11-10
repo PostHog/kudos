@@ -15,6 +15,7 @@ import { contracts } from "./contracts.ts";
 import { convexRoot, parse, servicePathOf } from "./imports.ts";
 import { landed, partlyPorted } from "./landed.ts";
 import { siblingOf } from "./skeleton.ts";
+import { typeOnlyImports } from "./typeImports.ts";
 
 const repo = fileURLToPath(new URL("../../..", import.meta.url));
 const read = (path: string) => readFileSync(join(repo, path), "utf8");
@@ -35,6 +36,12 @@ describe.each(modules)("$convexPath", ({ convexPath, servicePath, tool, text }) 
   if (!isTest(convexPath)) {
     test("loads without running a stub", async () => {
       await expect(load(servicePath)).resolves.toBeDefined();
+    });
+  }
+
+  if (tool === "skeleton") {
+    test("loads no module for what only types use", () => {
+      expect(typeOnlyImports(parse(servicePath, read(servicePath)))).toEqual([]);
     });
   }
 
