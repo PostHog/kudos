@@ -17,6 +17,7 @@ import { specifiers } from "./closure.ts";
 import { validatorClassOf, validatorEdits, type Edit } from "./codemod.ts";
 import { convexPackage, dynamicImports, type Landed } from "./copy.ts";
 import { applyEdits, convexRoot, parse, resolveConvexImport, servicePathOf, serviceRoot, specifierFrom } from "./imports.ts";
+import { importTypesAsTypes } from "./typeImports.ts";
 
 export type Reach = "run" | "job";
 /** Every registered function reached by name, by dotted path, and how. */
@@ -465,7 +466,8 @@ export function skeletonModule(program: ts.Program, sourceFile: ts.SourceFile, c
   const imported = importsFor(body, printed.imports);
   if (typeof imported !== "string") return imported;
   const importText = [imported, ...(fromS1.size > 0 ? [`import type { ${[...fromS1].sort().join(", ")} } from "${specifierFrom(servicePath, s1!.servicePath)}";`] : [])].filter(Boolean).join("\n");
-  const output = `${siblingHeader ?? header}${[importText, body].filter(Boolean).map((part) => `${part}\n`).join("\n")}`;
+  // What only types use is imported as a type: a runtime import kept for a signature would load its module.
+  const output = importTypesAsTypes(servicePath, `${siblingHeader ?? header}${[importText, body].filter(Boolean).map((part) => `${part}\n`).join("\n")}`);
   // Nothing it writes reaches Convex, whatever the form of import; `import.meta` reaches no module, so it may stay.
   const writtenFile = parse(servicePath, output);
   const reachesConvex = [
