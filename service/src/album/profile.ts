@@ -1,10 +1,11 @@
-// The module map's skeleton of convex/album/profile.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
-// notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
-import type { NewestReceived } from "../engine/awards.ts";
+// What a member's profile shows from their album: the newest kind note they received that still reads, and the people
+// whose stickers they put in last. Today's convex/album/profile.ts.
+import { newestReceivedBy, type NewestReceived } from "../engine/awards.ts";
+import { wordsOf } from "../engine/kudosText.ts";
+import type { MessageRef } from "../engine/messageEvent.ts";
 import type { MemberId } from "../workspace/directory.ts";
-import type { AlbumSticker } from "./stickers.ts";
+import { albumStickersOf, type AlbumSticker } from "./stickers.ts";
 import type { QueryContext } from "../operations.ts";
-import { notPorted } from "../notPorted.ts";
 
 export const kudosSearchedForAKindNote = 50;
 
@@ -13,9 +14,17 @@ export const newestPeopleShown = 4;
 export type KindNote = NewestReceived;
 
 export async function lastKindNoteTo(ctx: QueryContext, member: MemberId): Promise<KindNote | null> {
-  throw notPorted("album.profile.lastKindNoteTo");
+  for (const award of await newestReceivedBy(ctx, member, kudosSearchedForAKindNote)) {
+    if (await isReadable(ctx, award.message)) return award;
+  }
+  return null;
+}
+
+async function isReadable(ctx: QueryContext, message: MessageRef) {
+  return (await wordsOf(ctx, message)).kind === "text";
 }
 
 export async function newestStickersOf(ctx: QueryContext, member: MemberId, searched: number): Promise<AlbumSticker[]> {
-  throw notPorted("album.profile.newestStickersOf");
+  const { stickers } = await albumStickersOf(ctx, member, searched);
+  return stickers.toSorted((one, other) => other.at - one.at).slice(0, newestPeopleShown);
 }
