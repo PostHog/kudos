@@ -780,7 +780,9 @@ function typePrinter(checker: ts.TypeChecker, servicePath: string, localNames: R
   };
   const typeArguments = (args: readonly ts.Type[] | undefined) => (args && args.length > 0 ? `<${args.map(print).join(", ")}>` : "");
   const tableOfBrand = (brand: ts.Type) => {
-    const [property, ...rest] = brand.flags & ts.TypeFlags.Object ? checker.getPropertiesOfType(brand) : [];
+    // Only the table's name: an index, call or construct signature beside it would be lost in `Id<T>`.
+    const signatures = checker.getIndexInfosOfType(brand).length + brand.getCallSignatures().length + brand.getConstructSignatures().length;
+    const [property, ...rest] = brand.flags & ts.TypeFlags.Object && signatures === 0 ? checker.getPropertiesOfType(brand) : [];
     const table = property?.name === "__tableName" && rest.length === 0 ? checker.getTypeOfSymbol(property) : undefined;
     return table?.isStringLiteral() ? table.value : undefined;
   };

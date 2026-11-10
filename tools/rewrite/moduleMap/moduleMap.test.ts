@@ -290,6 +290,8 @@ describe("the skeleton generator", () => {
   test("prints an ID that lost its alias as the service's Id, parenthesizes a union of objects in an array, and leaves out a type the checker can't resolve", () => {
     expect(printed.text).toContain('export async function tagged(ctx: QueryContext): Promise<Id<"members">> {');
     expect(printed.text).toContain("export async function lines(ctx: QueryContext): Promise<({ text: string } | { link: string })[]> {");
+    // A brand with more than the table's name isn't an ID.
+    expect(printed.text).toContain('export async function indexed(ctx: QueryContext): Promise<string & { __tableName: "members"; [key: string]: unknown }> {');
     expect(printed.text).not.toContain("sorted");
     expect(printed.omitted).toEqual(["sorted: names a type the checker can't resolve, so its signature can't be printed"]);
   });

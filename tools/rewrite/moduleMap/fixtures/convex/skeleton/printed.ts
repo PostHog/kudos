@@ -13,3 +13,7 @@ export async function lines(ctx: QueryCtx) {
 export async function sorted(ctx: QueryCtx) {
   return [3, 1].toSorted();
 }
+
+export async function indexed(ctx: QueryCtx) {
+  return "" as string & { __tableName: "members"; [key: string]: unknown };
+}
