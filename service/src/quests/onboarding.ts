@@ -2,7 +2,7 @@
 // days. Today's convex/quests/onboarding.ts over the service's transaction.
 import type { KudosGivenEvent } from "../bus/events.ts";
 import { isSameMessage, type MessageRef } from "../engine/messageEvent.ts";
-import { earliestAwardFrom, firstDecidedOf, recordedAtOfAward, givenBetween, givenRecordedAfter, givenSinceWithin, messagesGivenDecidedAfter, type AwardId, type DatedAward, type GivenKudos } from "../engine/awards.ts";
+import { awardRecordedAt, earliestAwardFrom, firstDecidedOf, givenBetween, givenRecordedAfter, givenSinceWithin, messagesGivenDecidedAfter, type AwardId, type DatedAward, type GivenKudos } from "../engine/awards.ts";
 import { progressionWaitedFor } from "../progression/effects.ts";
 import type { MemberId } from "../workspace/directory.ts";
 import type { MutationContext, QueryContext } from "../operations.ts";
@@ -209,7 +209,7 @@ function whenTheSecondDayCame(given: { day: string; at: number }[]): number | nu
 /** When the event's first award was recorded, from its row's creation time, or 0 when it has none. */
 async function recordedAtOf(ctx: QueryContext, { awards: given }: KudosGivenEvent): Promise<number> {
   if (given[0] === undefined) return 0;
-  return (await recordedAtOfAward(ctx, given[0].award)) ?? 0;
+  return (await awardRecordedAt(ctx, given[0].award)) ?? 0;
 }
 
 async function finished(ctx: MutationContext, workspace: string, member: MemberId, step: OnboardingStep, at: number, cause?: MessageRef): Promise<void> {
