@@ -113,8 +113,11 @@ function recovered(source: string, doc: { [field: string]: Value }, registry: Jo
     if (!checked.success) return { refused: `${_id} ${name} (${checked.error.issues.map((issue) => `${issue.path.join(".") || "args"}: ${issue.code}`).join(", ")})` };
     return { ...row, state: "pending", error: null, completedAt: null };
   }
+  // Failed by the move, not by Convex: left for the service's sweep to report once.
   if (state === "inProgress") return { ...row, state: "failed", error: "Running when Convex stopped: an action runs at most once", completedAt: now };
-  if (state === "success" || state === "failed" || state === "canceled") return { ...row, state, error, completedAt: completedAt ?? now };
+  // Failed by Convex: Convex's sweep reported it, so it arrives swept and the service's sweep reports only its own.
+  if (state === "failed") return { ...row, state, error, completedAt: completedAt ?? now, sweptAt: now };
+  if (state === "success" || state === "canceled") return { ...row, state, error, completedAt: completedAt ?? now };
   return { refused: `${_id} ${name} (state: ${state})` };
 }
 
