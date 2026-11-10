@@ -22,7 +22,7 @@ import type { MemberId } from "../workspace/directory.ts";
 import { useTestDatabase } from "../../testing/database.ts";
 import { definitionsStored, offForEveryone, onForEveryone, postHogDeciding } from "../../testing/flags.ts";
 import { seeder } from "../../testing/seed.ts";
-import { waitsOn } from "../../testing/waiting.ts";
+import { stillWaiting } from "../../testing/waiting.ts";
 import { nextQuestOf } from "./next.ts";
 import { hugQuestPool, mondayQuestPool } from "./pool.ts";
 import { registration } from "./registration.ts";
@@ -252,20 +252,85 @@ describe("HH54 HH55: the week's two quests, the hug quest first, the next one ma
     expect(await t.nextOf("bob")).toBeNull();
   });
 
-  waitsOn(["S17"], "the website's quests read shows the rows with their hint, item and drawn, and HH57's journey with two-quests off", async () => {
+  // The website's quests read is S17's mondayQuestsOf, still a stub on main, so each case below waits on S17 and checks
+  // that it ends exactly there; once S17 lands they pass, and stillWaiting fails them so S17 makes them plain tests.
+  const websiteRead = "website.mondayQuests.mondayQuestsOf";
+  const readOf = (t: Awaited<ReturnType<typeof setUp>>, name: string) => t.read((ctx) => mondayQuestsOf(ctx, { member: t.people[name]!, workspace: "T1", user: `U_${name.toUpperCase()}` }));
+  const hugHint = "React with your kudos emoji on any message in Slack.";
+  const newHint = "Someone from another team counts, and so does a new joiner.";
+
+  test("the website's quests read shows a newcomer's two rows with their hint, item and drawn (waits on S17)", async () => {
     const t = await setUp(twoQuests);
     await t.thanks("bob", "alice");
     await t.hugs("bob", "alice");
-    const me = { member: t.people.bob!, workspace: "T1", user: "U_BOB" };
 
-    expect(await t.read((ctx) => mondayQuestsOf(ctx, me))).toMatchObject({
-      quests: {
+    expect(await stillWaiting(["S17"], async () => {
+      expect((await readOf(t, "bob")).quests).toEqual({
         kind: "two-quests",
         quests: [
-          { side: "hug", goal: "Give 3 hugs", hint: "React with your kudos emoji on any message in Slack.", progress: { done: 1, target: 3 }, done: false, reward: { xp: 20 }, item: null, next: true, drawn: false },
-          { side: "kudos", goal: "Thank someone new", hint: "Someone from another team counts, and so does a new joiner.", progress: { done: 0, target: 1 }, done: false, reward: { xp: 50 }, item: null, next: false, drawn: false },
+          { side: "hug", goal: "Give 3 hugs", hint: hugHint, progress: { done: 1, target: 3 }, done: false, reward: { xp: 20 }, item: null, next: true, drawn: false },
+          { side: "kudos", goal: "Thank someone new", hint: newHint, progress: { done: 0, target: 1 }, done: false, reward: { xp: 50 }, item: null, next: false, drawn: false },
         ],
-      },
-    });
+        steps: expect.any(Array),
+      });
+    })).toBe(websiteRead);
+  }, budgetMs);
+
+  test("a tab running a website built before the two quests reads the same rows as a journey's steps (waits on S17)", async () => {
+    const t = await setUp(twoQuests);
+    await t.thanks("bob", "alice");
+    await t.hugs("bob", "alice");
+
+    expect(await stillWaiting(["S17"], async () => {
+      const list = (await readOf(t, "bob")).quests as { kind: string; quests?: unknown[]; steps?: Array<{ goal: string; hint: string | null; done: boolean; reward: { xp: number } | null }> };
+      const steps = (list.kind === "drawn" ? list.quests : list.steps) as typeof list.steps;
+      expect(steps).toEqual(list.quests);
+      expect(steps!.map(({ goal, hint, done, reward }) => ({ goal, hint, done, reward }))).toEqual([
+        { goal: "Give 3 hugs", hint: hugHint, done: false, reward: { xp: 20 } },
+        { goal: "Thank someone new", hint: newHint, done: false, reward: { xp: 50 } },
+      ]);
+    })).toBe(websiteRead);
+  }, budgetMs);
+
+  test("past both onboardings a finished hug quest reads done with its hoggie waiting, and the kudos quest next (waits on S17)", async () => {
+    const t = await setUp(twoQuests);
+    await t.finishKudosOnboarding("bob");
+    await t.hugsTimes(10, "bob", "alice");
+    await t.sweep();
+    await t.doesEveryHugQuest("bob");
+
+    expect(await stillWaiting(["S17"], async () => {
+      const { quests } = await readOf(t, "bob");
+      if (quests.kind !== "two-quests") throw new Error(`expected the two quests, got ${quests.kind}`);
+      const [hugQuest, kudosQuest] = quests.quests;
+      expect(goalsOf(hugQuestPool)).toContain(hugQuest!.goal);
+      expect(hugQuest).toMatchObject({ side: "hug", hint: hugHint, done: true, reward: { xp: 20 }, item: "waiting", next: false, drawn: true });
+      expect(hugQuest!.progress.done).toBe(hugQuest!.progress.target);
+      expect(goalsOf(mondayQuestPool)).toContain(kudosQuest!.goal);
+      expect(kudosQuest).toMatchObject({ side: "kudos", hint: null, done: false, reward: { xp: 20 }, item: null, next: true });
+    })).toBe(websiteRead);
+  }, budgetMs);
+
+  test("a new week past both onboardings, before anything draws it, reads two quests with no row, which the website answers not-found (waits on S17)", async () => {
+    const t = await setUp(twoQuests);
+    await t.finishKudosOnboarding("bob");
+    await t.hugsTimes(10, "bob", "alice");
+    await t.sweep();
+    expect(await t.rowsOf("bob"), "this week's two quests").toHaveLength(2);
+    t.laterBy(7 * dayMs);
+
+    expect(await stillWaiting(["S17"], async () => {
+      expect((await readOf(t, "bob")).quests).toMatchObject({ kind: "two-quests", quests: [] });
+    })).toBe(websiteRead);
+  }, budgetMs);
+
+  test("HH57: with two-quests off, the website's read is the Getting started journey as before (waits on S17)", async () => {
+    const t = await setUp(mondayPath);
+    await t.thanks("bob", "alice");
+    await t.hugs("bob", "alice");
+
+    expect(await stillWaiting(["S17"], async () => {
+      expect((await readOf(t, "bob")).quests.kind).toBe("journey");
+    })).toBe(websiteRead);
   }, budgetMs);
 });

@@ -34,9 +34,12 @@ vi.mock("../messageSettings/messageSettings.ts", async (original) => ({
       "messageSettings",
       await ctx.tx.select().from(messageSettings).where(and(eq(messageSettings.member, member), eq(messageSettings.kind, kind))).orderBy(...indexOrder(messageSettings, ["member", "kind"]).orderBy()).limit(2),
     );
-    const today = unique("progressSettings", await ctx.tx.select().from(progressSettings).where(eq(progressSettings.member, member)).orderBy(...indexOrder(progressSettings, ["member"]).orderBy()).limit(2));
-    const byDefault = kind === "celebrations" ? !(today?.muteNotices ?? false) : directMessageKinds.includes(kind) ? (today?.dms ?? true) : true;
-    if (!(row?.on ?? byDefault)) return "none";
+    // Today's default, read only when the member has no explicit setting for the kind, as `row?.on ?? todaysDefaultOf(...)` does.
+    const todaysDefault = async () => {
+      const today = unique("progressSettings", await ctx.tx.select().from(progressSettings).where(eq(progressSettings.member, member)).orderBy(...indexOrder(progressSettings, ["member"]).orderBy()).limit(2));
+      return kind === "celebrations" ? !(today?.muteNotices ?? false) : directMessageKinds.includes(kind) ? (today?.dms ?? true) : true;
+    };
+    if (!(row?.on ?? (await todaysDefault()))) return "none";
     return row?.place ?? placesChosenFrom[kind][0]!;
   },
 }));
