@@ -8,13 +8,10 @@
 // those stacks.
 import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import { useTestDatabase } from "../../testing/database.ts";
-import { seeder } from "../../testing/seed.ts";
-import { createClock } from "../clock.ts";
+import { useTestBackend, type TestBackend } from "../../testing/backend.ts";
 import { toDocument } from "../db/documents.ts";
 import { jobs } from "../db/schema/service.ts";
-import type { Log } from "../log.ts";
-import { createOperations, type MutationContext } from "../operations.ts";
+import type { MutationContext, QueryContext } from "../operations.ts";
 import type { MemberId } from "../workspace/directory.ts";
 import { milestoneCatalogue } from "./milestoneCatalogue.ts";
 import {
@@ -83,18 +80,16 @@ vi.mock("../engine/awards.ts", async (importOriginal) => ({
   messagesGivenDecidedAfter: async () => world.given,
 }));
 
-const database = useTestDatabase();
-const quiet: Log = { info: () => {}, error: () => {} };
 const start = Date.parse("2026-10-13T10:00:00Z");
 const minute = 60_000;
 const alice = "m_alice" as MemberId;
 const bob = "m_bob" as MemberId;
 
-const clock = createClock({ real: () => start });
-const operations = createOperations({ pool: database.pool, clock, log: quiet, retryDelayMs: () => 1 });
-const seed = seeder(operations);
+const backend = useTestBackend({ now: start });
+let t: TestBackend;
 
 beforeEach(() => {
+  t = backend();
   world.members.length = 0;
   world.hoggieFinds.clear();
   world.pages.clear();
@@ -120,7 +115,7 @@ describe("a tier is earned once, with its item", () => {
       { member: alice, milestone: "thoughtful", tier: "bronze", at: start },
     ]);
     expect(await mutation((ctx) => recordMilestonesOf(ctx, { workspace: "T1", member: alice }, start + minute)), "a second run earns nothing").toEqual([]);
-    expect(await seed.all("milestoneTiers")).toHaveLength(2);
+    expect(await t.seed.all("milestoneTiers")).toHaveLength(2);
   });
 
   test("the hoggies tier is dated by the find that reached it, and the people tiers read the team pages only when someone is held", async () => {
@@ -130,7 +125,7 @@ describe("a tier is earned once, with its item", () => {
 
     await mutation((ctx) => recordMilestonesOf(ctx, { workspace: "T1", member: alice }, start));
 
-    expect(await seed.all("milestoneTiers")).toEqual([expect.objectContaining({ member: alice, milestone: "hoggies", tier: "bronze", at: finds[9], catalogue: milestoneCatalogue.version })]);
+    expect(await t.seed.all("milestoneTiers")).toEqual([expect.objectContaining({ member: alice, milestone: "hoggies", tier: "bronze", at: finds[9], catalogue: milestoneCatalogue.version })]);
     expect(world.pagesRead, "nobody held, so no team page is read").toEqual([]);
   });
 
@@ -178,7 +173,7 @@ describe("the backfills walk by cursor, a job a page", () => {
     expect(await pending()).toEqual([{ name: "album.milestones.recordMilestonesInWorkspace", args: { workspace: "T1", cursor: String(membersPerMilestonePage) } }]);
     await mutation((ctx) => recordMilestonesInWorkspace(ctx, { workspace: "T1", cursor: String(membersPerMilestonePage) }));
 
-    const tiered = new Set((await seed.all("milestoneTiers")).map(({ member }) => member));
+    const tiered = new Set((await t.seed.all("milestoneTiers")).map(({ member }) => member));
     expect(tiered.size, "everyone but the one sticker holder").toBe(crowd.length - 1);
     expect(tiered.has(crowd[0]!)).toBe(false);
     expect(world.pagesRead, "the workspace walk reads no team page").toEqual([]);
@@ -222,8 +217,8 @@ describe("the backfills walk by cursor, a job a page", () => {
 describe("thoughtful progress since a moment", () => {
   test("counts the tallied awards decided since, up to the next step, from what was given before", async () => {
     await gaveThoughtfully(alice, 3);
-    await seed.insert("talliedAwards", { award: "a1", everyKudos: true });
-    await seed.insert("talliedAwards", { award: "a2" });
+    await t.seed.insert("talliedAwards", { award: "a1", everyKudos: true });
+    await t.seed.insert("talliedAwards", { award: "a2" });
     world.given = [
       { created: start - minute, awards: [{ award: "a1" }], annotations: {} },
       { created: start + minute, awards: [{ award: "a2" }], annotations: { gate: { version: 1, thoughtful: true, words: 6 } } },
@@ -245,30 +240,30 @@ function member(member: MemberId, workspace: string) {
 }
 
 async function gaveThoughtfully(member: MemberId, awards: number) {
-  await seed.insert("weekTallies", { member, week: "2026-10-12", ...anEmptyWeek(), thoughtfulGiven: awards });
+  await t.seed.insert("weekTallies", { member, week: "2026-10-12", ...anEmptyWeek(), thoughtfulGiven: awards });
 }
 
 async function holds(member: MemberId, person: MemberId) {
-  await seed.insert("albumStickers", { member, person, from: "history", at: start - minute });
+  await t.seed.insert("albumStickers", { member, person, from: "history", at: start - minute });
 }
 
 function mutation<T>(handler: (ctx: MutationContext) => Promise<T>): Promise<T> {
-  return operations.mutation("test.album.milestones", handler);
+  return t.run(handler);
 }
 
-function query<T>(handler: Parameters<typeof operations.query<T>>[1]): Promise<T> {
-  return operations.query("test.album.milestones.read", handler);
+function query<T>(handler: (ctx: QueryContext) => Promise<T>): Promise<T> {
+  return t.query(handler);
 }
 
 async function pending() {
-  return operations.query("test.album.jobs", async ({ tx }) => {
+  return t.query(async ({ tx }) => {
     const rows = await tx.select().from(jobs).where(eq(jobs.state, "pending"));
     return rows.map((row) => toDocument<{ name: string; args: unknown; _creationTime: number }>(jobs, row)).toSorted((a, b) => a._creationTime - b._creationTime).map(({ name, args }) => ({ name, args }));
   });
 }
 
 async function clearJobs() {
-  await operations.mutation("test.album.clearJobs", async ({ tx }) => {
+  await t.run(async ({ tx }) => {
     await tx.delete(jobs);
   });
 }

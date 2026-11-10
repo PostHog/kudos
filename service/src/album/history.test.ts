@@ -16,6 +16,8 @@ import { type Doc } from "../db/schema/index.ts";
 import { jobs } from "../db/schema/service.ts";
 import type { MessageRef } from "../engine/messageEvent.ts";
 import type { MutationContext } from "../operations.ts";
+import type { Registry } from "../registration.ts";
+import { serviceRegistry } from "../registry.ts";
 import type { MemberId } from "../workspace/directory.ts";
 import { albumHistoryOf, awardsPerHistoryPage, hugPeoplePerHistoryPage, recordAlbumHistory, recordAlbumHistoryJob, startAlbumHistory } from "./history.ts";
 import { recordPackSticker } from "./stickers.ts";
@@ -77,7 +79,10 @@ const bob = "m_bob" as MemberId;
 const carol = "m_carol" as MemberId;
 const dana = "m_dana" as MemberId;
 
-const backend = useTestBackend({ now: start });
+// The milestones the history hands over to are proven in milestones.test.ts; run here, the workspace's walk would reach
+// S3's directory, still a stub. So this backend leaves their jobs out, and the handover stays a recorded job.
+const withoutMilestones: Registry = { ...serviceRegistry, jobs: new Map([...serviceRegistry.jobs].filter(([name]) => !name.startsWith("album.milestones."))) };
+const backend = useTestBackend({ now: start, registry: withoutMilestones });
 let t: TestBackend;
 const historyJob = recordAlbumHistoryJob.name;
 let messages = 0;
