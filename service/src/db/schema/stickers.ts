@@ -1,9 +1,9 @@
 // Generated once from convex/schema.ts by tools/rewrite/drizzle; owned by hand from here on.
-import { index, pgTable } from "drizzle-orm/pg-core";
-import { bool, creationTime, f64, i64, id, str, value, type Id } from "../columns.ts";
+import { index } from "drizzle-orm/pg-core";
+import { bool, creationTime, documentTable, f64, i64, id, type Id, str, value } from "../columns.ts";
 import { nullValued } from "../documents.ts";
 
-export const stickers = pgTable(
+export const stickers = documentTable(
   "stickers",
   {
     _id: id(),
@@ -19,7 +19,7 @@ export const stickers = pgTable(
   ],
 );
 
-export const stickerBackfills = pgTable(
+export const stickerBackfills = documentTable(
   "stickerBackfills",
   {
     _id: id(),
@@ -34,7 +34,7 @@ export const stickerBackfills = pgTable(
 );
 nullValued(stickerBackfills, ["cursor"]);
 
-export const teamPageCompletions = pgTable(
+export const teamPageCompletions = documentTable(
   "teamPageCompletions",
   {
     _id: id(),
@@ -53,7 +53,7 @@ export const teamPageCompletions = pgTable(
   ],
 );
 
-export const teamPageChecks = pgTable(
+export const teamPageChecks = documentTable(
   "teamPageChecks",
   {
     _id: id(),

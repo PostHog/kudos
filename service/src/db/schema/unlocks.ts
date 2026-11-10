@@ -1,8 +1,8 @@
 // Generated once from convex/schema.ts by tools/rewrite/drizzle; owned by hand from here on.
-import { index, pgTable } from "drizzle-orm/pg-core";
-import { bool, creationTime, f64, i64, id, str, value, type Id } from "../columns.ts";
+import { index } from "drizzle-orm/pg-core";
+import { bool, creationTime, documentTable, f64, i64, id, type Id, str, value } from "../columns.ts";
 
-export const unlocks = pgTable(
+export const unlocks = documentTable(
   "unlocks",
   {
     _id: id(),
@@ -17,7 +17,7 @@ export const unlocks = pgTable(
   ],
 );
 
-export const unlockLaunches = pgTable(
+export const unlockLaunches = documentTable(
   "unlockLaunches",
   {
     _id: id(),
@@ -31,7 +31,7 @@ export const unlockLaunches = pgTable(
   ],
 );
 
-export const previewMoments = pgTable(
+export const previewMoments = documentTable(
   "previewMoments",
   {
     _id: id(),
@@ -45,7 +45,7 @@ export const previewMoments = pgTable(
   ],
 );
 
-export const levelUps = pgTable(
+export const levelUps = documentTable(
   "levelUps",
   {
     _id: id(),
