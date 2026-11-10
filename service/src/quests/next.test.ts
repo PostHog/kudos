@@ -7,6 +7,7 @@
 // as today's code reads it; S6's xp-levels decision and S5's republish run as main has them.
 import { eq } from "drizzle-orm";
 import { describe, expect, test, vi } from "vitest";
+import { questItemKeyOf } from "../album/items/questHoggies.ts";
 import type { HugGivenEvent, KudosGivenEvent } from "../bus/events.ts";
 import { createClock } from "../clock.ts";
 import { indexOrder } from "../db/indexOrder.ts";
@@ -23,9 +24,11 @@ import { useTestDatabase } from "../../testing/database.ts";
 import { definitionsStored, offForEveryone, onForEveryone, postHogDeciding } from "../../testing/flags.ts";
 import { seeder } from "../../testing/seed.ts";
 import { stillWaiting } from "../../testing/waiting.ts";
+import { rewardKeyOf } from "./crates.ts";
 import { nextQuestOf } from "./next.ts";
 import { hugQuestPool, mondayQuestPool } from "./pool.ts";
 import { registration } from "./registration.ts";
+import type { Quest } from "./step.ts";
 import { hugLadderRowOf, twoQuestsOf } from "./twoQuests.ts";
 
 // Welcome's isWelcomed: whether the member has a welcome (by_member, unique).
@@ -122,7 +125,11 @@ async function setUp(on: string[]) {
     laterBy(dayMs);
     await hugs(name, "carol");
   };
-  return { people, thanks, hugs, hugsTimes, laterBy, sweep, read, nextOf, rowsOf, finishKudosOnboarding, doesEveryKudosQuest, doesEveryHugQuest };
+  /** The hoggie the member earned for the quest, still face down, as the Album's questFinished subscriber records it today; that subscriber is S10's and still a stub. */
+  const earnsHoggieFor = async (name: string, quest: Quest) => {
+    await seed.insert("items", { workspace: "T1", member: people[name]!, source: "hoggie", key: questItemKeyOf(rewardKeyOf(quest)), reason: { kind: "quest", quest }, earnedAt: now });
+  };
+  return { people, thanks, hugs, hugsTimes, laterBy, sweep, read, nextOf, rowsOf, earnsHoggieFor, finishKudosOnboarding, doesEveryKudosQuest, doesEveryHugQuest };
 }
 
 describe("HH55: Quests answers one next quest, the hug quest while it is unfinished, else the kudos quest, else nothing", { timeout: budgetMs * 2 }, () => {
@@ -298,6 +305,9 @@ describe("HH54 HH55: the week's two quests, the hug quest first, the next one ma
     await t.hugsTimes(10, "bob", "alice");
     await t.sweep();
     await t.doesEveryHugQuest("bob");
+    const finished = (await t.rowsOf("bob")).find(({ side }) => side === "hug");
+    expect(finished, "the drawn hug quest, finished").toMatchObject({ finished: true, quest: { kind: "weekly" } });
+    await t.earnsHoggieFor("bob", finished!.quest);
 
     expect(await stillWaiting(["S17"], async () => {
       const { quests } = await readOf(t, "bob");
