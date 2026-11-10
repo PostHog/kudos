@@ -12,6 +12,7 @@ import { z } from "zod";
 import { zv } from "../values.ts";
 import type { Doc } from "../db/schema/index.ts";
 import type { MutationContext, QueryContext } from "../operations.ts";
+import { unique } from "../db/unique.ts";
 
 export const questFinishValidator = z.strictObject({
   member: zv.id("members"),
@@ -34,8 +35,8 @@ export async function questFinishOf(ctx: QueryContext, member: MemberId, key: st
     .where(and(eq(questFinishes.member, member), eq(questFinishes.key, key)))
     .orderBy(...byMemberKey.orderBy())
     .limit(2);
-  if (rows.length > 1) throw new Error("The member has more than one finish under one key");
-  return rows[0] ? toDocument<Doc<"questFinishes">>(questFinishes, rows[0]) : null;
+  const row = unique("questFinishes", rows);
+  return row === null ? null : toDocument<Doc<"questFinishes">>(questFinishes, row);
 }
 
 export async function recordQuestFinish(ctx: MutationContext, finish: QuestFinish): Promise<"recorded" | "already recorded"> {
