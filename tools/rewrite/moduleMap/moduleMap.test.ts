@@ -275,7 +275,7 @@ describe("the bootstrap's choice of tool", () => {
 });
 
 describe("the skeleton generator", () => {
-  const modules = ["convex/skeleton/awards.ts", "convex/skeleton/caller.ts", "convex/skeleton/tangled.ts", "convex/skeleton/edges.ts", "convex/skeleton/refused.ts", "convex/skeleton/inline.ts", "convex/skeleton/shadowed.ts", "convex/skeleton/appTypes.ts", "convex/skeleton/helpers.ts", "convex/skeleton/wrapped.ts", "convex/skeleton/printed.ts", "convex/wrapping/builder.ts"];
+  const modules = ["convex/skeleton/awards.ts", "convex/skeleton/caller.ts", "convex/skeleton/tangled.ts", "convex/skeleton/edges.ts", "convex/skeleton/refused.ts", "convex/skeleton/inline.ts", "convex/skeleton/shadowed.ts", "convex/skeleton/appTypes.ts", "convex/skeleton/helpers.ts", "convex/skeleton/wrapped.ts", "convex/skeleton/printed.ts", "convex/wrapping/builder.ts", "convex/skeleton/follows.ts"];
   const program = ts.createProgram(modules.map(onDisk), compilerOptions);
   const sourceFiles = modules.map((module) => program.getSourceFile(onDisk(module))!);
   const reached = reachedByName(sourceFiles);
@@ -293,6 +293,7 @@ describe("the skeleton generator", () => {
     expect(printed.text).toContain("export async function lines(ctx: QueryContext): Promise<({ text: string } | { link: string })[]> {");
     // A brand with more than the table's name isn't an ID.
     expect(printed.text).toContain('export async function indexed(ctx: QueryContext): Promise<string & { __tableName: "members"; [key: string]: unknown }> {');
+    expect(printed.text).toContain('export async function classification(ctx: QueryContext): Promise<{ isConvexFunction: true; label: string }> {');
     expect(printed.text).not.toContain("sorted");
     expect(printed.omitted).toEqual(["sorted: names a type the checker can't resolve, so its signature can't be printed"]);
   });
@@ -344,9 +345,31 @@ describe("the skeleton generator", () => {
       expect(refused).toEqual({ refusals: ["convex/skeleton/awards.ts: its stubs import notPorted from ../notPorted.ts, which S1's service/src/skeleton/awards.ts binds otherwise"] });
     });
 
-    test("lets S1's own declaration of a name stand for the stubs' import of it", () => {
-      const own = landed(skeletonModule(program, sourceFiles[0]!, modules[0]!, reached, exists, 'type Id<T extends string> = string & { __tableName: T };\n'));
-      expect(own.text.slice(own.text.indexOf("\n// The module map's stubs"))).not.toContain("import type { Id }");
+    const over = (index: number, text: string) => skeletonModule(program, sourceFiles[index]!, modules[index]!, reached, exists, text);
+    const stubsOf = (text: string) => text.slice(text.indexOf("\n// The module map's stubs"));
+
+    test("lets S1's own declaration of a type stand for the stubs' import of it only when it says the same", () => {
+      const same = landed(over(12, 'import type { Id } from "../db/columns.ts";\n\ntype MemberRef = Id<"members">;\n'));
+      expect(stubsOf(same.text)).not.toContain("MemberRef }");
+      expect(over(12, "type MemberRef = number;\n")).toEqual({ refusals: ["convex/skeleton/follows.ts: its stubs import MemberRef from ./printed.ts, which S1's service/src/skeleton/follows.ts declares otherwise"] });
+      expect(over(0, "type Id<T extends string> = number;\n")).toEqual({ refusals: [expect.stringContaining("its stubs import Id from ../db/columns.ts, which S1's service/src/skeleton/awards.ts declares otherwise")] });
+    });
+
+    test("knows S1's jobs by their calls, however S1 imports or quotes them, and not by a comment", () => {
+      const aliased = landed(over(0, "import { mutationJob as define } from \"../jobs/define.ts\";\nexport const sweepJob = define('skeleton.awards.sweepAwards', undefined as never, undefined as never);\n"));
+      expect(stubsOf(aliased.text)).not.toContain("sweepAwards");
+      const commented = landed(over(0, '// mutationJob("skeleton.awards.sweepAwards", …) waits for its stack.\n'));
+      expect(stubsOf(commented.text)).toContain('mutationJob("skeleton.awards.sweepAwards"');
+    });
+
+    test("refuses S1's code that binds a name the module declares in another namespace, or one of several names a statement declares", () => {
+      expect(over(0, "type dayOf = string;\n")).toEqual({ refusals: ["convex/skeleton/awards.ts: S1's service/src/skeleton/awards.ts binds dayOf as a type, where the module declares it as a value"] });
+      expect(over(10, "export const first = 1;\n")).toEqual({ refusals: ["convex/skeleton/printed.ts: S1's service/src/skeleton/printed.ts binds first of first, second, which one statement declares; port them together"] });
+    });
+
+    test("takes only its own marker for where S1's code ends", () => {
+      const text = "export const keep = 1;\n// The module map's stubs of the rest of this file come later.\nexport const alsoKeep = 2;\n";
+      expect(portedPart(text)).toBe(text);
     });
   });
 

@@ -59,7 +59,7 @@ test("nothing the module map wrote is registered yet", async () => {
   // In a module S1 ported in part, only what follows S1's code is the map's.
   const wrote = (text: string) => text.slice(portedPart(text) === text ? 0 : portedPart(text).length);
   const jobsOf = async ({ servicePath, text }: (typeof modules)[number]) =>
-    Object.entries(await load(servicePath)).flatMap(([name, value]) => (isJob(value) && new RegExp(`export const ${name}\\b`).test(wrote(text)) ? [value] : []));
+    Object.entries(await load(servicePath)).flatMap(([name, value]) => (isJob(value) && wrote(text).includes(`export const ${name} =`) ? [value] : []));
   const jobs = (await Promise.all(modules.filter(({ convexPath }) => !isTest(convexPath)).map(jobsOf))).flat();
 
   expect(jobs.length).toBeGreaterThan(0);
