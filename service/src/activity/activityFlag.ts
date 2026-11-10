@@ -1,12 +1,10 @@
-// The module map's skeleton of convex/activity/activityFlag.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
-// notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
-import { type Flag } from "../analytics/flags.ts";
-import type { MemberId } from "../workspace/directory.ts";
+// The activity flag, as today's convex/activity/activityFlag.ts.
+import { memberDecision, type Flag } from "../analytics/flags.ts";
 import type { QueryContext } from "../operations.ts";
-import { notPorted } from "../notPorted.ts";
+import type { MemberId } from "../workspace/directory.ts";
 
 export const activityFlag = { key: "activity", safeDefault: false, values: [false, true] } as const satisfies Flag<boolean>;
 
 export function activityShownTo(ctx: QueryContext, member: MemberId): Promise<boolean> {
-  throw notPorted("activity.activityFlag.activityShownTo");
+  return memberDecision(ctx, activityFlag, member);
 }
