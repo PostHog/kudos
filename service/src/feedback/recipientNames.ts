@@ -1,11 +1,11 @@
-// The module map's skeleton of convex/feedback/recipientNames.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
-// notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
-import { type MemberId } from "../workspace/directory.ts";
+// How a reply names a recipient, as today's convex/feedback/recipientNames.ts.
+import { nameAndPictureOf, type MemberId } from "../workspace/directory.ts";
 import type { QueryContext } from "../operations.ts";
-import { notPorted } from "../notPorted.ts";
 
 export const mostRecipientsNamed = 10;
 
+/** The first word of the member's name, or "Your teammate" when they have none. */
 export async function firstNameOf(ctx: QueryContext, person: MemberId): Promise<string> {
-  throw notPorted("feedback.recipientNames.firstNameOf");
+  const { name } = await nameAndPictureOf(ctx, person);
+  return name?.trim().split(/\s+/)[0] || "Your teammate";
 }
