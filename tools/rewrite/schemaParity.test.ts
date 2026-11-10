@@ -51,6 +51,8 @@ describe("the Drizzle schema has every Convex table", () => {
       name: indexName(name, indexDescriptor),
       columns: [...fields, "_creationTime", "_id"].map((field) => ({ name: field, nullsFirst: !notNull.has(field) })),
     }));
+    // Convex's implicit index, which its schema export leaves out: every table has it.
+    expected.push({ name: indexName(name, "by_creation_time"), columns: ["_creationTime", "_id"].map((field) => ({ name: field, nullsFirst: false })) });
     expect(shape.indexes.sort(byName)).toEqual(expected.sort(byName));
   });
 
