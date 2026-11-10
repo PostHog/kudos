@@ -92,7 +92,7 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/feedback/normLine.test.ts | S5 | | |
 | convex/feedback/oneReply.test.ts | S5 | | |
 | convex/feedback/questsHold.test.ts | S5 | | |
-| convex/feedback/replies.test.ts | S5 | | |
+| convex/feedback/replies.test.ts | S5 | service/src/feedback/replies.test.ts | |
 | convex/feedback/republishAdmins.test.ts | S5 | | |
 | convex/feedback/teaser.test.ts | S5 | | |
 | convex/feedback/welcomeNudge.test.ts | S5 | | |
