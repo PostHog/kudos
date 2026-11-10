@@ -12,7 +12,8 @@ import { Hono } from "hono";
 
 const slackPictures = ["https://avatars.slack-edge.com", "https://secure.gravatar.com", "https://emoji.slack-edge.com", "https://a.slack-edge.com"].join(" ");
 const companyProfileImages = "https://res.cloudinary.com";
-const builtAsset = /^\/assets\/[^/]+\.[A-Za-z0-9]+$/;
+// The bundler's output, named `<name>-<hash of its content>.<extension>`: the only files a browser may keep for good.
+const builtAsset = /^\/assets\/[^/]+-[A-Za-z0-9_-]{8,}(\.[A-Za-z0-9]+)+$/;
 const immutable = "public, max-age=31536000, immutable";
 const revalidate = "public, max-age=0, must-revalidate";
 // The website's API answers its own paths; a page address never starts with them.
@@ -25,7 +26,7 @@ export interface WebsiteFilesOptions {
   postHogHost: () => string | undefined;
 }
 
-type File = { path: string; size: number; etag: string; contentType: string };
+type File = { address: string; path: string; size: number; etag: string; contentType: string };
 
 /** The website's routes: GET (and so HEAD) on every path, mounted after every other route of the app. */
 export function websiteFiles({ dir, postHogHost }: WebsiteFilesOptions): Hono {
@@ -33,10 +34,10 @@ export function websiteFiles({ dir, postHogHost }: WebsiteFilesOptions): Hono {
   const files = () => (built ??= filesIn(dir).catch((error: unknown) => ((built = undefined), Promise.reject(error))));
   const site = new Hono();
   site.get("*", async (c) => {
-    const pathname = new URL(c.req.url).pathname;
-    if (apiPaths.test(pathname)) return c.notFound();
-    const decoded = decodedPath(pathname);
+    const decoded = decodedPath(new URL(c.req.url).pathname);
     if (decoded === null) return text("Bad Request", 400);
+    // Checked on the decoded path, so no escape (`/api%2Flive`, `/%61pi`) makes an API path the page.
+    if (apiPaths.test(decoded)) return c.notFound();
     const path = decoded === "" || decoded === "/" ? "/index.html" : decoded;
     const all = await files();
     const file = all.get(path) ?? (hasFileExtension(path) ? undefined : all.get("/index.html"));
@@ -45,16 +46,14 @@ export function websiteFiles({ dir, postHogHost }: WebsiteFilesOptions): Hono {
       if (path === "/index.html" || !hasFileExtension(path)) return new Response("The website isn't built into this copy.", { status: 503, headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store", "retry-after": "5" } });
       return text("Not Found", 404);
     }
-    const cacheControl = builtAsset.test(pathname) ? immutable : cacheControlFor(path);
-    if (etagMatches(c.req.header("if-none-match"), file.etag)) return new Response(null, { status: 304, headers: { etag: file.etag, "cache-control": cacheControl } });
-    const headers = new Headers({
-      "content-type": file.contentType,
-      "content-length": String(file.size),
-      "cache-control": cacheControl,
-      etag: file.etag,
-      "x-content-type-options": "nosniff",
-    });
+    // Chosen by the file served, never the address asked: the page answered for a missing `/assets/…` is still the page.
+    const headers = new Headers({ "cache-control": cacheControlOf(file), etag: file.etag });
+    // A 304 carries the policy too, so a browser revalidating a page it holds gets today's, not the one it cached.
     if (isHtml(file.contentType)) headers.set("content-security-policy", contentSecurityPolicy(undefined, postHogHost()));
+    if (etagMatches(c.req.header("if-none-match"), file.etag)) return new Response(null, { status: 304, headers });
+    headers.set("content-type", file.contentType);
+    headers.set("content-length", String(file.size));
+    headers.set("x-content-type-options", "nosniff");
     const body = c.req.method === "HEAD" ? null : (Readable.toWeb(createReadStream(file.path)) as ReadableStream<Uint8Array>);
     return new Response(body, { status: 200, headers });
   });
@@ -74,7 +73,7 @@ async function filesIn(dir: string): Promise<Map<string, File>> {
     const path = join(entry.parentPath, entry.name);
     const address = `/${relative(dir, path).split(sep).join("/")}`;
     const [contents, { size }] = await Promise.all([readFile(path), stat(path)]);
-    files.set(address, { path, size, etag: `"${createHash("sha256").update(contents).digest("base64url")}"`, contentType: contentTypeOf(address) });
+    files.set(address, { address, path, size, etag: `"${createHash("sha256").update(contents).digest("base64url")}"`, contentType: contentTypeOf(address) });
   }
   return files;
 }
@@ -132,8 +131,9 @@ function isHashedAsset(path: string) {
   return match !== null && /[\d_-]/.test(match[1]!);
 }
 
-function cacheControlFor(path: string) {
-  return !path.toLowerCase().endsWith(".html") && isHashedAsset(path) ? immutable : revalidate;
+function cacheControlOf(file: File) {
+  if (isHtml(file.contentType)) return revalidate;
+  return builtAsset.test(file.address) || (!file.address.startsWith("/assets/") && isHashedAsset(file.address)) ? immutable : revalidate;
 }
 
 function etagMatches(ifNoneMatch: string | undefined, current: string) {
