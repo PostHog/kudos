@@ -20,6 +20,8 @@ export type LocalBackend = {
   envFile: string;
   adminKey: string;
   run: (name: string, options?: { component?: string }) => Promise<string>;
+  /** Writes a snapshot export of the deployment, its files included, to `path`, as `npx convex export` does. */
+  exportTo: (path: string) => Promise<void>;
   restart: (changes: Record<string, string>) => Promise<void>;
   stop: () => Promise<void>;
 };
@@ -72,7 +74,10 @@ export async function startLocalBackend({ instanceName, variables, environment, 
     await convex(["deploy", "--yes", "--typecheck", "disable", "--codegen", "disable", "--env-file", envFile], signal);
     const runFunction = (name: string, { component }: { component?: string } = {}) =>
       convex(["run", ...(component === undefined ? [] : ["--component", component]), name, "--env-file", envFile], signal);
-    return { cloud, site, envFile, adminKey: key, run: runFunction, restart, stop };
+    const exportTo = async (path: string) => {
+      await convex(["export", "--include-file-storage", "--path", path, "--env-file", envFile], signal);
+    };
+    return { cloud, site, envFile, adminKey: key, run: runFunction, exportTo, restart, stop };
   } catch (failure) {
     await stop();
     throw failure;

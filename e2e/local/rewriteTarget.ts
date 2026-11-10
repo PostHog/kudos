@@ -12,6 +12,7 @@ import { startServiceProcess, type ServiceProcess } from "../../service/testing/
 import { startFakes } from "../fakes/server.ts";
 import { targetLines } from "../target.ts";
 import { startEdge } from "./edge.ts";
+import { loadExport } from "./oracleCopy.ts";
 
 export type RewriteTarget = { folder: string; targetFile: string; appUrl: string; serviceUrl: string; serviceOutput: () => string; stop: () => Promise<void> };
 
@@ -25,7 +26,11 @@ export function supportedJourneys(): string[] {
     .filter((line) => line !== "" && !line.startsWith("#"));
 }
 
-export async function startRewrite(signal?: AbortSignal): Promise<RewriteTarget> {
+/**
+ * Starts the rewrite. With `load`, the path of a Convex export, the service starts empty behind the move's hold, loads
+ * the export through `/admin/load`, and answers the journeys only once the load is done.
+ */
+export async function startRewrite(signal?: AbortSignal, { load }: { load?: string } = {}): Promise<RewriteTarget> {
   const stops: (() => Promise<unknown>)[] = [];
   const stop = async () => {
     for (const step of stops.reverse()) await step().catch((failure: unknown) => console.error(failure));
@@ -39,9 +44,17 @@ export async function startRewrite(signal?: AbortSignal): Promise<RewriteTarget>
     stops.push(fakes.stop);
     const signingSecret = randomBytes(24).toString("hex");
     const testSecret = randomBytes(24).toString("hex");
-    const service = await startServiceProcess({ DATABASE_URL: postgres.url, SLACK_SIGNING_SECRET: signingSecret, HEDGEHUG_TEST_SECRET: testSecret, HEDGEHUG_COMMIT: head() });
+    const adminToken = load === undefined ? undefined : randomBytes(24).toString("hex");
+    const service = await startServiceProcess({
+      DATABASE_URL: postgres.url,
+      SLACK_SIGNING_SECRET: signingSecret,
+      HEDGEHUG_TEST_SECRET: testSecret,
+      HEDGEHUG_COMMIT: head(),
+      ...(adminToken === undefined ? {} : { HEDGEHUG_ADMIN_TOKEN: adminToken }),
+    });
     stops.push(() => stopped(service));
     await migrated(service.url, signal);
+    if (load !== undefined) await loadExport(service.url, adminToken!, load, { signal });
     const edge = await startEdge(service.url);
     stops.push(edge.stop);
     const targetFile = join(folder, "rewrite.env");
