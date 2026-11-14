@@ -9,4 +9,7 @@ export const retiredJobs: ReadonlyMap<string, Kind> = new Map<string, Kind>([
   ["_components/posthog/lib.refreshLoop", "mutation"],
   ["_components/posthog/lib.ensureRefreshLoop", "mutation"],
   ["_components/posthog/lib.refreshFlagDefinitions", "action"],
+  // S7's one-off backfill of the quest finishes from the rewards (convex/quests/finishSeed.ts): run by hand page by page,
+  // guarded per row and never scheduled by the app, so the service ports no job for it. Keyed as recovery names it.
+  ["quests.finishSeed.seedQuestFinishes", "mutation"],
 ]);

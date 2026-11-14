@@ -578,6 +578,26 @@ describe("recovery", () => {
     expect((await service.request("/anything", { token: null })).status, "done releases the hold").toBe(404);
   });
 
+  test("the quest finishes' one-off backfill is retired: a pending page is canceled and a finished one kept", async () => {
+    const service = await copy();
+    const page = { cursor: "c1", numItems: 100 };
+    await finish(
+      service,
+      zip({
+        "_scheduled_functions/documents.jsonl": jsonl([
+          scheduled("j1", "quests/finishSeed:seedQuestFinishes", { kind: "pending" }, page),
+          scheduled("j2", "quests/finishSeed.js:seedQuestFinishes", { kind: "success" }, page, { completedTime: 2_000 }),
+        ]),
+      }),
+    );
+    expect(await settled(service), "the load is done").toMatchObject({ phase: "done", error: null });
+
+    expect((await jobsNow()).map(({ _id, name, kind, state, error }) => ({ _id, name, kind, state, error }))).toStrictEqual([
+      { _id: "j1", name: "quests.finishSeed.seedQuestFinishes", kind: "mutation", state: "canceled", error: "Retired at the move" },
+      { _id: "j2", name: "quests.finishSeed.seedQuestFinishes", kind: "mutation", state: "success", error: null },
+    ]);
+  });
+
   test("a scheduled function no job or retirement maps blocks recovery, named with its count", async () => {
     const service = await copy();
     await finish(
