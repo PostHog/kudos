@@ -280,7 +280,7 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/website/setBoardVisibility.test.ts | S17 | | |
 | convex/website/settings.test.ts | S17 | | |
 | convex/website/shareableUrls.test.ts | S17 | | |
-| convex/website/signIn.test.ts | S15 | | |
+| convex/website/signIn.test.ts | S17 | service/src/website/firstEntry.test.ts | S3 S6 S8 |
 | convex/website/skillTree.test.ts | S17 | | |
 | convex/website/skillTreeCatalogue.test.ts | S17 | | |
 | convex/website/spotlight.test.ts | S16 | | |
