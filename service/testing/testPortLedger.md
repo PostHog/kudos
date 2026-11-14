@@ -143,7 +143,7 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/slack/appHome.test.ts | S17 | | |
 | convex/slack/backfill.test.ts | S4 | | |
 | convex/slack/book.test.ts | S6 | | |
-| convex/slack/cardDrawing.test.ts | S10 | | |
+| convex/slack/cardDrawing.test.ts | S10 | service/src/slack/cardDrawing.test.ts | |
 | convex/slack/celebrationsSwitch.test.ts | S5 | | |
 | convex/slack/channelJoins.test.ts | S3 | | |
 | convex/slack/channelLeaves.test.ts | S3 | | |

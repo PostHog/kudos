@@ -16,8 +16,9 @@ export const signInPath = "/_edge/sign-in";
 const cookie = "edge-email";
 const origin = "http://edge";
 const email = /^[^\s@;,"\\<>()\x00-\x1f\x7f]+@[^\s@;,"\\<>()\x00-\x1f\x7f]+$/;
-// The paths the edge lets anyone through, as the service lists them; the time seam is the rig's own.
-const isPublic = (path: string) => /^\/(healthz|slack\/(events|commands|interactivity)|admin\/load)(\/|$)|^\/(cards|testing)\//.test(path);
+// The paths the edge lets anyone through, as the service lists them; the time seam is the rig's own. `/share/` and
+// `/emoji/` are the website's static art, which Slack messages show and the card renderer fetches: no member data.
+const isPublic = (path: string) => /^\/(healthz|slack\/(events|commands|interactivity)|admin\/load)(\/|$)|^\/(cards|testing|share|emoji)\//.test(path);
 
 /**
  * The request's target as the service will route it: dot segments resolved, as the service's server resolves them,

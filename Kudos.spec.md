@@ -60,6 +60,10 @@ Peer recognition for Slack on one Convex deployment per workspace; the product r
   handler: createApp in service/src/http/app.ts
   trust: browser
   control: none — it reads no row and no secret; it answers the commit the image was built from and two states
+- route GET /cards/:id: anyone, Slack included, fetches a stored file, such as a drawn card's picture, by its ID
+  handler: cardRoutes in service/src/slack/cardRoutes.ts
+  trust: browser
+  control: none — a file's ID is a random UUID, or a loaded file's Convex storage ID, never derived from member data; it answers only that file's bytes, in a sandbox, cached for good (service/src/slack/cardPictures.test.ts)
 - route POST /testing/time: the E2E suite moves the app's clock forward, runs a cron, or runs the due jobs on a local or CI copy of the service
   handler: mountTestingTime in service/src/http/app.ts
   trust: browser

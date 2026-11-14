@@ -1,27 +1,19 @@
-// The module map's skeleton of convex/slack/cardDrawing.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
-// notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
-import { readFile } from "node:fs/promises";
-import { createRequire } from "node:module";
-import { roundHogBoldUrl, roundHogRegularUrl, roundHogSemiBoldUrl } from "@posthog/brand/fonts";
-import { Resvg } from "@resvg/resvg-js";
-import satori from "satori";
-import "wawoff2/decompress.js";
-import type { MilestoneTier } from "../album/records.ts";
-import { rarityWord, type Rarity } from "../album/hoggies/catalogue.ts";
-import { drawnCardValidator, foundDayOf, isAQuietCard, placeWordsOf, quietLineOf, type DrawnCard, type DrawnFace } from "./playerCard.ts";
+// The player card as a PNG, as today's convex/slack/cardDrawing.ts draws it: the card's art fetched, the picture drawn on
+// the renderer thread (cardRenderer.ts), and kept under the card's key only when every piece of art settled. Unlike
+// Convex, whose actions each ran apart, every card here shares the service's memory, and Resvg decodes each picture whole
+// outside the renderer's heap: a picture past a byte cap, or whose header gives sides past a ceiling, isn't drawn.
+import { rarityWord } from "../album/hoggies/catalogue.ts";
+import { drawnCardValidator, foundDayOf, isAQuietCard, placeWordsOf, quietLineOf, type DrawnCard } from "./playerCard.ts";
+import { drawnPicture, type CardArt, type CardWords } from "./cardPicture.ts";
 import { z } from "zod";
+import { fileUrlOf, storedFile } from "../db/files.ts";
 import type { ActionContext } from "../operations.ts";
-import { notPorted } from "../notPorted.ts";
+import { kept } from "./cardPictures.ts";
+import { renderedCard } from "./cardRenderer.ts";
+
+export type { CardArt } from "./cardPicture.ts";
 
 "use node";
-
-const cardSize = { width: 1200, height: 630 };
-
-export type CardArt = { face: string | null; crest: string | null; rarest: string | null; people: (string | null)[]; emojis: (string | null)[] };
-
-type Node = { type: string; props: Record<string, unknown> & { style?: Record<string, unknown>; children?: unknown } };
-
-type Child = Node | string | false | null;
 
 const artTimeoutMs = 2000;
 
@@ -29,26 +21,28 @@ const pictureTypes = new Set(["image/png", "image/jpeg", "image/gif"]);
 
 const laterStatuses = new Set([408, 429]);
 
-const ink = { page: "#1e1f23", card: "#25262b", border: "#3e424f", text: "#f3f4f6", quiet: "#aeb3c4", accent: "#ff7a45", accentInk: "#ff9a6e", track: "#3a3c44", gold: "#f5b301" };
+/** A picture's most bytes: a face, crest or emoji is a few hundred KiB at most. */
+const artMaxBytes = 2 * 1_048_576;
 
-const rarityInk: Record<Rarity, string> = { common: "#aeb3c4", uncommon: "#4ade80", rare: "#60a5fa", epic: "#c084fc", legendary: "#fb923c" };
-
-const medalInk: Record<MilestoneTier, string> = { bronze: "#d39a68", silver: "#bfc2c8", gold: "#e2b53a", diamond: "#7dd3fc" };
-
-const fontFaces = [
-  { url: roundHogRegularUrl, weight: 400 },
-  { url: roundHogSemiBoldUrl, weight: 600 },
-  { url: roundHogBoldUrl, weight: 700 },
-] as const;
+/** A picture's longest side, in pixels: one decoded at this size takes 16 MiB, and a card draws a handful. */
+const artMaxSide = 2048;
 
 export const drawnArgs = z.strictObject({ card: drawnCardValidator, key: z.string() });
-export async function drawn(ctx: ActionContext, args: z.infer<typeof drawnArgs>): Promise<null | string> {
-  throw notPorted("slack.cardDrawing.drawn");
+export async function drawn(ctx: ActionContext, { card, key }: z.infer<typeof drawnArgs>): Promise<null | string> {
+  const { art, lasting } = await artOf(card);
+  const png = await renderedCard(card, art, cardWordsOf(card));
+  const picture = await ctx.run.mutation("slack.cardDrawing.drawn.store", (stored) => storedFile(stored, png, "image/png"));
+  return lasting ? ctx.run.mutation("slack.cardPictures.kept", (keeping) => kept(keeping, { key, picture })) : ctx.run.query("slack.cardDrawing.drawn.url", (read) => fileUrlOf(read, picture));
 }
 
 export async function cardPictureOf(card: DrawnCard, art: CardArt): Promise<Uint8Array> {
-  const svg = await satori(cardTreeOf(card, art) as never, { ...cardSize, fonts: await fontsOf() });
-  return new Resvg(svg, { fitTo: { mode: "width", value: cardSize.width } }).render().asPng();
+  return drawnPicture(card, art, cardWordsOf(card));
+}
+
+/** What the picture says, written here so the renderer thread never loads the modules that write it. */
+export function cardWordsOf(card: DrawnCard): CardWords {
+  const rarest = card.hoggies?.rarest ?? null;
+  return { quiet: isAQuietCard(card), quietLine: quietLineOf(card.name), place: placeWordsOf(card.place), rarity: rarest === null ? null : rarityWord(rarest.rarity), foundDay: rarest === null ? null : foundDayOf(rarest.foundAt) };
 }
 
 export async function artOf(card: DrawnCard): Promise<{ art: CardArt; lasting: boolean }> {
@@ -73,189 +67,96 @@ async function fetchedPicture(url: string | null): Promise<Fetched> {
   try {
     const answer = await fetch(url, { signal: AbortSignal.timeout(artTimeoutMs) });
     const type = answer.headers.get("content-type")?.split(";")[0]?.trim() ?? "";
-    if (answer.ok && pictureTypes.has(type)) return { picture: `data:${type};base64,${Buffer.from(await answer.arrayBuffer()).toString("base64")}`, settled: true };
-    return { picture: null, settled: answer.status < 500 && !laterStatuses.has(answer.status) };
+    if (!answer.ok || !pictureTypes.has(type)) return { picture: null, settled: answer.status < 500 && !laterStatuses.has(answer.status) };
+    const bytes = await bytesUpTo(answer, artMaxBytes);
+    const sides = bytes === null ? null : sidesOf(bytes, type);
+    if (bytes === null || sides === null || sides.width > artMaxSide || sides.height > artMaxSide) return { picture: null, settled: true };
+    return { picture: `data:${type};base64,${Buffer.from(bytes).toString("base64")}`, settled: true };
   } catch {
     return { picture: null, settled: false };
   }
 }
 
-type Woff2Decompress = (woff2: Uint8Array) => Promise<Uint8Array>;
-
-const decompress = createRequire(import.meta.url)("wawoff2/decompress.js") as Woff2Decompress;
-
-type Font = { name: string; data: Buffer; weight: 400 | 600 | 700; style: "normal" };
-
-let fonts: Promise<Font[]> | undefined;
-
-function fontsOf() {
-  fonts ??= decodedFonts().catch((error: unknown) => {
-    fonts = undefined;
-    throw error;
-  });
-  return fonts;
-}
-
-async function decodedFonts(): Promise<Font[]> {
-  const decoded: Font[] = [];
-  for (const { url, weight } of fontFaces) {
-    const woff2 = await readFile(new URL(url));
-    decoded.push({ name: "RoundHog", data: Buffer.from(await decompress(woff2)), weight, style: "normal" });
+/** The answer's body, or null once it would pass `max` bytes, read no further than that. */
+async function bytesUpTo(answer: Response, max: number): Promise<Uint8Array | null> {
+  if (Number(answer.headers.get("content-length") ?? 0) > max) {
+    await answer.body?.cancel();
+    return null;
   }
-  return decoded;
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for await (const chunk of answer.body ?? []) {
+    size += chunk.byteLength;
+    if (size > max) {
+      await answer.body?.cancel().catch(() => undefined);
+      return null;
+    }
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
 }
 
-function h(type: string, style: Record<string, unknown>, ...children: Child[]): Node {
-  const shown = children.filter((child): child is Node | string => child !== false && child !== null);
-  return { type, props: { style: { display: "flex", boxSizing: "border-box", ...style }, children: shown.length === 1 ? shown[0] : shown } };
-}
-
-function picture(src: string, size: number, style: Record<string, unknown> = {}): Node {
-  return { type: "img", props: { src, width: size, height: size, style: { width: size, height: size, ...style } } };
-}
-
-function cardTreeOf(card: DrawnCard, art: CardArt): Node {
-  return h(
-    "div",
-    { width: cardSize.width, height: cardSize.height, padding: 40, gap: 32, background: ink.page, color: ink.text, fontFamily: "RoundHog" },
-    playerSideOf(card, art),
-    card.hoggies === null ? null : rarestSideOf(card.hoggies.rarest, art),
-  );
-}
-
-function playerSideOf(card: DrawnCard, art: CardArt): Node {
-  return h(
-    "div",
-    { flexDirection: "column", flexGrow: card.hoggies === null ? 1 : 0, width: card.hoggies === null ? undefined : 720, padding: 36, gap: 24, justifyContent: "space-between", borderRadius: 32, border: `2px solid ${ink.border}`, backgroundColor: ink.card, backgroundImage: "radial-gradient(circle at 0% 0%, rgba(255,122,69,0.16), rgba(255,122,69,0) 60%)" },
-    h("div", { alignItems: "center", gap: 32 }, ringOf(card, art), whoOf(card, art)),
-    rankStripOf(card),
-    isAQuietCard(card) ? quietLineIn(card) : statsOf(card, art),
-  );
-}
-
-function ringOf({ face, level }: DrawnCard, art: CardArt): Node {
-  const size = 176;
-  const radius = 80;
-  const around = 2 * Math.PI * radius;
-  const ring = {
-    type: "svg",
-    props: {
-      width: size,
-      height: size,
-      viewBox: `0 0 ${size} ${size}`,
-      style: { position: "absolute", top: 0, left: 0 },
-      children: [
-        { type: "circle", props: { cx: size / 2, cy: size / 2, r: radius, fill: "none", stroke: ink.track, strokeWidth: 12 } },
-        level !== null && { type: "circle", props: { cx: size / 2, cy: size / 2, r: radius, fill: "none", stroke: ink.accent, strokeWidth: 12, strokeLinecap: "round", strokeDasharray: `${around * Math.max(0.03, level.share)} ${around}`, transform: `rotate(-90 ${size / 2} ${size / 2})` } },
-      ].filter(Boolean),
-    },
+/**
+ * A GIF's sides: its screen's, widened to reach every frame, since a decoder draws each frame at the frame's own size
+ * wherever its screen says less. Null when it holds no frame or its blocks don't read as a GIF's.
+ */
+function gifSidesOf(bytes: Uint8Array, view: DataView, text: (from: number, to: number) => string): { width: number; height: number } | null {
+  if (bytes.byteLength < 13 || !["GIF87a", "GIF89a"].includes(text(0, 6))) return null;
+  let width = view.getUint16(6, true);
+  let height = view.getUint16(8, true);
+  const tableSize = (packed: number) => (packed & 0x80 ? 3 * 2 ** ((packed & 0x07) + 1) : 0);
+  /** Where the sub-blocks starting at `at` end, past their zero-length terminator; null when they run off the end. */
+  const pastSubBlocks = (at: number): number | null => {
+    while (at < bytes.byteLength) {
+      const size = bytes[at]!;
+      if (size === 0) return at + 1;
+      at += 1 + size;
+    }
+    return null;
   };
-  return h(
-    "div",
-    { position: "relative", width: size, height: size, alignItems: "center", justifyContent: "center", flexShrink: 0 },
-    ring as Node,
-    faceOf(face, art.face, 132),
-    level === null ? null : h("div", { position: "absolute", bottom: -4, alignItems: "baseline", gap: 4, padding: "4px 16px", borderRadius: 999, backgroundColor: ink.accent, color: "#141414", border: `4px solid ${ink.card}` }, h("span", { fontSize: 20, fontWeight: 700 }, "LV"), h("span", { fontSize: 32, fontWeight: 700 }, String(level.level))),
-  );
+  let at: number | null = 13 + tableSize(bytes[10]!);
+  let frames = 0;
+  while (at !== null && at < bytes.byteLength) {
+    const block = bytes[at]!;
+    if (block === 0x3b) break;
+    if (block === 0x21) {
+      at = at + 2 <= bytes.byteLength ? pastSubBlocks(at + 2) : null;
+      continue;
+    }
+    if (block !== 0x2c || at + 10 > bytes.byteLength) return null;
+    frames += 1;
+    width = Math.max(width, view.getUint16(at + 1, true) + view.getUint16(at + 5, true));
+    height = Math.max(height, view.getUint16(at + 3, true) + view.getUint16(at + 7, true));
+    at = at + 10 + tableSize(bytes[at + 9]!) + 1;
+    at = at <= bytes.byteLength ? pastSubBlocks(at) : null;
+  }
+  return at === null || frames === 0 ? null : { width, height };
 }
 
-function faceOf(face: DrawnFace, drawn: string | null, size: number, style: Record<string, unknown> = {}): Node {
-  if (drawn !== null) return picture(drawn, size, { borderRadius: size / 2, objectFit: "cover", ...style });
-  return h("div", { width: size, height: size, borderRadius: size / 2, alignItems: "center", justifyContent: "center", backgroundColor: "#33353d", color: ink.quiet, fontSize: Math.round(size * 0.36), fontWeight: 700, ...style }, face.initials);
-}
-
-function whoOf({ name, team, level }: DrawnCard, art: CardArt): Node {
-  return h(
-    "div",
-    { flexDirection: "column", gap: 10, flexGrow: 1, minWidth: 0 },
-    h("div", { fontSize: 54, fontWeight: 700, letterSpacing: -1.5, lineHeight: 1.05, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, name),
-    team === null ? h("div", { fontSize: 26, color: ink.quiet }, "No team yet") : h("div", { alignItems: "center", gap: 12, fontSize: 30, fontWeight: 600 }, art.crest === null ? null : picture(art.crest, 40), team.name),
-    level === null ? null : h("div", { alignItems: "baseline", gap: 10, fontSize: 28 }, h("span", { fontWeight: 700 }, `${level.xp.toLocaleString("en-GB")} XP`), h("span", { color: ink.quiet }, `· level ${level.level}`)),
-  );
-}
-
-function rankStripOf({ place }: DrawnCard): Node {
-  const ranked = place !== null;
-  return h(
-    "div",
-    { alignItems: "center", gap: 16, padding: "16px 22px", borderRadius: 18, fontSize: 28, border: `2px solid ${ranked ? "rgba(245,179,1,0.5)" : "rgba(255,122,69,0.3)"}`, backgroundColor: ranked ? "rgba(245,179,1,0.12)" : "rgba(255,122,69,0.1)" },
-    iconOf(ranked ? crown : heart, ranked ? ink.gold : ink.accentInk),
-    h("span", { fontWeight: 700 }, placeWordsOf(place)),
-    ranked ? h("span", { color: ink.quiet }, `· ${place.kudosGiven} kudos`) : null,
-  );
-}
-
-const crown = "M3 18h18l-1.5-10-5 4L12 5l-2.5 7-5-4z";
-
-const heart = "M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z";
-
-function iconOf(path: string, colour: string): Node {
-  return {
-    type: "svg",
-    props: { width: 34, height: 34, viewBox: "0 0 24 24", children: { type: "path", props: { d: path, fill: "none", stroke: colour, strokeWidth: 2, strokeLinejoin: "round" } } },
-  };
-}
-
-function statsOf({ hoggies, people, emojis, medals }: DrawnCard, art: CardArt): Node {
-  const cells: Child[][] = [
-    ...(hoggies === null ? [] : [[h("div", { flexDirection: "column", gap: 10, flexGrow: 1 }, figureOf(hoggies.found, hoggies.total, "hoggies found"), barOf(hoggies.total === 0 ? 0 : hoggies.found / hoggies.total))]]),
-    [stackOf(people.newest.map((face, index) => faceOf(face, art.people[index] ?? null, 38, stacked(index)))), figureOf(people.held, null, people.held === 1 ? "person" : "people")],
-    [stackOf(art.emojis.map((drawn, index) => (drawn === null ? discOf("#4a4d57", index) : picture(drawn, 38, stacked(index))))), figureOf(emojis.count, null, emojis.count === 1 ? "emoji" : "emojis")],
-    [stackOf(medals.best.map((tier, index) => discOf(medalInk[tier], index))), figureOf(medals.count, null, medals.count === 1 ? "medal" : "medals")],
-  ];
-  const line = `1px solid ${ink.border}`;
-  const rows = [cells.slice(0, 2), cells.slice(2)];
-  return h("div", { flexDirection: "column" }, ...rows.map((row, rowIndex) => h("div", { borderBottom: rowIndex === 0 ? line : undefined }, ...row.map((cell, index) => statCellOf(row.length === 1 ? { width: "100%" } : index === 0 ? { borderRight: line } : {}, ...cell)))));
-}
-
-function stacked(index: number): Record<string, unknown> {
-  return { border: `3px solid ${ink.card}`, marginLeft: index === 0 ? 0 : -8 };
-}
-
-function discOf(colour: string, index: number): Node {
-  return h("div", { width: 38, height: 38, borderRadius: 19, backgroundColor: colour, ...stacked(index) });
-}
-
-function statCellOf(edge: Record<string, unknown>, ...children: Child[]): Node {
-  return h("div", { width: "50%", alignItems: "center", gap: 14, padding: "16px 20px", ...edge }, ...children);
-}
-
-function figureOf(figure: number, of: number | null, label: string): Node {
-  return h(
-    "div",
-    { alignItems: "baseline", gap: 10 },
-    h("span", { fontSize: 44, fontWeight: 700, letterSpacing: -1 }, String(figure)),
-    of === null ? null : h("span", { fontSize: 22, fontWeight: 600, color: ink.quiet, marginLeft: -8 }, `/${of}`),
-    h("span", { fontSize: 24, color: ink.quiet }, label),
-  );
-}
-
-function barOf(share: number): Node {
-  return h("div", { height: 12, borderRadius: 6, backgroundColor: ink.track, width: "100%" }, h("div", { height: 12, borderRadius: 6, backgroundColor: ink.accent, width: `${Math.max(3, Math.round(Math.min(1, share) * 100))}%` }));
-}
-
-function stackOf(shown: Node[]): Node {
-  if (shown.length === 0) return h("div", { width: 30, height: 30, borderRadius: 15, border: `3px dashed ${ink.border}` });
-  return h("div", {}, ...shown);
-}
-
-function quietLineIn({ name }: DrawnCard): Node {
-  return h("div", { padding: "22px 4px", fontSize: 28, lineHeight: 1.3, color: ink.quiet, borderTop: `1px solid ${ink.border}` }, quietLineOf(name));
-}
-
-function rarestSideOf(rarest: NonNullable<DrawnCard["hoggies"]>["rarest"], art: CardArt): Node {
-  const colour = rarest === null ? ink.border : rarityInk[rarest.rarity];
-  return h(
-    "div",
-    { flexDirection: "column", flexGrow: 1, alignItems: "center", justifyContent: "center", gap: 16, padding: 32, borderRadius: 32, border: `2px solid ${colour}`, backgroundColor: ink.card, backgroundImage: `radial-gradient(circle at 50% 30%, ${colour}33, ${colour}00 65%)` },
-    h(
-      "div",
-      { width: 236, height: 236, borderRadius: 118, alignItems: "center", justifyContent: "center", border: `6px solid ${colour}`, backgroundColor: "#1a1b1f", color: ink.quiet, fontSize: 96, fontWeight: 700 },
-      rarest === null || art.rarest === null ? "?" : picture(art.rarest, 196),
-    ),
-    h("div", { fontSize: 22, fontWeight: 700, letterSpacing: 2.5, color: ink.accentInk }, "RAREST FIND"),
-    rarest === null ? h("div", { fontSize: 28, color: ink.quiet, textAlign: "center" }, "No hoggie found yet.") : h("div", { fontSize: 46, fontWeight: 700, letterSpacing: -1, textAlign: "center" }, rarest.name),
-    rarest === null ? null : h("div", { fontSize: 24, fontWeight: 700, letterSpacing: 2, color: colour }, rarityWord(rarest.rarity).toUpperCase()),
-    rarest === null ? null : h("div", { fontSize: 22, color: ink.quiet }, `Found ${foundDayOf(rarest.foundAt)}`),
-  );
+/** A PNG's, JPEG's or GIF's sides as its header gives them, or null when the header isn't its type's. */
+function sidesOf(bytes: Uint8Array, type: string): { width: number; height: number } | null {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const text = (from: number, to: number) => String.fromCharCode(...bytes.subarray(from, to));
+  if (type === "image/png") {
+    if (bytes.byteLength < 24 || view.getUint32(0) !== 0x89504e47 || view.getUint32(4) !== 0x0d0a1a0a || text(12, 16) !== "IHDR") return null;
+    return { width: view.getUint32(16), height: view.getUint32(20) };
+  }
+  if (type === "image/gif") return gifSidesOf(bytes, view, text);
+  if (bytes.byteLength < 4 || view.getUint16(0) !== 0xffd8) return null;
+  let at = 2;
+  while (at + 9 <= bytes.byteLength) {
+    if (bytes[at] !== 0xff) return null;
+    const marker = bytes[at + 1]!;
+    if (marker === 0xff) {
+      at += 1;
+      continue;
+    }
+    if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) return { width: view.getUint16(at + 7), height: view.getUint16(at + 5) };
+    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd8)) {
+      at += 2;
+      continue;
+    }
+    at += 2 + view.getUint16(at + 2);
+  }
+  return null;
 }
