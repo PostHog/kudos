@@ -900,6 +900,10 @@
     {
       "name": "hug ladder",
       "definition": "the three onboarding hug quests hugs-3, hugs-5 and hugs-10 (Give 3, 5 and 10 hugs), active together from a member's first hug under two-quests and counting only the hugs given from then on (HH46)"
+    },
+    {
+      "name": "delivery",
+      "definition": "Sending what the app produced for Slack (a private reply, an indicator, a DM, a post) by a job that tries at most three times and sends at most once"
     }
   ],
   "retired": [
