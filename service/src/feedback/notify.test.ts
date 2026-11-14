@@ -51,7 +51,7 @@ describe("a notice that waits for no follower", () => {
     expect(await t.query((ctx) => followersAwaitedUntil(ctx, { member: alice, notification }))).toBeNull();
   });
 
-  waitsOn(["S6"], "a level-up waits for what follows it only while the level-up is recorded and not yet earned", async () => {
+  test("a level-up waits for what follows it only while the level-up is recorded and not yet earned", async () => {
     const t = backend();
     const alice = await member(t);
 
@@ -148,7 +148,7 @@ describe("a feature that isn't open yet", () => {
     expect(await replyTo()).toEqual({ lines: null, shownToUnknownViewer: null });
   });
 
-  waitsOn(["S6"], "what is told about it waits until it is open, or until it ships", async () => {
+  test("what is told about it waits until it is open, or until it ships", async () => {
     const t = backend();
     await flagsOn(t, "xp-levels", "unlocks", "skill-tree");
     const alice = await member(t);

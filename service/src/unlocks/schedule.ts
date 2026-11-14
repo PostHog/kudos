@@ -1,7 +1,7 @@
-// The module map's skeleton of convex/unlocks/schedule.ts, written by tools/rewrite/moduleMap/skeleton.ts. Its stubs throw
-// notPorted until the stack that owns this module ports their bodies; the rest is today's code through the codemod.
+// The unlock schedule: each feature, the level that makes it ready, and the flag it ships with.
+// Today's convex/unlocks/schedule.ts over the service's flags.
 import { achievementsFlag } from "../achievements/achievementsFlag.ts";
-import type { Flag } from "../analytics/flags.ts";
+import { memberDecision, workspaceDecision, type Flag } from "../analytics/flags.ts";
 import { everyoneBoardFlag } from "../leaderboard/flag.ts";
 import { questsFlag } from "../quests/questsFlag.ts";
 import { skillTreeLevel } from "../progression/levels.ts";
@@ -10,7 +10,6 @@ import { coinsFlag } from "../wallet/coinsFlag.ts";
 import type { MemberId } from "../workspace/directory.ts";
 import type { Feature } from "./feature.ts";
 import type { MutationContext, QueryContext } from "../operations.ts";
-import { notPorted } from "../notPorted.ts";
 
 type ShipFlag = Flag<boolean>;
 
@@ -53,9 +52,17 @@ export function namedFor(entry: ScheduledFeature, { storeShown }: StoreNaming): 
 }
 
 export function shippedIn(ctx: QueryContext | MutationContext, workspace: string): Promise<ScheduledFeature[]> {
-  throw notPorted("unlocks.schedule.shippedIn");
+  return shippedBy((flag) => workspaceDecision(ctx, flag, workspace), schedule.features);
 }
 
 export function shippedTo(ctx: QueryContext | MutationContext, member: MemberId, among: readonly ScheduledFeature[] = schedule.features): Promise<ScheduledFeature[]> {
-  throw notPorted("unlocks.schedule.shippedTo");
+  return shippedBy((flag) => memberDecision(ctx, flag, member), among);
+}
+
+async function shippedBy(decides: (flag: ShipFlag) => Promise<boolean>, among: readonly ScheduledFeature[]) {
+  const shipped: ScheduledFeature[] = [];
+  for (const entry of among) {
+    if (await decides(entry.shipsWith)) shipped.push(entry);
+  }
+  return shipped;
 }

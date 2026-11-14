@@ -16,6 +16,7 @@ import { insertReward, rewardOf, type AppliedReward, type RewardRecord, type Sta
 import { perksPayingIn } from "./skillTree.ts";
 import { balanceOf, credit, wholeCoins } from "../wallet/wallet.ts";
 import { indexOrder } from "../db/indexOrder.ts";
+import { unique } from "../db/unique.ts";
 import { memberProgress } from "../db/schema/index.ts";
 import { z } from "zod";
 import { zv } from "../values.ts";
@@ -151,12 +152,13 @@ const byMember = indexOrder(memberProgress, ["member"]);
 
 /** The member's one progress row, or `null`; two fail, as `.unique()` did. */
 async function progressRow(ctx: QueryContext, member: MemberId) {
-  const rows = await ctx.tx
-    .select({ _id: memberProgress._id, xp: memberProgress.xp, pointsSpent: memberProgress.pointsSpent })
-    .from(memberProgress)
-    .where(eq(memberProgress.member, member))
-    .orderBy(...byMember.orderBy())
-    .limit(2);
-  if (rows.length > 1) throw new Error("The member has more than one progress row");
-  return rows[0] ?? null;
+  return unique(
+    "memberProgress",
+    await ctx.tx
+      .select({ _id: memberProgress._id, xp: memberProgress.xp, pointsSpent: memberProgress.pointsSpent })
+      .from(memberProgress)
+      .where(eq(memberProgress.member, member))
+      .orderBy(...byMember.orderBy())
+      .limit(2),
+  );
 }

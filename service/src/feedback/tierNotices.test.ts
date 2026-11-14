@@ -162,8 +162,7 @@ describe("a replayed batch", () => {
     expect(postedTo(t).toSorted()).toEqual(["C_NEWS", "U_ALICE"]);
   });
 
-  waitsOn(
-    ["S6"],
+  test(
     "walks the workspace's members a hundred at a time",
     async () => {
       const t = backend();
