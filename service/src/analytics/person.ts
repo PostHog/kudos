@@ -10,7 +10,7 @@ import { analyticsIds, analyticsOutbox, type Doc } from "../db/schema/index.ts";
 import { unique } from "../db/unique.ts";
 import type { MutationContext, QueryContext } from "../operations.ts";
 import { captureSettings } from "./capture.ts";
-import { followMembersJob } from "./person.map.ts";
+import { catchUpJob, followMembersJob, followPeopleJob } from "./person.map.ts";
 
 type MemberId = Id<"members">;
 type Identity = Doc<"analyticsIds">;
@@ -56,6 +56,19 @@ export async function followMembersLater(ctx: MutationContext, members: MemberId
   for (let start = 0; start < identified.length; start += peopleFollowedPerJob) {
     await ctx.jobs.enqueue(followMembersJob, { members: identified.slice(start, start + peopleFollowedPerJob) });
   }
+}
+
+/** Follows the people whose user groups changed: their profiles are read and sent again, 200 to a job, while capture is on. */
+export async function followPeopleLater(ctx: MutationContext, workspace: string, users: string[]): Promise<void> {
+  if (captureSettings() === null) return;
+  for (let start = 0; start < users.length; start += peopleFollowedPerJob) {
+    await ctx.jobs.enqueue(followPeopleJob, { workspace, users: users.slice(start, start + peopleFollowedPerJob) });
+  }
+}
+
+/** Asks for one catch-up of every member's profile, as a renamed user group handle needs. */
+export function requestCatchUp(ctx: MutationContext): Promise<string> {
+  return ctx.jobs.enqueue(catchUpJob, {});
 }
 
 /** The rows left once stale person events are deleted: those whose profile changed again after they were recorded. */
@@ -131,4 +144,4 @@ async function identityWithAnalyticsId(ctx: QueryContext, analyticsId: string): 
   return row ? toDocument<Identity>(analyticsIds, row) : null;
 }
 
-export { catchUp, catchUpArgs, catchUpJob, followMembers, followMembersArgs, followMembersJob, followPeople, followPeopleArgs, followPeopleJob, followPeopleLater, identifyNewPeople, identifyNewPeopleArgs, identifyNewPeopleJob, type PersonProfile, profileKeys, requestCatchUp } from "./person.map.ts";
+export { catchUp, catchUpArgs, catchUpJob, followMembers, followMembersArgs, followMembersJob, followPeople, followPeopleArgs, followPeopleJob, identifyNewPeople, identifyNewPeopleArgs, identifyNewPeopleJob, type PersonProfile, profileKeys } from "./person.map.ts";
