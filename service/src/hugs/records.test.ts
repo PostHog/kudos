@@ -12,6 +12,8 @@ import {
   hugOf,
   hugsGivenByDecision,
   hugsGivenOn,
+  hugsInCreationOrder,
+  hugsInWorkspace,
   hugsOnTheMessageAsOf,
   hugsReceivedByDecision,
   hugsReceivedSnapshot,
@@ -19,11 +21,13 @@ import {
   insertPaid,
   isPaid,
   newestHugsPaidTo,
+  paidHugsInCreationOrder,
   peopleHuggedIn,
   type Hug,
   type NewHug,
 } from "./records.ts";
-import { countHugGiven, hugsOnTheMessage } from "./weeks.ts";
+import { countHugGiven, hugWeeksSince, hugsOnTheMessage } from "./weeks.ts";
+import type { PageOptions } from "../db/page.ts";
 import { hugWeeks } from "../db/schema/index.ts";
 import { toDocument } from "../db/documents.ts";
 import type { MutationContext } from "../operations.ts";
@@ -247,5 +251,60 @@ describe("paying a hug's people again", () => {
 
     expect(await t.query((ctx) => newestHugsPaidTo(ctx, gone, 0, 5))).toEqual([]);
     expect((await t.published()).filter(({ type }) => type === "hugReceived")).toEqual([]);
+  });
+});
+
+describe("the paged reads", () => {
+  async function everyPage<Item>(read: (page: PageOptions) => Promise<{ page: Item[]; isDone: boolean; continueCursor: string }>, numItems: number) {
+    const pages: Item[][] = [];
+    for (let cursor: string | null = null; ; ) {
+      const { page, isDone, continueCursor } = await read({ cursor, numItems });
+      pages.push(page);
+      if (isDone) return pages;
+      cursor = continueCursor;
+    }
+  }
+
+  test("a workspace's hugs page on their message, and every hug pages in creation order", async () => {
+    const t = backend();
+    await t.run(async (ctx) => {
+      for (const message of ["1.3", "1.1", "1.2"]) await insertHug(ctx, hugBy(bob, message));
+      await insertHug(ctx, hugBy(bob, "1.0", { workspace: "T2" }));
+    });
+
+    const inT1 = await everyPage((page) => t.query((ctx) => hugsInWorkspace(ctx, "T1", page)), 2);
+    expect(inT1.map((page) => page.map(({ message }) => message))).toEqual([["1.1", "1.2"], ["1.3"]]);
+    const created = await everyPage((page) => t.query((ctx) => hugsInCreationOrder(ctx, page)), 3);
+    expect(created.map((page) => page.map(({ message }) => message))).toEqual([["1.3", "1.1", "1.2"], ["1.0"]]);
+  });
+
+  test("the people hugs paid page in creation order, with their hug, and a hug that is gone leaves its row out", async () => {
+    const t = backend();
+    const hugIds = await t.run(async (ctx) => {
+      const first = await given(ctx, hugBy(bob, "1.1"));
+      const second = await given(ctx, hugBy(carol, "1.2"));
+      await insertPaid(ctx, first, alice);
+      await insertPaid(ctx, second, alice);
+      await insertPaid(ctx, first, carol);
+      return { first: first._id, second: second._id };
+    });
+    await t.seed.delete("hugs", hugIds.second);
+
+    const pages = await everyPage((page) => t.query((ctx) => paidHugsInCreationOrder(ctx, page)), 2);
+    expect(pages.map((page) => page.map(({ hug, person }) => [hug.message, person]))).toEqual([[["1.1", alice]], [["1.1", carol]]]);
+  });
+
+  test("the hug weeks since a Monday page in week order, and say where the next page starts", async () => {
+    const t = backend();
+    await t.run(async (ctx) => {
+      for (const [giver, day] of [[bob, "2026-10-19"], [carol, "2026-10-05"], [carol, "2026-10-13"], [alice, "2026-10-26"]] as const)
+        await countHugGiven(ctx, { workspace: "T1", conversation: "C1", message: "1.1", giver, day });
+    });
+
+    const first = await t.query((ctx) => hugWeeksSince(ctx, "2026-10-12", { cursor: null, numItems: 2 }));
+    expect(first.weeks.map(({ member, week }) => [member, week])).toEqual([[carol, "2026-10-12"], [bob, "2026-10-19"]]);
+    expect(first.next).not.toBeNull();
+    const rest = await t.query((ctx) => hugWeeksSince(ctx, "2026-10-12", { cursor: first.next, numItems: 2 }));
+    expect(rest).toEqual({ weeks: [expect.objectContaining({ member: alice, week: "2026-10-26" })], next: null });
   });
 });
