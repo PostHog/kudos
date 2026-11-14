@@ -3,46 +3,53 @@
 // sections (S17), a kudos given by the saved emoji (S4) and a Slack click carrying the command (S4) reach other stacks'
 // bodies, and join this file through the test-port ledger's waiting column.
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { useTestDatabase } from "../../testing/database.ts";
-import { offForEveryone, onForEveryone, postHogDeciding } from "../../testing/flags.ts";
-import { workspaceBackend, type WorkspaceBackend } from "../../testing/workspaceBackend.ts";
+import { useTestBackend, type TestBackend } from "../../testing/backend.ts";
+import type { FlagDefinition } from "../../testing/fakePostHog.ts";
+import { definitionsStored, offForEveryone, onForEveryone, postHogDeciding } from "../../testing/flags.ts";
 import { analyticsIdOf } from "../analytics/person.ts";
 import type { MemberId } from "./directory.ts";
 import { changeWorkspaceSettings, workspaceSettingsPartOf, workspaceSettingsShownTo, type EditableSettings } from "./workspaceSettings.ts";
 
-const database = useTestDatabase();
 const now = new Date("2026-10-17T10:00:00Z").getTime();
 const workspaceSettings = "workspace-settings";
 const maintainer = "U_MAINTAINER";
 
 const defaults = { baseAllowance: 3, kudosEmoji: "taco", kudosEmojiImage: null, hugBudget: 10 };
 
-let t: WorkspaceBackend;
+const backend = useTestBackend({ now });
+let t: TestBackend;
 
 beforeEach(() => {
   vi.stubEnv("KUDOS_EMOJI", "");
   vi.stubEnv("KUDOS_MAINTAINER", maintainer);
   postHogDeciding("sandbox");
-  t = workspaceBackend(database, now);
+  t = backend();
 });
 
 afterEach(() => {
   vi.unstubAllEnvs();
-  vi.unstubAllGlobals();
 });
 
-const workspaceSettingsOn = () => t.flags(onForEveryone(workspaceSettings));
-const workspaceSettingsOff = () => t.flags(offForEveryone(workspaceSettings));
+// The directory's member row for `user` in T1, as Slack's events would keep it.
+const memberRow = (user: string, fields: { admin?: boolean; name?: string; kind?: "member" | "bot" | "not-a-member" } = {}) =>
+  t.seed.insert("members", { workspace: "T1", user, kind: "member", asOf: 0, ...fields }) as Promise<MemberId>;
+
+// Flag definitions stored as PostHog would serve them.
+const flags = (...definitions: FlagDefinition[]) => definitionsStored(t.operations, ...definitions);
+
+
+const workspaceSettingsOn = () => flags(onForEveryone(workspaceSettings));
+const workspaceSettingsOff = () => flags(offForEveryone(workspaceSettings));
 
 // The website's read: the workspace part only for the member it is shown to, and the command's outcome.
 async function aTeammate(user: string, { admin = false } = {}) {
-  const member: MemberId = await t.member(user, { name: user, admin });
+  const member: MemberId = await memberRow(user, { name: user, admin });
   // Signing in gives a member their analytics ID, as today's signed-in session did, so the read decides for them.
-  await t.mutation((ctx) => analyticsIdOf(ctx, member));
+  await t.run((ctx) => analyticsIdOf(ctx, member));
   return {
     member,
     workspacePart: () => t.query(async (ctx) => ((await workspaceSettingsShownTo(ctx, member)) ? workspaceSettingsPartOf(ctx, "T1") : undefined)),
-    save: (settings: EditableSettings) => t.mutation((ctx) => changeWorkspaceSettings(ctx, "T1", member, settings)),
+    save: (settings: EditableSettings) => t.run((ctx) => changeWorkspaceSettings(ctx, "T1", member, settings)),
   };
 }
 

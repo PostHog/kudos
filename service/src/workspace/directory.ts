@@ -6,7 +6,10 @@ import { ReportableError } from "../analytics/exceptions.ts";
 import { toDocument } from "../db/documents.ts";
 import { indexOrder } from "../db/indexOrder.ts";
 import { members } from "../db/schema/index.ts";
-import { rowById, uniqueRow } from "./rows.ts";
+import { insertRow, patchRow, replaceRow, rowById, uniqueRow } from "./rows.ts";
+import { followMembersLater } from "../analytics/person.ts";
+import { keepCompanyFacesLater } from "../companyProfiles/storedFaces.ts";
+import { reconcileMember, reconcileUser } from "../groups/reconcile.ts";
 import type { ChatUserId } from "../engine/messageEvent.ts";
 import { directoryEntryValidator } from "./directoryEntry.ts";
 import { memberProfileFieldNames, memberProfileFields, type MemberProfile } from "./memberProfile.ts";
@@ -107,26 +110,94 @@ export type DirectoryRecord = z.infer<z.ZodObject<typeof directoryRecordArgs>>;
 
 export const fillEntryArgs = z.strictObject(directoryRecordArgs);
 export async function fillEntry(ctx: MutationContext, args: z.infer<typeof fillEntryArgs>): Promise<void> {
-  throw notPorted("workspace.directory.fillEntry");
+  await recordIfUnknown(ctx, args);
 }
 export const fillEntryJob = mutationJob("workspace.directory.fillEntry", fillEntryArgs, fillEntry);
 
 export async function recordIfUnknown(ctx: MutationContext, directoryRecord: DirectoryRecord): Promise<void> {
-  throw notPorted("workspace.directory.recordIfUnknown");
+  if ((await memberRow(ctx, directoryRecord.workspace, directoryRecord.user)) === null) await record(ctx, directoryRecord);
 }
 
 export const nameMembersWithoutNameArgs = z.strictObject({ names: z.array(z.strictObject({ workspace: z.string(), user: z.string(), name: z.string() })) });
-export async function nameMembersWithoutName(ctx: MutationContext, args: z.infer<typeof nameMembersWithoutNameArgs>): Promise<void> {
-  throw notPorted("workspace.directory.nameMembersWithoutName");
+export async function nameMembersWithoutName(ctx: MutationContext, { names }: z.infer<typeof nameMembersWithoutNameArgs>): Promise<void> {
+  const named = new Set<string>();
+  for (const { workspace, user, name } of names) {
+    const row = await memberRow(ctx, workspace, user);
+    if (row?.kind !== "member" || row.name !== undefined) continue;
+    await patchRow(ctx, members, row._id, { name });
+    named.add(workspace);
+  }
+  for (const workspace of named) await keepCompanyFacesLater(ctx, workspace);
 }
 
 export const fillProfilesArgs = z.strictObject({ profiles: z.array(z.strictObject({ workspace: z.string(), user: z.string(), profile: z.strictObject(memberProfileFields), asOf: zv.number() })) });
-export async function fillProfiles(ctx: MutationContext, args: z.infer<typeof fillProfilesArgs>): Promise<void> {
-  throw notPorted("workspace.directory.fillProfiles");
+export async function fillProfiles(ctx: MutationContext, { profiles }: z.infer<typeof fillProfilesArgs>): Promise<void> {
+  const changed: MemberId[] = [];
+  const renamed = new Set<string>();
+  for (const { workspace, user, profile, asOf } of profiles) {
+    const row = await memberRow(ctx, workspace, user);
+    if (row?.kind !== "member" || isOlder(asOf, row.asOf) || isOlder(asOf, row.profileAsOf) || !differsFrom(row, profile)) continue;
+    await patchRow(ctx, members, row._id, { ...profile, profileAsOf: asOf });
+    changed.push(row._id);
+    if (profile.realName !== undefined && profile.realName !== row.realName) renamed.add(workspace);
+  }
+  await followMembersLater(ctx, changed);
+  for (const workspace of renamed) await keepCompanyFacesLater(ctx, workspace);
+}
+
+function differsFrom(row: Doc<"members">, profile: MemberProfile) {
+  return memberProfileFieldNames.some((field) => profile[field] !== undefined && row[field] !== profile[field]);
 }
 
 export async function record(ctx: MutationContext, { workspace, user, entry, asOf }: DirectoryRecord): Promise<void> {
-  throw notPorted("workspace.directory.record");
+  const row = { workspace, user, timeZone: undefined, asOf, ...entry };
+  const existing = await memberRow(ctx, workspace, user);
+  if (existing === null) {
+    await insertRow(ctx, members, row);
+    await reconcileUser(ctx, workspace, user, ctx.now);
+    await keepCompanyFacesLater(ctx, workspace);
+  } else if (!isOlder(asOf, existing.asOf)) {
+    const next = keepingNewerProfile(existing, row);
+    if (changesNothingKept(existing, next)) return;
+    await replace(ctx, existing, next);
+    await followMembersLater(ctx, [existing._id]);
+    if (changesItsMatch(existing, next)) await keepCompanyFacesLater(ctx, workspace);
+  }
+}
+
+type MemberRow = Omit<Doc<"members">, "_id" | "_creationTime">;
+
+const fieldsNotKept = new Set(["_id", "_creationTime", "asOf"]);
+
+function changesNothingKept(existing: Doc<"members">, next: MemberRow) {
+  const [before, after] = [keptFieldsOf(existing), keptFieldsOf(next)];
+  return before.size === after.size && [...before].every(([field, value]) => after.get(field) === value);
+}
+
+function changesItsMatch(existing: Doc<"members">, next: MemberRow) {
+  return existing.kind !== next.kind || existing.name !== next.name || existing.realName !== next.realName;
+}
+
+function keptFieldsOf(row: MemberRow | Doc<"members">) {
+  return new Map(Object.entries(row).filter(([field, value]) => value !== undefined && !fieldsNotKept.has(field)));
+}
+
+function keepingNewerProfile(existing: Doc<"members">, row: MemberRow): MemberRow {
+  if (existing.kind !== "member" || row.kind !== "member" || !isOlder(row.asOf ?? 0, existing.profileAsOf)) return row;
+  return { ...withoutProfile(row), ...profileOf(existing), profileAsOf: existing.profileAsOf };
+}
+
+function withoutProfile(row: MemberRow): MemberRow {
+  const isProfileField = (field: string) => (memberProfileFieldNames as string[]).includes(field);
+  return Object.fromEntries(Object.entries(row).filter(([field]) => !isProfileField(field))) as MemberRow;
+}
+
+async function replace(ctx: MutationContext, existing: Doc<"members">, row: MemberRow) {
+  await replaceRow(ctx, members, existing._id, row);
+  const membership = { workspace: row.workspace, member: existing._id, at: ctx.now };
+  if (existing.kind === "member" && row.kind !== "member") await ctx.publish({ type: "memberLeft", ...membership });
+  if (existing.kind !== "member" && row.kind === "member") await ctx.publish({ type: "memberRejoined", ...membership });
+  if ((existing.kind === "member") !== (row.kind === "member")) await reconcileMember(ctx, existing._id, ctx.now);
 }
 
 export async function currentMembersOf(ctx: QueryContext, workspace: string): Promise<MemberId[]> {

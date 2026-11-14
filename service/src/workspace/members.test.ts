@@ -1,10 +1,13 @@
 // The workspace's settings, its members and its URL on the service's transaction: the reads every other domain makes
 // of the directory, the defaults a workspace without a row has, the welcome nudge switch, the celebrations switch and
 // the one pending request for the workspace's URL.
+import { and, asc, eq, ne } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { useTestDatabase } from "../../testing/database.ts";
-import { offForEveryone, onForEveryone, postHogDeciding } from "../../testing/flags.ts";
-import { workspaceBackend, type WorkspaceBackend } from "../../testing/workspaceBackend.ts";
+import { useTestBackend, type TestBackend } from "../../testing/backend.ts";
+import type { FlagDefinition } from "../../testing/fakePostHog.ts";
+import { definitionsStored, offForEveryone, onForEveryone, postHogDeciding } from "../../testing/flags.ts";
+import { toDocument } from "../db/documents.ts";
+import { jobs } from "../db/schema/service.ts";
 import { publicCelebrationsOn, celebrationsSwitchReadIn, celebrationsSwitchShownTo, setPublicCelebrations } from "./celebrationsSwitch.ts";
 import { customEmojiImageOf, originalCustomEmojiOf } from "./customEmoji.ts";
 import {
@@ -31,21 +34,36 @@ import { hugBudgetOf, saveWelcomeNudge, saveWorkspaceSettings, setHugBudget, set
 import { claimWorkspaceUrlRequest, customEmojiPageOf, releaseWorkspaceUrlRequest, rememberWorkspaceUrl, workspaceUrlOf } from "./url.ts";
 import { fillWorkspaceUrlLater } from "../slack/workspaceUrl.ts";
 
-const database = useTestDatabase();
 const now = new Date("2026-10-17T10:00:00Z").getTime();
+const backend = useTestBackend({ now });
 
-let t: WorkspaceBackend;
+let t: TestBackend;
 
 beforeEach(() => {
   vi.stubEnv("KUDOS_EMOJI", "");
   postHogDeciding("sandbox");
-  t = workspaceBackend(database, now);
+  t = backend();
 });
 
 afterEach(() => {
   vi.unstubAllEnvs();
-  vi.unstubAllGlobals();
 });
+
+// The directory's member row for `user` in T1, as Slack's events would keep it.
+const member = (user: string, fields: { admin?: boolean; name?: string; kind?: "member" | "bot" | "not-a-member" } = {}) =>
+  t.seed.insert("members", { workspace: "T1", user, kind: "member", asOf: 0, ...fields }) as Promise<MemberId>;
+
+// Flag definitions stored as PostHog would serve them.
+const flags = (...definitions: FlagDefinition[]) => definitionsStored(t.operations, ...definitions);
+
+// The jobs operations enqueued and none has run yet, besides the backend's own recorder of published events.
+const scheduled = () =>
+  t.query(async ({ tx }) =>
+    (await tx.select().from(jobs).where(and(eq(jobs.state, "pending"), ne(jobs.name, "testing.published"))).orderBy(asc(jobs._creationTime), asc(jobs._id))).map((row) => {
+      const { name, args } = toDocument<{ name: string; args: unknown }>(jobs, row);
+      return { name, args };
+    }),
+  );
 
 describe("a workspace's settings", () => {
   test("a workspace with no row has today's defaults", async () => {
@@ -60,10 +78,10 @@ describe("a workspace's settings", () => {
   });
 
   test("saved settings are read back, and a field cleared by a save reads as its default", async () => {
-    await t.mutation((ctx) => saveWorkspaceSettings(ctx, "T1", { baseAllowance: 5, announcementChannel: "C_NEWS", hugBudget: 2 }));
+    await t.run((ctx) => saveWorkspaceSettings(ctx, "T1", { baseAllowance: 5, announcementChannel: "C_NEWS", hugBudget: 2 }));
     expect(await t.query((ctx) => settingsOf(ctx, "T1"))).toEqual({ baseAllowance: 5, kudosEmoji: "taco", announcementChannel: "C_NEWS" });
 
-    await t.mutation((ctx) => saveWorkspaceSettings(ctx, "T1", { announcementChannel: undefined }));
+    await t.run((ctx) => saveWorkspaceSettings(ctx, "T1", { announcementChannel: undefined }));
 
     expect(await t.query((ctx) => settingsOf(ctx, "T1"))).toEqual({ baseAllowance: 5, kudosEmoji: "taco", announcementChannel: null });
     expect(await t.query((ctx) => hugBudgetOf(ctx, "T1"))).toBe(2);
@@ -71,21 +89,21 @@ describe("a workspace's settings", () => {
   });
 
   test("an operator sets a known workspace's hug budget to a whole number only", async () => {
-    await t.mutation((ctx) => saveWorkspaceSettings(ctx, "T1", {}));
+    await t.run((ctx) => saveWorkspaceSettings(ctx, "T1", {}));
 
-    await t.mutation((ctx) => setHugBudget(ctx, { workspace: "T1", hugBudget: 0 }));
+    await t.run((ctx) => setHugBudget(ctx, { workspace: "T1", hugBudget: 0 }));
 
     expect(await t.query((ctx) => hugBudgetOf(ctx, "T1"))).toBe(0);
-    await expect(t.mutation((ctx) => setHugBudget(ctx, { workspace: "T1", hugBudget: 1.5 }))).rejects.toThrow("whole number");
-    await expect(t.mutation((ctx) => setHugBudget(ctx, { workspace: "T2", hugBudget: 4 }))).rejects.toThrow("Kudos knows no workspace T2");
+    await expect(t.run((ctx) => setHugBudget(ctx, { workspace: "T1", hugBudget: 1.5 }))).rejects.toThrow("whole number");
+    await expect(t.run((ctx) => setHugBudget(ctx, { workspace: "T2", hugBudget: 4 }))).rejects.toThrow("Kudos knows no workspace T2");
   });
 
   test("the welcome nudge is on until a workspace turns it off, and back on", async () => {
     expect(await t.query((ctx) => welcomeNudgeOn(ctx, "T1"))).toBe(true);
 
-    await t.mutation((ctx) => saveWelcomeNudge(ctx, "T1", false));
+    await t.run((ctx) => saveWelcomeNudge(ctx, "T1", false));
     expect(await t.query((ctx) => welcomeNudgeOn(ctx, "T1"))).toBe(false);
-    await t.mutation((ctx) => saveWelcomeNudge(ctx, "T1", true));
+    await t.run((ctx) => saveWelcomeNudge(ctx, "T1", true));
 
     expect(await t.query((ctx) => welcomeNudgeOn(ctx, "T1"))).toBe(true);
     expect(await t.seed.all("welcomeNudgeSwitches")).toHaveLength(1);
@@ -104,10 +122,10 @@ describe("a workspace's settings", () => {
 
 describe("the directory's members", () => {
   test("a member is looked up by Slack user, with their time zone and admin flag; a bot and a former member by their kind", async () => {
-    const alice = await t.member("U_ALICE", { name: "alice", admin: true });
+    const alice = await member("U_ALICE", { name: "alice", admin: true });
     await t.seed.patch("members", alice, { timeZone: "Europe/Berlin" });
-    await t.member("U_BOT", { kind: "bot" });
-    await t.member("U_GONE", { kind: "not-a-member" });
+    await member("U_BOT", { kind: "bot" });
+    await member("U_GONE", { kind: "not-a-member" });
 
     expect(await t.query((ctx) => lookup(ctx, "T1", "U_ALICE"))).toEqual({ kind: "member", member: alice, timeZone: "Europe/Berlin", admin: true });
     expect(await t.query((ctx) => lookup(ctx, "T1", "U_BOT"))).toEqual({ kind: "bot" });
@@ -167,7 +185,7 @@ describe("the directory's members", () => {
 
   test("a full name falls back from the real name to the name, and a profile name from the display name to the real name", async () => {
     const bob = await t.seed.insert("members", { workspace: "T1", user: "U_BOB", kind: "member", name: "bob", realName: "Bob Example", asOf: 0 });
-    const carol = await t.member("U_CAROL", { name: "carol" });
+    const carol = await member("U_CAROL", { name: "carol" });
 
     expect(await t.query((ctx) => profileNameOf(ctx, bob))).toBe("Bob Example");
     expect(await t.query((ctx) => fullNameOf(ctx, carol))).toBe("carol");
@@ -175,7 +193,7 @@ describe("the directory's members", () => {
   });
 
   test("an ID the directory doesn't hold is no member, and asking for its Slack identity fails", async () => {
-    const alice = await t.member("U_ALICE");
+    const alice = await member("U_ALICE");
     await t.seed.delete("members", alice);
 
     expect(await t.query((ctx) => isMember(ctx, alice))).toBe(false);
@@ -184,7 +202,7 @@ describe("the directory's members", () => {
   });
 
   test("a bot is no person, and a member of another workspace is no person of this one", async () => {
-    const bot = await t.member("U_BOT", { kind: "bot" });
+    const bot = await member("U_BOT", { kind: "bot" });
     const elsewhere = await t.seed.insert("members", { workspace: "T2", user: "U_ALICE", kind: "member", asOf: 0 });
 
     expect(await t.query((ctx) => isAPersonOf(ctx, "T1", bot))).toBe(false);
@@ -192,10 +210,10 @@ describe("the directory's members", () => {
   });
 
   test("the current members are the workspace's members, in Slack user order; people include those who left, as former", async () => {
-    const carol = await t.member("U_CAROL", { name: "carol" });
+    const carol = await member("U_CAROL", { name: "carol" });
     const alice = await t.seed.insert("members", { workspace: "T1", user: "U_ALICE", kind: "member", name: "alice", realName: "Alice Example", asOf: 0 });
-    const gone = await t.member("U_GONE", { kind: "not-a-member" });
-    await t.member("U_BOT", { kind: "bot" });
+    const gone = await member("U_GONE", { kind: "not-a-member" });
+    await member("U_BOT", { kind: "bot" });
     await t.seed.insert("members", { workspace: "T2", user: "U_DAVE", kind: "member", asOf: 0 });
 
     expect(await t.query((ctx) => currentMembersOf(ctx, "T1"))).toEqual([alice, carol]);
@@ -213,31 +231,31 @@ describe("the directory's members", () => {
   });
 
   test("two rows for one Slack user fail the lookup, as Convex's unique read did", async () => {
-    await t.member("U_ALICE");
-    await t.member("U_ALICE");
+    await member("U_ALICE");
+    await member("U_ALICE");
 
     await expect(t.query((ctx) => lookup(ctx, "T1", "U_ALICE"))).rejects.toThrow(new Error("unique() query returned more than one result from table members:"));
   });
 });
 
 describe("the celebrations switch", () => {
-  const switching = (on: boolean, person: { member: MemberId; admin: boolean }) => t.mutation((ctx) => setPublicCelebrations(ctx, "T1", person, on));
+  const switching = (on: boolean, person: { member: MemberId; admin: boolean }) => t.run((ctx) => setPublicCelebrations(ctx, "T1", person, on));
 
   test("while celebrations-switch is off, celebrations are public and nobody switches them", async () => {
-    await t.flags(offForEveryone("celebrations-switch"));
-    const admin = await t.member("U_ADMIN", { admin: true });
+    await flags(offForEveryone("celebrations-switch"));
+    const admin = await member("U_ADMIN", { admin: true });
 
     expect(await switching(false, { member: admin, admin: true })).toBe(false);
     expect(await t.query((ctx) => publicCelebrationsOn(ctx, "T1"))).toBe(true);
     expect(await t.query((ctx) => celebrationsSwitchReadIn(ctx, "T1"))).toBeNull();
-    expect(await t.mutation((ctx) => celebrationsSwitchShownTo(ctx, "T1", { member: admin, admin: true }))).toBeNull();
+    expect(await t.run((ctx) => celebrationsSwitchShownTo(ctx, "T1", { member: admin, admin: true }))).toBeNull();
   });
 
   test("an admin turns public celebrations off and on, once each, with one stored switch", async () => {
-    await t.flags(onForEveryone("celebrations-switch"));
-    const admin = await t.member("U_ADMIN", { admin: true });
+    await flags(onForEveryone("celebrations-switch"));
+    const admin = await member("U_ADMIN", { admin: true });
 
-    expect(await t.mutation((ctx) => celebrationsSwitchShownTo(ctx, "T1", { member: admin, admin: true }))).toBe(true);
+    expect(await t.run((ctx) => celebrationsSwitchShownTo(ctx, "T1", { member: admin, admin: true }))).toBe(true);
     expect(await switching(true, { member: admin, admin: true })).toBe(false);
     expect(await switching(false, { member: admin, admin: true })).toBe(true);
     expect(await t.query((ctx) => publicCelebrationsOn(ctx, "T1"))).toBe(false);
@@ -250,19 +268,19 @@ describe("the celebrations switch", () => {
   });
 
   test("a member who is neither an admin nor the maintainer switches nothing", async () => {
-    await t.flags(onForEveryone("celebrations-switch"), onForEveryone("workspace-settings"));
+    await flags(onForEveryone("celebrations-switch"), onForEveryone("workspace-settings"));
     vi.stubEnv("KUDOS_MAINTAINER", "U_MAINTAINER");
-    const alice = await t.member("U_ALICE");
+    const alice = await member("U_ALICE");
 
     expect(await switching(false, { member: alice, admin: false })).toBe(false);
-    expect(await t.mutation((ctx) => celebrationsSwitchShownTo(ctx, "T1", { member: alice, admin: false }))).toBeNull();
+    expect(await t.run((ctx) => celebrationsSwitchShownTo(ctx, "T1", { member: alice, admin: false }))).toBeNull();
     expect(await t.seed.all("celebrationsSwitches")).toEqual([]);
   });
 
   test("the maintainer switches them while workspace-settings is on for them", async () => {
-    await t.flags(onForEveryone("celebrations-switch"), onForEveryone("workspace-settings"));
+    await flags(onForEveryone("celebrations-switch"), onForEveryone("workspace-settings"));
     vi.stubEnv("KUDOS_MAINTAINER", "U_MAINTAINER");
-    const owner = await t.member("U_MAINTAINER");
+    const owner = await member("U_MAINTAINER");
 
     expect(await switching(false, { member: owner, admin: false })).toBe(true);
     expect(await t.query((ctx) => publicCelebrationsOn(ctx, "T1"))).toBe(false);
@@ -270,7 +288,7 @@ describe("the celebrations switch", () => {
 });
 
 describe("the workspace's URL", () => {
-  const claim = () => t.mutation((ctx) => claimWorkspaceUrlRequest(ctx, "T1"));
+  const claim = () => t.run((ctx) => claimWorkspaceUrlRequest(ctx, "T1"));
 
   test("one request is pending at a time, and it lapses after 10 minutes", async () => {
     expect(await claim()).toBe(true);
@@ -286,7 +304,7 @@ describe("the workspace's URL", () => {
   test("a released request can be claimed again at once", async () => {
     await claim();
 
-    await t.mutation((ctx) => releaseWorkspaceUrlRequest(ctx, { workspace: "T1" }));
+    await t.run((ctx) => releaseWorkspaceUrlRequest(ctx, { workspace: "T1" }));
 
     expect(await claim()).toBe(true);
   });
@@ -294,7 +312,7 @@ describe("the workspace's URL", () => {
   test("Slack's https URL is remembered as its origin, which permalinks and the custom emoji page read, and no request is claimed after", async () => {
     await claim();
 
-    expect(await t.mutation((ctx) => rememberWorkspaceUrl(ctx, { workspace: "T1", url: "https://acme.slack.test/some/path" }))).toBe(true);
+    expect(await t.run((ctx) => rememberWorkspaceUrl(ctx, { workspace: "T1", url: "https://acme.slack.test/some/path" }))).toBe(true);
 
     expect(await t.query((ctx) => workspaceUrlOf(ctx, "T1"))).toBe("https://acme.slack.test/");
     expect(await t.query((ctx) => customEmojiPageOf(ctx, "T1"))).toBe("https://acme.slack.test/customize/emoji");
@@ -303,17 +321,17 @@ describe("the workspace's URL", () => {
   });
 
   test("a URL that isn't https, or isn't one, is not remembered", async () => {
-    expect(await t.mutation((ctx) => rememberWorkspaceUrl(ctx, { workspace: "T1", url: "http://acme.slack.test/" }))).toBe(false);
-    expect(await t.mutation((ctx) => rememberWorkspaceUrl(ctx, { workspace: "T1", url: "not a url" }))).toBe(false);
+    expect(await t.run((ctx) => rememberWorkspaceUrl(ctx, { workspace: "T1", url: "http://acme.slack.test/" }))).toBe(false);
+    expect(await t.run((ctx) => rememberWorkspaceUrl(ctx, { workspace: "T1", url: "not a url" }))).toBe(false);
 
     expect(await t.query((ctx) => workspaceUrlOf(ctx, "T1"))).toBeNull();
     expect(await t.query((ctx) => customEmojiPageOf(ctx, "T1"))).toBeNull();
   });
 
   test("filling the URL later asks Slack once, by one job, while a request is pending", async () => {
-    await t.mutation((ctx) => fillWorkspaceUrlLater(ctx, "T1"));
-    await t.mutation((ctx) => fillWorkspaceUrlLater(ctx, "T1"));
+    await t.run((ctx) => fillWorkspaceUrlLater(ctx, "T1"));
+    await t.run((ctx) => fillWorkspaceUrlLater(ctx, "T1"));
 
-    expect(await t.scheduled()).toEqual([{ name: "slack.workspaceUrl.fillWorkspaceUrl", args: { workspace: "T1" } }]);
+    expect(await scheduled()).toEqual([{ name: "slack.workspaceUrl.fillWorkspaceUrl", args: { workspace: "T1" } }]);
   });
 });

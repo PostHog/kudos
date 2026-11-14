@@ -190,7 +190,7 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/slack/levelUpDm.test.ts | S6 | | |
 | convex/slack/levelUpDmPerks.test.ts | S6 | | |
 | convex/slack/linkPreviews.test.ts | S13 | | |
-| convex/slack/memberProfiles.test.ts | S3 | | |
+| convex/slack/memberProfiles.test.ts | S3 | service/src/slack/memberProfiles.test.ts | S3 S4 S5 S11 |
 | convex/slack/messagePlaces.test.ts | S5 | | |
 | convex/slack/messageSettings.test.ts | S5 | | |
 | convex/slack/messageSettingsGate.test.ts | S5 | | |
