@@ -7,7 +7,7 @@ import { createClock } from "../clock.ts";
 import type { Log, LogFields } from "../log.ts";
 import { createOperations } from "../operations.ts";
 import { jobRegistry, mutationJob } from "./define.ts";
-import { jobsChannel, listenForDueJobs } from "./wakeups.ts";
+import { jobsChannel, listenForWakes } from "./wakeups.ts";
 import { createWorker } from "./worker.ts";
 
 const database = useTestDatabase();
@@ -23,7 +23,7 @@ function setUp() {
   const worker = createWorker({ operations, log, registry: jobRegistry([job]), pollMs: 3_600_000 });
   onTestFinished(() => worker.stop(1_000));
   const listen = (retryMs = 5_000) => {
-    const listener = listenForDueJobs({ pool: database.pool, log, retryMs, onDue: () => void worker.tick() });
+    const listener = listenForWakes({ pool: database.pool, log, retryMs, wakes: { jobs: () => void worker.tick() } });
     onTestFinished(() => listener.stop());
     return listener;
   };

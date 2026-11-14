@@ -6,6 +6,7 @@ import { z } from "zod";
 import { createClock } from "./clock.ts";
 import { createApp, type Migrations } from "./http/app.ts";
 import { mutationJob } from "./jobs/define.ts";
+import { createLiveFeed } from "./live.ts";
 import type { Operations } from "./operations.ts";
 import { createFrontDoor } from "./slack/frontDoor.ts";
 import { createRegistry } from "./registration.ts";
@@ -53,7 +54,7 @@ describe("the registry", () => {
 });
 
 const quiet = { info: () => {}, error: () => {} };
-const runtime = { operations: {} as Operations, clock: createClock(), log: quiet };
+const runtime = { operations: {} as Operations, clock: createClock(), log: quiet, live: createLiveFeed() };
 
 describe("a domain's website routes", () => {
   test("answer behind the app's gate", async () => {
@@ -66,7 +67,7 @@ describe("a domain's website routes", () => {
     expect(await (await app.request("/api/album")).json()).toEqual({ album: [] });
   });
 
-  test("are built with the service's operations, clock and log", () => {
+  test("are built with the service's operations, clock, log and live feed", () => {
     let given: unknown;
     const { routes } = createRegistry({ website: { routes: (service) => ((given = service), new Hono()) } });
     routes.forEach((route) => route(runtime));

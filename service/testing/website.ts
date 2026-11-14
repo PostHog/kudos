@@ -10,8 +10,8 @@
 //   await t.seed.insert("members", { workspace: "T1", user: "U_JUNO", kind: "member", email: "juno@example.com" });
 //   const answer = await t.app.request("/api/query/website.album.getAlbum", websiteRequest({}, "juno@example.com"));
 //
-// The paths are `/api/query/<name>` for a read, `/api/mutation/<name>` for a command and `/api/entry` for the page load
-// that signs a person in; the edge's header reaches no other path.
+// The paths are `/api/query/<name>` for a read, `/api/mutation/<name>` for a command, `/api/entry` for the page load
+// that signs a person in and `GET /api/live` for the stream of invalidations; the edge's header reaches no other path.
 import { vi } from "vitest";
 import { workspaceKeyOf } from "../src/analytics/outbox.ts";
 import { apiHeader } from "../src/website/api/transport.ts";

@@ -3,12 +3,15 @@ import https from "node:https";
 import { eq, sql } from "drizzle-orm";
 import { doublePrecision, integer, pgTable, text } from "drizzle-orm/pg-core";
 import pg from "pg";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, inject, test, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, inject, onTestFinished, test, vi } from "vitest";
 import { useTestDatabase, withSearchPath } from "../testing/database.ts";
 import { createClock } from "./clock.ts";
 import { runMigrations } from "./db/migrate.ts";
 import { createPool } from "./db/pool.ts";
 import { errorFields, type Log, type LogFields } from "./log.ts";
+import { z } from "zod";
+import { mutationJob } from "./jobs/define.ts";
+import { unseenTables } from "./live.ts";
 import { createOperations, fence, type Database, type Operations } from "./operations.ts";
 
 // A table of the test's own, in a schema of its own, so the service's schema stays exactly the migrations'.
@@ -914,5 +917,81 @@ describe("no network inside a mutation or query", () => {
     release();
 
     expect(await later).toBe("ok");
+  });
+});
+
+describe("live notifies", () => {
+  // What a process's listener hears on the live channel, one payload per notify. Postgres delivers notifications in
+  // commit order, so once a barrier sent after the case has arrived, every notify the case sent has too.
+  async function hearingLive() {
+    const client = new pg.Client({ connectionString: withSearchPath(inject("databaseUrl"), schema) });
+    await client.connect();
+    const heard: string[] = [];
+    client.on("notification", ({ payload }) => heard.push(payload ?? ""));
+    onTestFinished(() => client.end());
+    await client.query(`listen "live.${schema}"`);
+    return heard;
+  }
+
+  const enqueued = mutationJob("live.test.job", z.object({}), async () => {});
+  /** Everything heard up to a barrier notify sent now, the barrier left out. */
+  const heardBefore = async (heard: string[]) => {
+    await pool.query("select pg_notify($1, 'barrier')", [`live.${schema}`]);
+    await vi.waitFor(() => expect(heard).toContain("barrier"), { timeout: 3_000 });
+    return heard.slice(0, heard.indexOf("barrier"));
+  };
+
+  test("an insert, an update or a delete that commits notifies the live channel, once per transaction, with no payload", async () => {
+    const { operations } = setUp();
+    const heard = await hearingLive();
+
+    await operations.mutation("insert", async ({ tx }) => {
+      await tx.insert(counters).values({ id: "a", n: 1 });
+      await tx.insert(counters).values({ id: "b", n: 1 });
+    });
+    await operations.mutation("update", ({ tx }) => tx.update(counters).set({ n: 2 }).where(eq(counters.id, "a")));
+    await operations.mutation("delete", ({ tx }) => tx.delete(counters).where(eq(counters.id, "b")));
+
+    expect(await heardBefore(heard)).toEqual(["", "", ""]);
+  });
+
+  test("a mutation that writes only the service's own tables, a rolled-back one and a query notify nobody", async () => {
+    const { operations } = setUp();
+    const heard = await hearingLive();
+
+    await operations.mutation("enqueue", ({ jobs }) => jobs.enqueue(enqueued, {}));
+    await expect(
+      operations.mutation("give up", async ({ tx }) => {
+        await tx.insert(counters).values({ id: "undone", n: 1 });
+        throw new Error("changed its mind");
+      }),
+    ).rejects.toThrow("changed its mind");
+    await operations.query("read", ({ tx }) => tx.select().from(counters));
+
+    expect(await heardBefore(heard)).toEqual([]);
+  });
+
+  test("a retried mutation notifies for its last attempt's writes alone", async () => {
+    const { operations } = setUp();
+    const heard = await hearingLive();
+    let attempt = 0;
+
+    await operations.mutation("retried", async ({ tx, jobs }) => {
+      attempt += 1;
+      if (attempt === 1) {
+        await tx.insert(counters).values({ id: "first", n: 1 });
+        throw Object.assign(new Error("could not serialize access"), { code: "40001" });
+      }
+      await jobs.enqueue(enqueued, {});
+    });
+
+    expect(await heardBefore(heard), "the attempt that committed wrote only jobs").toEqual([]);
+  });
+
+  test("every table live views ignore is one the migrations make", async () => {
+    const { rows } = await pool.query<{ name: string }>("select tablename as name from pg_tables where schemaname = $1", [schema]);
+    const made = new Set(rows.map(({ name }) => name));
+
+    expect([...unseenTables].filter((table) => !made.has(table)), "no table the service lacks").toEqual([]);
   });
 });

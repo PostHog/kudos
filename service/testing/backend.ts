@@ -1,7 +1,8 @@
 // The service's in-process test backend, what today's `testing/slackBackend.ts` gives Convex's tests: the operation
 // runner wired to the registry's bus subscribers, a worker that runs due jobs and crons on the app's clock through
-// AppTime, the seeder, the Slack and PostHog fakes behind `fetch`, signed Slack requests through the front door, and
-// the domain events that committed operations published. One per test, on the worker's schema:
+// AppTime, the seeder, the Slack and PostHog fakes behind `fetch`, signed Slack requests through the front door, the
+// domain events that committed operations published, and live views woken by the process's listener, as the service's.
+// One per test, on the worker's schema:
 //
 //   const backend = useTestBackend();
 //   test("...", async () => {
@@ -12,16 +13,19 @@
 //   });
 import { asc, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
-import { afterEach, vi } from "vitest";
+import { afterAll, afterEach, vi } from "vitest";
 import { z } from "zod";
 import { createAppTime, type AppTime, type TimeAnswer } from "../src/appTime.ts";
 import type { Subscribers, Subscription } from "../src/bus/publish.ts";
 import { createClock, type Clock } from "../src/clock.ts";
 import { decodeStored } from "../src/db/codec.ts";
 import { jobs } from "../src/db/schema/service.ts";
+import { createPool } from "../src/db/pool.ts";
 import { createApp } from "../src/http/app.ts";
 import { mutationJob } from "../src/jobs/define.ts";
+import { listenForWakes, type Listener } from "../src/jobs/wakeups.ts";
 import { createWorker, type Worker } from "../src/jobs/worker.ts";
+import { createLiveFeed } from "../src/live.ts";
 import type { Log, LogFields } from "../src/log.ts";
 import { notPorted } from "../src/notPorted.ts";
 import { createOperations, type MutationContext, type Operations, type QueryContext } from "../src/operations.ts";
@@ -61,6 +65,8 @@ export interface TestBackend extends SlackClient {
   app: ReturnType<typeof createApp>;
   /** Every line the service logged. */
   logs: LogLine[];
+  /** Resolves once the backend's listener listens: from then on a committed write wakes the open live views. */
+  listening: Promise<void>;
   /** Runs the handler as one mutation, as Convex's `t.run` does. */
   run<T>(handler: (ctx: MutationContext) => Promise<T>): Promise<T>;
   query<T>(handler: (ctx: QueryContext) => Promise<T>): Promise<T>;
@@ -104,10 +110,15 @@ export function useTestBackend(defaults: BackendOptions = {}): (options?: Backen
   // A job still running when its test ends finishes within that test, before the next one empties the database and
   // before `fetch` is the real one again; otherwise it writes into the next test.
   const started: Worker[] = [];
+  // The listener's connection, beside the pool's, as the service's.
+  const listenerPool = createPool(database.url, { max: 1 });
+  const listeners: Listener[] = [];
   afterEach(async () => {
+    for (const listener of listeners.splice(0)) listener.stop();
     await Promise.all(started.splice(0).map((worker) => worker.stop(stopGraceMs)));
     vi.unstubAllGlobals();
   });
+  afterAll(() => listenerPool.end());
 
   return (options = {}) => {
     const { now = 1_800_000_000_000, workspace = "T1", registry = serviceRegistry } = { ...defaults, ...options };
@@ -149,7 +160,11 @@ export function useTestBackend(defaults: BackendOptions = {}): (options?: Backen
       },
     };
     const frontDoor = createFrontDoor({ signingSecret, clock, off: false, log, operations, handlers: registry.slack });
-    const routes = registry.routes.map((domainRoutes) => domainRoutes({ operations, clock, log }));
+    // The worker runs on the time seam; only the live views wake, after a short retry when the listener is lost.
+    const live = createLiveFeed();
+    const listener = listenForWakes({ pool: listenerPool, log, retryMs: 50, wakes: { live: () => live.invalidate() } });
+    listeners.push(listener);
+    const routes = registry.routes.map((domainRoutes) => domainRoutes({ operations, clock, log, live }));
     const app = createApp({ commit: "test", readiness: { migrations: () => "done" }, off: false, log, clock, worker, slack: frontDoor, routes });
 
     const slack = new FakeSlack();
@@ -167,6 +182,7 @@ export function useTestBackend(defaults: BackendOptions = {}): (options?: Backen
       postHog,
       app,
       logs,
+      listening: listener.listening,
       run: (handler) => operations.mutation("test.run", handler),
       query: (handler) => operations.query("test.query", handler),
       settle: () => time.settle(),

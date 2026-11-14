@@ -4,13 +4,19 @@
 //
 // A request must be JSON and carry the API's own header. A cross-site page can send neither without the browser asking
 // first (a CORS preflight), which the service never grants, so no form or link on another site runs a command.
+//
+// `GET /api/live` is a member's stream of invalidations (liveStream.ts), which the website follows to refetch what its
+// open views hold. The browser's EventSource sends no header of the API's, so it is refused only when cross-site; it
+// reads nothing but who may follow, and answers a denial as a read does.
 import { Hono, type Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { z } from "zod";
 import type { HomeMember } from "../../feedback/homes.ts";
+import type { LiveFeed } from "../../live.ts";
 import type { Log } from "../../log.ts";
 import type { MutationContext, Operations, QueryContext } from "../../operations.ts";
 import type { Denial, Verified, VerifiedMember } from "../memberQuery.ts";
+import { liveStream, liveStreamHeaders } from "./liveStream.ts";
 import type { Route } from "./route.ts";
 
 /** The header every API request carries; its value is `1`. */
@@ -39,6 +45,9 @@ export interface MemberCheck {
 export interface TransportOptions {
   operations: Operations;
   log: Log;
+  /** What `GET /api/live` streams to the members who follow it. The website's registration always gives it; a
+   *  transport without it, as a route test may build, has no live route. */
+  live?: LiveFeed;
   routes: readonly Route[];
   identify: Identify;
   check: MemberCheck;
@@ -54,7 +63,7 @@ export type Enter = (ctx: MutationContext, identity: Identity) => Promise<{ kind
 const noArguments = z.strictObject({});
 
 /** The API's routes. Two routes of one name stop the service at boot. */
-export function apiTransport({ operations, log, routes, identify, check, enter }: TransportOptions): Hono {
+export function apiTransport({ operations, log, live, routes, identify, check, enter }: TransportOptions): Hono {
   const reads = new Map<string, Route>();
   const commands = new Map<string, Route>();
   for (const route of routes) {
@@ -68,6 +77,7 @@ export function apiTransport({ operations, log, routes, identify, check, enter }
   api.post("/api/query/:name", limited, (c) => answer(c, reads.get(c.req.param("name"))));
   api.post("/api/mutation/:name", limited, (c) => answer(c, commands.get(c.req.param("name"))));
   if (enter !== undefined) api.post("/api/entry", limited, (c) => entry(c, enter));
+  if (live !== undefined) api.get("/api/live", (c) => follow(c, live));
   // Every other API path, and any other method on these, is no route: never the website's page.
   api.all("/api", (c) => c.json({ error: "no such route" }, 404));
   api.all("/api/*", (c) => c.json({ error: "no such route" }, 404));
@@ -105,16 +115,29 @@ export function apiTransport({ operations, log, routes, identify, check, enter }
     if (result.kind !== "entered") log.info("website request denied", { route: "website.entry", denial: result.kind });
     return c.json(result, 200, { "cache-control": "no-store" });
   }
+
+  async function follow(c: Context, live: LiveFeed): Promise<Response> {
+    if (crossSite(c)) return refused(c, 403, "not a request of the website's own");
+    const identity = await identify(c.req.raw);
+    const verified = await operations.query("website.live", (ctx) => check.read(ctx, identity));
+    if (!("kind" in verified)) return new Response(liveStream(live), { headers: liveStreamHeaders });
+    log.info("website request denied", { route: "website.live", denial: verified.kind });
+    return c.json(verified, 200, { "cache-control": "no-store" });
+  }
 }
 
 // The request's arguments as the shape passed them, or the refusal: a request of another site's, or arguments that
 // don't fit. Nobody is looked up before this passes.
 async function argumentsOf(c: Context, shape: z.ZodType): Promise<Response | { data: never }> {
-  if (c.req.header(apiHeader) !== "1" || !isJson(c.req.header("content-type")) || c.req.header("sec-fetch-site") === "cross-site") return refused(c, 403, "not a request of the website's own");
+  if (c.req.header(apiHeader) !== "1" || !isJson(c.req.header("content-type")) || crossSite(c)) return refused(c, 403, "not a request of the website's own");
   const body: unknown = await c.req.json().catch(() => undefined);
   const args = shape.safeParse(body);
   if (!args.success) return refused(c, 400, "the arguments don't fit the route");
   return { data: args.data as never };
+}
+
+function crossSite(c: Context): boolean {
+  return c.req.header("sec-fetch-site") === "cross-site";
 }
 
 function refused(c: Context, status: 400 | 403 | 404, error: string): Response {
