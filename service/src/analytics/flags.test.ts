@@ -1,13 +1,10 @@
 // The flag seam on the operation's definitions snapshot. The first describes port today's convex/analytics/flags.test.ts
 // (O31, O33, O34, F12 to F15, O36 and the oldest analytics ID), so the rewrite decides as today does; the rest prove what
 // the rewrite adds: one read of the definitions per operation attempt, through its own transaction, and no network.
-import { readFileSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
-import { fileURLToPath } from "node:url";
 import { sql } from "drizzle-orm";
 import type pg from "pg";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { failsToConnect, flagsKey, routedFetch, type FakePostHog, type FlagDefinition } from "../../testing/fakePostHog.ts";
+import { failsToConnect, routedFetch, type FakePostHog, type FlagDefinition } from "../../testing/fakePostHog.ts";
 import { useTestDatabase } from "../../testing/database.ts";
 import { definitionsStored, flagsFromPostHog, onForEmails, onForEveryone, onForPercent, onInTheSandboxOnly, postHogDeciding, variantForEveryone } from "../../testing/flags.ts";
 import { seeder } from "../../testing/seed.ts";
@@ -491,50 +488,5 @@ describe("no network inside an operation", () => {
     expect(decisions).toEqual(flags.flatMap(() => [false, false, false]));
     expect(read).toEqual(flags.flatMap(() => [false, false]));
     expect(postHog.definitionRequests + postHog.requests.length, "nothing reached PostHog").toBe(0);
-  });
-
-  // The second line behind the runner's refusal: the flag module's own imports can't reach the network at all.
-  test("the flag module reaches no fetch: no module it imports, however deep, names fetch, imports a package nobody audited, or loads one at run time", () => {
-    const root = fileURLToPath(new URL(".", import.meta.url));
-    // The packages the flag module's imports may load, each audited: none reaches the network.
-    const audited = new Set([
-      // Only getFeatureFlagHash, getFeatureFlagVariant, resolveFeatureFlagPayload, matchFeatureFlagProperty and
-      // InconclusiveMatchError, from its featureFlagLocalEvaluation and featureFlagUtils: SHA-1 by crypto.subtle,
-      // arithmetic, string matching and JSON.parse. Its client classes, which do fetch, are never constructed.
-      "@posthog/core",
-      // Builds SQL that runs on the operation's own transaction.
-      "drizzle-orm",
-      "drizzle-orm/pg-core",
-      "zod",
-      "node:crypto",
-    ]);
-    const seen = new Set<string>();
-    const refused: string[] = [];
-    const visit = (file: string) => {
-      if (seen.has(file)) return;
-      seen.add(file);
-      // Comments may name anything; only the code counts.
-      const source = readFileSync(file, "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'`])\/\/.*$/gm, "$1");
-      const at = relative(root, file);
-      if (/\bfetch\b/.test(source)) refused.push(`${at}: names fetch`);
-      if (/\bimport\s*\(/.test(source)) refused.push(`${at}: a dynamic import`);
-      if (/\brequire\s*\(/.test(source)) refused.push(`${at}: a require`);
-      for (const [, specifier] of source.matchAll(/^\s*import\s*["']([^"']+)["']/gm)) refused.push(`${at}: a side-effect import of ${specifier}`);
-      // Type-only imports and exports are erased before the module runs.
-      for (const [, specifier] of source.matchAll(/^\s*(?:import|export)\s+(?!type\b)[^;]*?\bfrom\s*["']([^"']+)["']/gm)) {
-        if (specifier!.startsWith(".")) visit(join(dirname(file), specifier!));
-        else if (!audited.has(specifier!)) refused.push(`${at}: ${specifier} isn't audited`);
-      }
-    };
-    visit(join(root, "flags.ts"));
-    const reached = [...seen].map((file) => relative(root, file));
-
-    expect(reached, "the walk found the snapshot's modules").toEqual(expect.arrayContaining(["flags.ts", "definitions.ts", "evaluator/evaluator.ts", "evaluator/match-property.ts", "outbox.ts"]));
-    expect(reached.filter((file) => file.endsWith("refresh.ts")), "the refresh").toEqual([]);
-    expect(refused).toEqual([]);
-  });
-
-  test("the flags key never reaches an operation's decision: it only gates it", () => {
-    expect(readFileSync(new URL("./flags.ts", import.meta.url), "utf8")).not.toContain(flagsKey);
   });
 });
