@@ -3,6 +3,7 @@ import type { HoggieDroppedEvent } from "../bus/events.ts";
 import type { Registration } from "../registration.ts";
 import { crateKindOf } from "./hoggies/crateKey.ts";
 import { recordAlbumHistoryJob, startAlbumHistoryJob } from "./history.ts";
+import { earnLevelUpHoggiesJob } from "./levelUpHoggies.ts";
 import {
   recordMilestonesAfterAHoggieDropJob,
   recordMilestonesAfterTheMatchesJob,
@@ -18,5 +19,6 @@ export const registration: Registration = {
     { event: "hugGiven", job: tallyHugGivenJob },
     { event: "hoggieDropped", job: recordMilestonesAfterAHoggieDropJob, only: ({ crate }: HoggieDroppedEvent) => crateKindOf(crate) !== "thoughtful" },
     { event: "companyMatchesKept", job: recordMilestonesAfterTheMatchesJob },
+    { event: "levelReached", job: earnLevelUpHoggiesJob },
   ],
 };

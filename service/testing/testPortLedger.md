@@ -34,7 +34,7 @@ Edit only your own rows, in place, and keep both sides on a conflict.
 | convex/album/hoggies/avatar.test.ts | S10 | | |
 | convex/album/hoggies/catalogue.test.ts | S2 | service/src/album/hoggies/catalogue.test.ts | |
 | convex/album/hoggies/crests.test.ts | S10 | | |
-| convex/album/hoggies/draw.test.ts | S10 | | |
+| convex/album/hoggies/draw.test.ts | S10 | service/src/album/hoggies/draw.test.ts | |
 | convex/album/hoggies/drops.test.ts | S10 | | |
 | convex/album/hoggies/packs.test.ts | S8 | | |
 | convex/album/hoggies/rarityCaps.test.ts | S10 | | |
