@@ -83,7 +83,6 @@ export const landed = [
   "convex/analytics/subscribers.ts",
   "convex/analytics/usage.ts",
   "convex/bus/events.ts",
-  "convex/bus/replay.ts",
   "convex/commands/commands.ts",
   "convex/commands/surface.ts",
   "convex/engine/engine.ts",
