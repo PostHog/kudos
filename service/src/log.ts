@@ -26,6 +26,9 @@ const knownMessages = new Map([
   ["Query read timeout", "DB_QUERY_TIMEOUT"],
 ]);
 
+/** Our own codes for pg's known connection errors, which `errorFields` gives by their message. */
+export const knownConnectionCodes: ReadonlySet<string> = new Set(knownMessages.values());
+
 /**
  * What a log line may say about an error: its class and its code (a Postgres SQLSTATE such as `42P01`, a system code
  * such as `ECONNREFUSED`, or ours for one of pg's known connection errors), from it or the errors it wraps. Never its
