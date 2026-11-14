@@ -65,6 +65,12 @@ await runRig(async (rig) => {
   const passes = asked.length > 0 ? [asked] : [["--exclude-tag", "@time"], ["--tag", "@time"]];
   const results: number[] = [];
   for (const pass of passes) if (!rig.interrupted()) results.push(await rig.runJourneys(targetFile, pass));
+  // The data the journeys left, exported as Convex exports it, once every journey passed: the rewrite's load is
+  // proven on it (e2e/rewrite/oracleExport.zip).
+  const exportTo = process.env.E2E_EXPORT_TO;
+  if (exportTo && !rig.interrupted() && results.every((code) => code === 0)) {
+    await backend.exportTo(exportTo);
+  }
   return Math.max(...results);
 });
 

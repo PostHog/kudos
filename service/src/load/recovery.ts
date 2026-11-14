@@ -36,12 +36,15 @@ export function jobName(source: string, path: string): string {
 }
 
 /** Turns the loaded copy's scheduled functions into jobs, seeds the flag definitions, and marks the load done. */
-export async function recover(client: pg.PoolClient, registry: JobRegistry, now: number): Promise<{ jobs: number; restarted: number }> {
+export async function recover(client: pg.PoolClient, registry: JobRegistry, now: number): Promise<{ jobs: number; restarted: number; scheduled: string }> {
   const db = drizzle({ client });
   await client.query("begin");
   try {
     const unmapped = new Map<string, number>();
     const refused: string[] = [];
+    // What the snapshot held, by namespace: the move's export tool adds `_scheduled_functions`, and a bare `convex export`
+    // has none, so "none" here is how an export made without the tool shows.
+    const bySource = new Map<string, number>();
     let written = 0;
     let batch: JobRow[] = [];
     const flush = async () => {
@@ -54,6 +57,7 @@ export async function recover(client: pg.PoolClient, registry: JobRegistry, now:
       // The pool hands jsonb over as its text, the codec's stored form.
       const { rows } = await client.query<{ source: string; document: string }>(`fetch ${batchRows} from scheduled`);
       for (const { source, document } of rows) {
+        bySource.set(source, (bySource.get(source) ?? 0) + 1);
         const row = recovered(source, decodeStored(document) as { [field: string]: Value }, registry, now);
         if ("unmapped" in row) unmapped.set(row.unmapped, (unmapped.get(row.unmapped) ?? 0) + 1);
         else if ("refused" in row) refused.push(row.refused);
@@ -72,7 +76,8 @@ export async function recover(client: pg.PoolClient, registry: JobRegistry, now:
     await seedFlagDefinitions(db);
     await client.query(`update "loadState" set phase = 'done' where key = 'load'`);
     await client.query("commit");
-    return { jobs: written, restarted };
+    const scheduled = [...bySource].map(([source, count]) => `${source} ${count}`).join(", ") || "none";
+    return { jobs: written, restarted, scheduled };
   } catch (error) {
     await client.query("rollback").catch(() => {});
     throw error;
