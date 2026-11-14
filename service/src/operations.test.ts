@@ -220,6 +220,17 @@ describe("_creationTime across runners", () => {
     expect(await latest()).toBe("second");
   });
 
+  test.each([
+    ["a clock that reads -0", [-0]],
+    ["stamps that climb to zero from below", [-Number.MIN_VALUE, -Number.MIN_VALUE, -0]],
+  ])("no stamp is ever -0, which the creation order doesn't place: %s", async (_, nows) => {
+    const stamps: number[] = [];
+    for (const [i, now] of nows.entries()) stamps.push(await insert(setUp({ real: now }).operations, `row-${i}`));
+
+    expect(stamps.filter((stamp) => Object.is(stamp, -0)), String(stamps)).toEqual([]);
+    for (const [i, stamp] of stamps.slice(1).entries()) expect(stamp, "each after the one before").toBeGreaterThan(stamps[i]!);
+  });
+
   test("advances that race keep the highest stamp, and give their lock back", async () => {
     const keys = Array.from({ length: 40 }, (_, i) => BigInt((i * 7919) % 40) * 1_000_000_007n - 20_000_000_000n);
 

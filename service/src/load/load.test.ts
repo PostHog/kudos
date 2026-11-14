@@ -752,6 +752,11 @@ describe("what stops a load", () => {
     expect(stopped, "the load stops at the line").toMatchObject({ phase: "loading", error: "kudosMessages/documents.jsonl line 1: a string holds a NUL character, which Postgres can't store" });
   });
 
+  test("a _creationTime of -0, which Convex never stamps and the creation order doesn't place", async () => {
+    const stopped = await stops({ "hypeReactions/documents.jsonl": jsonl([reaction("h1", { _creationTime: -0 })]) });
+    expect(stopped, "the load stops at the line").toMatchObject({ phase: "loading", error: "hypeReactions/documents.jsonl line 1: a _creationTime of -0, which Convex never stamps" });
+  });
+
   test("an index key past Postgres's B-tree limit, named by table and ID", async () => {
     const stopped = await stops({ "hypeReactions/documents.jsonl": jsonl([reaction("h1"), reaction("h2", { giver: randomBytes(4000).toString("base64") })]) });
     expect(stopped.error, "the load names the row").toMatch(/^hypeReactions h2: index row size \d+ exceeds btree version \d maximum \d+ for index "hypeReactions_by_giver/);

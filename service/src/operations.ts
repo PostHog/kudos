@@ -196,7 +196,8 @@ export function createOperations({ pool, clock, log, maxAttempts = 10, retryDela
   // (its `floor`), so a row written later sorts later whichever runner wrote it and however its clock runs. Otherwise
   // it is the operation's now, as Convex's was; the step is the smallest that still changes a float64 near now.
   const newRow = (now: number, stamps: Stamps): NewRow => {
-    lastCreationTime = Math.max(now, nextAfter(stamps.floor), nextAfter(lastCreationTime));
+    // Never -0: Convex never stamps it, and the creation order's index keeps no place for it apart from 0.
+    lastCreationTime = Math.max(now, nextAfter(stamps.floor), nextAfter(lastCreationTime)) || 0;
     stamps.highest = lastCreationTime;
     return { _id: randomUUID(), _creationTime: lastCreationTime };
   };
@@ -484,5 +485,6 @@ function nextAfter(value: number): number {
   view.setFloat64(0, value);
   const bits = view.getBigUint64(0);
   view.setBigUint64(0, value >= 0 ? bits + 1n : bits - 1n);
-  return value === 0 ? Number.MIN_VALUE : view.getFloat64(0);
+  // Just above -MIN_VALUE is zero, as 0, never -0.
+  return value === 0 ? Number.MIN_VALUE : view.getFloat64(0) || 0;
 }
